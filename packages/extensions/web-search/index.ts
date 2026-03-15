@@ -113,7 +113,7 @@ interface SearchResponse {
   usage?: UsageItem[];
 }
 
-async function searchParallel(
+export async function searchParallel(
   apiKey: string,
   body: Record<string, unknown>,
   endpoint: string,

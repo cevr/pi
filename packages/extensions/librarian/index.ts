@@ -72,7 +72,7 @@ export const CONFIG_DEFAULTS: LibrarianExtConfig = {
  * Always fetches (pulls latest if already cached).
  * Spec formats: "owner/repo", "npm:pkg", "pypi:pkg", "crates:crate"
  */
-async function repoFetch(
+export async function repoFetch(
   spec: string,
   runtime: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
   signal?: AbortSignal,

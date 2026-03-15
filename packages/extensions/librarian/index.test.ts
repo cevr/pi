@@ -4,8 +4,11 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
+import { Effect, ManagedRuntime, Ref } from "effect";
+import { ProcessRunner, type ProcessResult, type SpawnRecord } from "@cvr/pi-process-runner";
 import {
   createLibrarianExtension,
+  repoFetch,
   CONFIG_DEFAULTS,
   DEFAULT_DEPS,
   LIBRARIAN_CONFIG_SCHEMA,
@@ -134,5 +137,51 @@ describe("librarian extension", () => {
     );
     expect(withPromptPatchSpy).toHaveBeenCalledTimes(1);
     expect(harness.tools).toHaveLength(1);
+  });
+});
+
+describe("repoFetch", () => {
+  function makeRuntime(results: Map<string, ProcessResult>) {
+    const spawnLog = Ref.makeUnsafe<Array<SpawnRecord>>([]);
+    return ManagedRuntime.make(ProcessRunner.layerTest(spawnLog, results));
+  }
+
+  it("returns path on successful fetch", async () => {
+    const results = new Map<string, ProcessResult>([
+      ["repo", { exitCode: 0, stdout: "/home/.cache/repo/owner/repo\n", stderr: "" }],
+    ]);
+    const runtime = makeRuntime(results);
+    try {
+      const result = await repoFetch("owner/repo", runtime);
+      expect(result).toBe("/home/.cache/repo/owner/repo");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("returns null on non-zero exit code", async () => {
+    const results = new Map<string, ProcessResult>([
+      ["repo", { exitCode: 1, stdout: "", stderr: "not found" }],
+    ]);
+    const runtime = makeRuntime(results);
+    try {
+      const result = await repoFetch("bad/spec", runtime);
+      expect(result).toBeNull();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("returns null on empty stdout", async () => {
+    const results = new Map<string, ProcessResult>([
+      ["repo", { exitCode: 0, stdout: "  \n", stderr: "" }],
+    ]);
+    const runtime = makeRuntime(results);
+    try {
+      const result = await repoFetch("owner/repo", runtime);
+      expect(result).toBeNull();
+    } finally {
+      await runtime.dispose();
+    }
   });
 });

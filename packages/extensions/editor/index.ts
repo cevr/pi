@@ -334,7 +334,7 @@ function updateStatsLabels(
   }
 }
 
-async function getGitDiffStats(
+export async function getGitDiffStats(
   cwd: string,
   runtime?: ManagedRuntime.ManagedRuntime<GitClient, never>,
 ): Promise<string> {

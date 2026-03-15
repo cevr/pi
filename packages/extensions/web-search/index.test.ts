@@ -4,8 +4,11 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
+import { ManagedRuntime, Ref } from "effect";
+import { ProcessRunner, type ProcessResult, type SpawnRecord } from "@cvr/pi-process-runner";
 import {
   createWebSearchExtension,
+  searchParallel,
   CONFIG_DEFAULTS,
   DEFAULT_DEPS,
   WEB_SEARCH_CONFIG_SCHEMA,
@@ -117,5 +120,88 @@ describe("web-search extension", () => {
     );
     expect(withPromptPatchSpy).toHaveBeenCalledTimes(1);
     expect(harness.tools).toHaveLength(1);
+  });
+});
+
+describe("searchParallel", () => {
+  function makeRuntime(results: Map<string, ProcessResult>) {
+    const spawnLog = Ref.makeUnsafe<Array<SpawnRecord>>([]);
+    return ManagedRuntime.make(ProcessRunner.layerTest(spawnLog, results));
+  }
+
+  it("returns parsed data on successful curl", async () => {
+    const response = { results: [{ url: "https://example.com", title: "Example", excerpts: [] }] };
+    const results = new Map<string, ProcessResult>([
+      ["curl", { exitCode: 0, stdout: JSON.stringify(response), stderr: "" }],
+    ]);
+    const runtime = makeRuntime(results);
+    try {
+      const { data, error } = await searchParallel(
+        "test-key",
+        { objective: "test" },
+        "https://api.test/search",
+        30,
+        undefined,
+        runtime,
+      );
+      expect(error).toBeUndefined();
+      expect(data?.results).toHaveLength(1);
+      expect(data?.results[0]?.title).toBe("Example");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("returns error on non-zero exit code", async () => {
+    const results = new Map<string, ProcessResult>([
+      ["curl", { exitCode: 7, stdout: "", stderr: "connection refused" }],
+    ]);
+    const runtime = makeRuntime(results);
+    try {
+      const { data, error } = await searchParallel(
+        "test-key",
+        { objective: "test" },
+        "https://api.test/search",
+        30,
+        undefined,
+        runtime,
+      );
+      expect(data).toBeUndefined();
+      expect(error).toContain("search failed");
+      expect(error).toContain("connection refused");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("returns error on invalid JSON response", async () => {
+    const results = new Map<string, ProcessResult>([
+      ["curl", { exitCode: 0, stdout: "not json {{{", stderr: "" }],
+    ]);
+    const runtime = makeRuntime(results);
+    try {
+      const { data, error } = await searchParallel(
+        "test-key",
+        { objective: "test" },
+        "https://api.test/search",
+        30,
+        undefined,
+        runtime,
+      );
+      expect(data).toBeUndefined();
+      expect(error).toContain("invalid response from Parallel API");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("returns error when runtime is not provided", async () => {
+    const { error } = await searchParallel(
+      "test-key",
+      { objective: "test" },
+      "https://api.test/search",
+      30,
+    );
+    expect(error).toBe("ProcessRunner runtime not available");
   });
 });
