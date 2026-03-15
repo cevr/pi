@@ -10,7 +10,7 @@
   "dependencies": {
     "@cvr/pi-fs": "workspace:*"
   },
-  "devDependencies": {
-    "vitest": "^3.0.0"
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }

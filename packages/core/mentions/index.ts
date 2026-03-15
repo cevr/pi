@@ -7,3 +7,4 @@ export * from "./resolve";
 export * from "./session-index";
 export * from "./sources";
 export * from "./provider";
+export * from "./registry";
