@@ -82,29 +82,3 @@ export class Mutex extends ServiceMap.Service<
     });
 }
 
-// ---------------------------------------------------------------------------
-// sync API — bridges to encapsulated state (no bare module-level singletons)
-// ---------------------------------------------------------------------------
-
-const _state = { locks: new Map<string, Promise<void>>() };
-
-export async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  const key = nodePath.resolve(filePath);
-
-  while (_state.locks.has(key)) {
-    await _state.locks.get(key);
-  }
-
-  let resolve!: () => void;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
-  _state.locks.set(key, promise);
-
-  try {
-    return await fn();
-  } finally {
-    _state.locks.delete(key);
-    resolve();
-  }
-}

@@ -6,7 +6,7 @@
  * - auto-splits `cd dir && cmd` into cwd + command (fallback for models)
  * - trailing `&` starts a tracked background process and returns immediately
  * - git commit trailer injection (session ID)
- * - git lock serialization via withFileLock (prevents concurrent git ops)
+ * - git lock serialization via Mutex service (prevents concurrent git ops)
  * - SIGTERM → SIGKILL fallback on cancel/timeout (pi goes straight to SIGKILL)
  * - output truncation with head + tail (first/last N lines, not just tail)
  * - constant memory via OutputBuffer (no unbounded string growth)
