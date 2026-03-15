@@ -9,6 +9,7 @@ import {
   revertChange,
   findLatestChange,
   simpleDiff,
+  setFileChangesDir,
   FileTracker,
 } from "./index";
 
@@ -19,7 +20,7 @@ beforeEach(() => {
   tmpDir = path.join(os.tmpdir(), `pi-file-tracker-test-${Date.now()}`);
   fs.mkdirSync(tmpDir, { recursive: true });
   sessionId = `test-session-${Date.now()}`;
-  (globalThis as any).__PI_FILE_CHANGES_DIR__ = tmpDir;
+  setFileChangesDir(tmpDir);
 });
 
 afterEach(() => {

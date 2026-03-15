@@ -19,41 +19,46 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Effect, Layer, Schema, ServiceMap } from "effect";
 
-let _globalSettingsPath: string | null = null;
+// ---------------------------------------------------------------------------
+// encapsulated config state — no bare module-level mutable variables
+// ---------------------------------------------------------------------------
+
+const _state = {
+  globalSettingsPath: null as string | null,
+  cache: new Map<string, unknown>(),
+};
 
 export function setGlobalSettingsPath(p: string): void {
-  _globalSettingsPath = p;
+  _state.globalSettingsPath = p;
 }
 
-const _cache = new Map<string, unknown>();
-
 export function clearConfigCache(): void {
-  _cache.clear();
+  _state.cache.clear();
 }
 
 export function resolveGlobalSettingsPath(): string {
   return (
-    _globalSettingsPath ??
+    _state.globalSettingsPath ??
     process.env.PI_CVR_CONFIG_PATH ??
     path.join(os.homedir(), ".pi", "agent", "cvr-pi.json")
   );
 }
 
 function readJsonFile(filePath: string): Record<string, unknown> | null {
-  if (_cache.has(filePath)) {
-    return _cache.get(filePath) as Record<string, unknown> | null;
+  if (_state.cache.has(filePath)) {
+    return _state.cache.get(filePath) as Record<string, unknown> | null;
   }
 
   try {
     const raw = fs.readFileSync(filePath, "utf-8");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    _cache.set(filePath, parsed);
+    _state.cache.set(filePath, parsed);
     return parsed;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
       console.error(`[@cvr/pi-config] failed to read ${filePath}:`, err);
     }
-    _cache.set(filePath, null);
+    _state.cache.set(filePath, null);
     return null;
   }
 }

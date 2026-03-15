@@ -33,7 +33,7 @@ export interface MentionSource {
   ): ResolvedMention | Promise<ResolvedMention>;
 }
 
-const sources = new Map<MentionKind, MentionSource>();
+const _state = { sources: new Map<MentionKind, MentionSource>() };
 
 function isGitEnabled(context: MentionSourceContext): boolean {
   return context.gitEnabled ?? resolveGitRoot(context.cwd) !== null;
@@ -99,12 +99,12 @@ registerMentionSource(createCommitMentionSource());
 
 export function listMentionSources(): MentionSource[] {
   return listMentionKinds()
-    .map((kind) => sources.get(kind))
+    .map((kind) => _state.sources.get(kind))
     .filter((source): source is MentionSource => source !== undefined);
 }
 
 export function getMentionSource(kind: MentionKind): MentionSource | null {
-  return sources.get(kind) ?? null;
+  return _state.sources.get(kind) ?? null;
 }
 
 export function registerMentionSource(source: MentionSource): () => void {
@@ -113,16 +113,16 @@ export function registerMentionSource(source: MentionSource): () => void {
     mentionKindDescriptions.get(source.kind) ?? source.description,
   );
 
-  const previous = sources.get(source.kind);
-  sources.set(source.kind, source);
+  const previous = _state.sources.get(source.kind);
+  _state.sources.set(source.kind, source);
 
   return () => {
-    if (sources.get(source.kind) !== source) return;
+    if (_state.sources.get(source.kind) !== source) return;
     if (previous) {
-      sources.set(previous.kind, previous);
+      _state.sources.set(previous.kind, previous);
       return;
     }
-    sources.delete(source.kind);
+    _state.sources.delete(source.kind);
   };
 }
 

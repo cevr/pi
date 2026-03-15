@@ -145,44 +145,46 @@ export class EditorCapabilities extends ServiceMap.Service<
 }
 
 // ---------------------------------------------------------------------------
-// sync API — for non-Effect callers
+// sync API — bridges to encapsulated state (no bare module-level singletons)
 // ---------------------------------------------------------------------------
 
-const _contributors = new Map<string, EditorAutocompleteContributor>();
-const _listeners = new Set<() => void>();
+const _state = {
+  contributors: new Map<string, EditorAutocompleteContributor>(),
+  listeners: new Set<() => void>(),
+};
 
 function emitChange(): void {
-  for (const listener of _listeners) listener();
+  for (const listener of _state.listeners) listener();
 }
 
 export function registerEditorAutocompleteContributor(
   contributor: EditorAutocompleteContributor,
 ): () => void {
-  const previous = _contributors.get(contributor.id);
-  _contributors.set(contributor.id, contributor);
+  const previous = _state.contributors.get(contributor.id);
+  _state.contributors.set(contributor.id, contributor);
   if (previous !== contributor) emitChange();
 
   return () => {
-    if (_contributors.get(contributor.id) !== contributor) return;
-    _contributors.delete(contributor.id);
+    if (_state.contributors.get(contributor.id) !== contributor) return;
+    _state.contributors.delete(contributor.id);
     emitChange();
   };
 }
 
 export function subscribeEditorAutocompleteContributors(listener: () => void): () => void {
-  _listeners.add(listener);
+  _state.listeners.add(listener);
   return () => {
-    _listeners.delete(listener);
+    _state.listeners.delete(listener);
   };
 }
 
 export function listEditorAutocompleteContributors(): EditorAutocompleteContributor[] {
-  return sortContributors(_contributors);
+  return sortContributors(_state.contributors);
 }
 
 export function composeEditorAutocompleteProvider(
   baseProvider: AutocompleteProvider,
   context: EditorAutocompleteContext,
 ): AutocompleteProvider {
-  return composeProvider(baseProvider, context, _contributors);
+  return composeProvider(baseProvider, context, _state.contributors);
 }

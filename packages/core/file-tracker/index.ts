@@ -43,8 +43,17 @@ export class FileTrackerError extends Schema.TaggedErrorClass<FileTrackerError>(
 // sync internals (shared by service layer and sync API)
 // ---------------------------------------------------------------------------
 
+const _state = {
+  fileChangesDir: null as string | null,
+};
+
+/** override the file changes directory (for testing). */
+export function setFileChangesDir(dir: string): void {
+  _state.fileChangesDir = dir;
+}
+
 const getFileChangesDir = () =>
-  (globalThis as any).__PI_FILE_CHANGES_DIR__ ?? path.join(os.homedir(), ".pi", "file-changes");
+  _state.fileChangesDir ?? path.join(os.homedir(), ".pi", "file-changes");
 
 function sessionDir(sessionId: string, baseDir?: string): string {
   return path.join(baseDir ?? getFileChangesDir(), sessionId);
