@@ -1,0 +1,18 @@
+{
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-opus-4-6",
+  "defaultThinkingLevel": "xhigh",
+  "compaction": {
+    "enabled": false
+  },
+  "extensions": [
+    "~/Developer/personal/dotfiles/pi/packages/extensions"
+  ],
+  "skills": [
+    "~/Developer/personal/dotfiles/pi/skills"
+  ],
+  "quietStartup": true,
+  "hideThinkingBlock": true,
+  "showHardwareCursor": true,
+  "doubleEscapeAction": "tree"
+}

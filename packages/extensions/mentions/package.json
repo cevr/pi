@@ -1,0 +1,20 @@
+{
+  "name": "@cvr/pi-mentions-extension",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "dependencies": {
+    "@cvr/pi-editor-capabilities": "workspace:*",
+    "@cvr/pi-mentions": "workspace:*",
+    "@mariozechner/pi-coding-agent": "catalog:"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "@cvr/pi-oracle": {
+    "enabled": true,
+    "model": "claude-opus-4-6"
+  },
+  "@cvr/pi-handoff": {
+    "enabled": true,
+    "contextThreshold": 0.85,
+    "model": "gemini-2.5-flash"
+  },
+  "@cvr/pi-session-name": {
+    "enabled": true
+  },
+  "@cvr/pi-editor": {
+    "enabled": true
+  },
+  "@cvr/pi-command-palette": {
+    "enabled": true
+  },
+  "@cvr/pi-mermaid": {
+    "enabled": true
+  },
+  "@cvr/pi-code-review": {
+    "enabled": true
+  },
+  "@cvr/pi-web-search": {
+    "enabled": true
+  }
+}

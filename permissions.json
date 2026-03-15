@@ -1,0 +1,28 @@
+{
+  "rules": [
+    {
+      "tool": "bash",
+      "pattern": "git add -A",
+      "action": "reject",
+      "message": "Stage files explicitly — don't use git add -A"
+    },
+    {
+      "tool": "bash",
+      "pattern": "git add .",
+      "action": "reject",
+      "message": "Stage files explicitly — don't use git add ."
+    },
+    {
+      "tool": "bash",
+      "pattern": "git push --force",
+      "action": "reject",
+      "message": "Force push rejected — use with care, confirm first"
+    },
+    {
+      "tool": "bash",
+      "pattern": "rm ",
+      "action": "reject",
+      "message": "Use trash instead of rm"
+    }
+  ]
+}

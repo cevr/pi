@@ -1,0 +1,20 @@
+{
+  "name": "@cvr/pi-session-name",
+  "private": true,
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@cvr/pi-config": "workspace:*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "catalog:"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

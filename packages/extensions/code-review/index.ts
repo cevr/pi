@@ -1,0 +1,540 @@
+/**
+ * code_review tool — structured diff review via gemini sub-agent.
+ *
+ * spawns a gemini sub-agent that:
+ * 1. runs git diff (or other bash command) based on diff_description
+ * 2. reads changed files for context
+ * 3. produces XML <codeReview> report with per-comment severity/type
+ *
+ * review system prompt defines the expert reviewer role. report format
+ * is injected as a follow-up message after exploration via piSpawn's
+ * RPC mode — follow-up injection after exploration completes.
+ *
+ * v1: main review agent only. checks system (parallel workspace-defined
+ * .md checks via haiku) deferred.
+ */
+
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type {
+  ExtensionAPI,
+  ToolDefinition,
+} from "@mariozechner/pi-coding-agent";
+import { Container, Text } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
+import {
+  clearConfigCache,
+  getEnabledExtensionConfig,
+  setGlobalSettingsPath,
+  type ExtensionConfigSchema,
+} from "@cvr/pi-config";
+import { piSpawn, resolvePrompt, zeroUsage } from "@cvr/pi-spawn";
+import { withPromptPatch } from "@cvr/pi-prompt-patch";
+import {
+  getFinalOutput,
+  renderAgentTree,
+  subAgentResult,
+  type SingleResult,
+} from "@cvr/pi-sub-agent-render";
+
+type CodeReviewExtConfig = {
+  model: string;
+  builtinTools: string[];
+  extensionTools: string[];
+  promptFile: string;
+  promptString: string;
+  reportPromptFile: string;
+  reportPromptString: string;
+};
+
+type CodeReviewExtensionDeps = {
+  getEnabledExtensionConfig: typeof getEnabledExtensionConfig;
+  resolvePrompt: typeof resolvePrompt;
+  withPromptPatch: typeof withPromptPatch;
+};
+
+const CONFIG_DEFAULTS: CodeReviewExtConfig = {
+  model: "openrouter/google/gemini-3.1-pro-preview",
+  builtinTools: ["read", "grep", "find", "ls", "bash"],
+  extensionTools: [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "bash",
+    "web_search",
+    "read_web_page",
+  ],
+  promptFile: "",
+  promptString: "",
+  reportPromptFile: "",
+  reportPromptString: "",
+};
+
+const DEFAULT_SYSTEM_PROMPT = `You are an expert code reviewer. Review the provided diff for bugs, security issues, and code quality. Report findings with file locations and severity.
+
+Today's date: {date}
+Current working directory (cwd): {cwd}`;
+
+const DEFAULT_REPORT_FORMAT = `Emit findings as XML: <codeReview><comment> elements with filename, startLine, endLine, severity (critical/high/medium/low), commentType (bug/suggested_edit/compliment/non_actionable), text, why, and fix fields.`;
+
+const DEFAULT_DEPS: CodeReviewExtensionDeps = {
+  getEnabledExtensionConfig,
+  resolvePrompt,
+  withPromptPatch,
+};
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+function isCodeReviewConfig(
+  value: Record<string, unknown>,
+): value is CodeReviewExtConfig {
+  return (
+    isNonEmptyString(value.model) &&
+    isStringArray(value.builtinTools) &&
+    isStringArray(value.extensionTools) &&
+    typeof value.promptFile === "string" &&
+    typeof value.promptString === "string" &&
+    typeof value.reportPromptFile === "string" &&
+    typeof value.reportPromptString === "string"
+  );
+}
+
+const CODE_REVIEW_CONFIG_SCHEMA: ExtensionConfigSchema<CodeReviewExtConfig> = {
+  validate: isCodeReviewConfig,
+};
+
+export interface CodeReviewConfig {
+  systemPrompt?: string;
+  reportFormat?: string;
+  model?: string;
+  builtinTools?: string[];
+  extensionTools?: string[];
+}
+
+// --- XML parsing ---
+
+interface ReviewComment {
+  filename: string;
+  startLine: number;
+  endLine: number;
+  severity: string;
+  commentType: string;
+  text: string;
+  why: string;
+  fix: string;
+}
+
+function parseReviewXml(output: string): ReviewComment[] {
+  const comments: ReviewComment[] = [];
+  const commentRegex = /<comment>([\s\S]*?)<\/comment>/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = commentRegex.exec(output)) !== null) {
+    const block = match[1]!;
+    const get = (tag: string): string => {
+      const m = block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
+      return m && m[1] ? m[1].trim() : "";
+    };
+    comments.push({
+      filename: get("filename"),
+      startLine: parseInt(get("startLine"), 10) || 0,
+      endLine: parseInt(get("endLine"), 10) || 0,
+      severity: get("severity"),
+      commentType: get("commentType"),
+      text: get("text"),
+      why: get("why"),
+      fix: get("fix"),
+    });
+  }
+  return comments;
+}
+
+function formatReviewSummary(comments: ReviewComment[]): string {
+  if (comments.length === 0) return "";
+
+  const bySeverity: Record<string, number> = {};
+  for (const c of comments) {
+    bySeverity[c.severity] = (bySeverity[c.severity] || 0) + 1;
+  }
+
+  const severityOrder = ["critical", "high", "medium", "low"];
+  const parts = severityOrder
+    .filter((s) => bySeverity[s])
+    .map((s) => `${bySeverity[s]} ${s}`);
+
+  return `${comments.length} comment${comments.length !== 1 ? "s" : ""}: ${parts.join(", ")}`;
+}
+
+// --- tool ---
+
+interface CodeReviewParams {
+  diff_description: string;
+  files?: string[];
+  instructions?: string;
+}
+
+export function createCodeReviewTool(
+  config: CodeReviewConfig = {},
+): ToolDefinition {
+  return {
+    name: "code_review",
+    label: "Code Review",
+    description:
+      "Review code changes, diffs, outstanding changes, or modified files. " +
+      "Use when asked to review changes, check code quality, analyze uncommitted work, " +
+      "or perform a code review.\n\n" +
+      "It takes in a description of the diff or code change that can be used to generate " +
+      "the full diff, which is then reviewed. When using this tool, do not invoke `git diff` " +
+      "or any other tool to generate the diff but just pass a natural language description " +
+      "of how to compute the diff in the diff_description argument.",
+
+    parameters: Type.Object({
+      diff_description: Type.String({
+        description:
+          "A description of the diff or code change that can be used to generate the full diff. " +
+          "This can include a git or bash command to generate the diff or a description of the diff " +
+          "which can then be used to generate the git or bash command to generate the full diff.",
+      }),
+      files: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Specific files to focus the review on. If empty, all changed files covered " +
+            "by the diff description are reviewed.",
+        }),
+      ),
+      instructions: Type.Optional(
+        Type.String({
+          description: "Additional instructions to guide the review agent.",
+        }),
+      ),
+    }),
+
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const p = params as CodeReviewParams;
+      let sessionId = "";
+      try {
+        sessionId = ctx.sessionManager?.getSessionId?.() ?? "";
+      } catch {}
+
+      // compose task prompt
+      const parts: string[] = [];
+      parts.push(`Review the following diff:\n${p.diff_description}`);
+
+      if (p.files && p.files.length > 0) {
+        parts.push(`\nFocus the review on these files:\n${p.files.join("\n")}`);
+      }
+      if (p.instructions) {
+        parts.push(`\nAdditional review instructions:\n${p.instructions}`);
+      }
+
+      const fullTask = parts.join("\n");
+
+      const singleResult: SingleResult = {
+        agent: "code_review",
+        task: p.diff_description,
+        exitCode: -1,
+        messages: [],
+        usage: zeroUsage(),
+      };
+
+      const systemPrompt = config.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+      const reportFormat = config.reportFormat || DEFAULT_REPORT_FORMAT;
+
+      const result = await piSpawn({
+        cwd: ctx.cwd,
+        task: fullTask,
+        model: config.model ?? CONFIG_DEFAULTS.model,
+        builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
+        extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
+        systemPromptBody: systemPrompt,
+        followUp: reportFormat,
+        signal,
+        sessionId,
+        onUpdate: (partial) => {
+          singleResult.messages = partial.messages;
+          singleResult.usage = partial.usage;
+          singleResult.model = partial.model;
+          singleResult.stopReason = partial.stopReason;
+          singleResult.errorMessage = partial.errorMessage;
+          if (onUpdate) {
+            onUpdate({
+              content: [
+                {
+                  type: "text",
+                  text: getFinalOutput(partial.messages) || "(reviewing...)",
+                },
+              ],
+              details: singleResult,
+            } as any);
+          }
+        },
+      });
+
+      singleResult.exitCode = result.exitCode;
+      singleResult.messages = result.messages;
+      singleResult.usage = result.usage;
+      singleResult.model = result.model;
+      singleResult.stopReason = result.stopReason;
+      singleResult.errorMessage = result.errorMessage;
+
+      const isError =
+        result.exitCode !== 0 ||
+        result.stopReason === "error" ||
+        result.stopReason === "aborted";
+      const output = getFinalOutput(result.messages) || "(no output)";
+
+      if (isError) {
+        return subAgentResult(
+          result.errorMessage || result.stderr || output,
+          singleResult,
+          true,
+        );
+      }
+
+      return subAgentResult(output, singleResult);
+    },
+
+    renderCall(args: any, theme: any) {
+      const desc = args.diff_description || "...";
+      const preview = desc.length > 70 ? `${desc.slice(0, 70)}...` : desc;
+      let text =
+        theme.fg("toolTitle", theme.bold("code_review ")) +
+        theme.fg("dim", preview);
+      if (args.files?.length) {
+        text += theme.fg(
+          "muted",
+          ` (${args.files.length} file${args.files.length > 1 ? "s" : ""})`,
+        );
+      }
+      return new Text(text, 0, 0);
+    },
+
+    renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) {
+      const details = result.details as SingleResult | undefined;
+      if (!details) {
+        const text = result.content[0];
+        return new Text(
+          text?.type === "text" ? text.text : "(no output)",
+          0,
+          0,
+        );
+      }
+
+      const container = new Container();
+
+      // parse XML comments from output for summary line
+      const output = getFinalOutput(details.messages);
+      const comments = parseReviewXml(output);
+      if (comments.length > 0) {
+        const summary = formatReviewSummary(comments);
+        container.addChild(new Text(theme.fg("accent", summary), 0, 0));
+      }
+
+      renderAgentTree(details, container, expanded, theme, {
+        label: "code_review",
+        header: "statusOnly",
+      });
+      return container;
+    },
+  };
+}
+
+function createCodeReviewExtension(
+  deps: CodeReviewExtensionDeps = DEFAULT_DEPS,
+): (pi: ExtensionAPI) => void {
+  return function codeReviewExtension(pi: ExtensionAPI): void {
+    const { enabled, config: cfg } = deps.getEnabledExtensionConfig(
+      "@cvr/pi-code-review",
+      CONFIG_DEFAULTS,
+      { schema: CODE_REVIEW_CONFIG_SCHEMA },
+    );
+    if (!enabled) return;
+
+    pi.registerTool(
+      deps.withPromptPatch(
+        createCodeReviewTool({
+          systemPrompt: deps.resolvePrompt(cfg.promptString, cfg.promptFile),
+          reportFormat: deps.resolvePrompt(
+            cfg.reportPromptString,
+            cfg.reportPromptFile,
+          ),
+          model: cfg.model,
+          builtinTools: cfg.builtinTools,
+          extensionTools: cfg.extensionTools,
+        }),
+      ),
+    );
+  };
+}
+
+const codeReviewExtension: (pi: ExtensionAPI) => void =
+  createCodeReviewExtension();
+
+export default codeReviewExtension;
+
+if (import.meta.vitest) {
+  const { afterEach, describe, expect, it, vi } = import.meta.vitest;
+  const tmpdir = os.tmpdir();
+
+  function writeTmpJson(dir: string, filename: string, data: unknown): string {
+    const filePath = path.join(dir, filename);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(data));
+    return filePath;
+  }
+
+  function createMockExtensionApiHarness() {
+    const tools: unknown[] = [];
+
+    const pi = {
+      registerTool(tool: unknown) {
+        tools.push(tool);
+      },
+    } as unknown as ExtensionAPI;
+
+    return { pi, tools };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearConfigCache();
+    setGlobalSettingsPath(path.join(tmpdir, `nonexistent-${Date.now()}.json`));
+  });
+
+  describe("code-review extension", () => {
+    it("registers the tool with default config when enabled", () => {
+      const getEnabledExtensionConfigSpy = vi.fn(
+        <T extends Record<string, unknown>>(
+          _namespace: string,
+          defaults: T,
+        ) => ({
+          enabled: true,
+          config: defaults,
+        }),
+      );
+      const resolvePromptSpy = vi.fn(
+        (promptString: string, promptFile: string) =>
+          resolvePrompt(promptString, promptFile),
+      );
+      const withPromptPatchSpy = vi.fn((tool: ToolDefinition) => tool);
+      const extension = createCodeReviewExtension({
+        getEnabledExtensionConfig:
+          getEnabledExtensionConfigSpy as typeof DEFAULT_DEPS.getEnabledExtensionConfig,
+        resolvePrompt: resolvePromptSpy as typeof DEFAULT_DEPS.resolvePrompt,
+        withPromptPatch:
+          withPromptPatchSpy as typeof DEFAULT_DEPS.withPromptPatch,
+      });
+      const harness = createMockExtensionApiHarness();
+
+      extension(harness.pi);
+
+      expect(getEnabledExtensionConfigSpy).toHaveBeenCalledWith(
+        "@cvr/pi-code-review",
+        CONFIG_DEFAULTS,
+        { schema: CODE_REVIEW_CONFIG_SCHEMA },
+      );
+      expect(resolvePromptSpy).toHaveBeenNthCalledWith(
+        1,
+        CONFIG_DEFAULTS.promptString,
+        CONFIG_DEFAULTS.promptFile,
+      );
+      expect(resolvePromptSpy).toHaveBeenNthCalledWith(
+        2,
+        CONFIG_DEFAULTS.reportPromptString,
+        CONFIG_DEFAULTS.reportPromptFile,
+      );
+      expect(withPromptPatchSpy).toHaveBeenCalledTimes(1);
+      expect(harness.tools).toHaveLength(1);
+    });
+
+    it("registers no tools when disabled", () => {
+      const getEnabledExtensionConfigSpy = vi.fn(
+        <T extends Record<string, unknown>>(
+          _namespace: string,
+          defaults: T,
+        ) => ({
+          enabled: false,
+          config: defaults,
+        }),
+      );
+      const resolvePromptSpy = vi.fn(
+        (promptString: string, promptFile: string) =>
+          resolvePrompt(promptString, promptFile),
+      );
+      const withPromptPatchSpy = vi.fn((tool: ToolDefinition) => tool);
+      const extension = createCodeReviewExtension({
+        getEnabledExtensionConfig:
+          getEnabledExtensionConfigSpy as typeof DEFAULT_DEPS.getEnabledExtensionConfig,
+        resolvePrompt: resolvePromptSpy as typeof DEFAULT_DEPS.resolvePrompt,
+        withPromptPatch:
+          withPromptPatchSpy as typeof DEFAULT_DEPS.withPromptPatch,
+      });
+      const harness = createMockExtensionApiHarness();
+
+      extension(harness.pi);
+
+      expect(resolvePromptSpy).not.toHaveBeenCalled();
+      expect(withPromptPatchSpy).not.toHaveBeenCalled();
+      expect(harness.tools).toHaveLength(0);
+    });
+
+    it("falls back to defaults for invalid config and still registers", () => {
+      const dir = fs.mkdtempSync(path.join(tmpdir, "pi-code-review-test-"));
+      const settingsPath = writeTmpJson(dir, "settings.json", {
+        "@cvr/pi-code-review": {
+          model: "",
+          builtinTools: ["read", 123],
+          extensionTools: "read",
+          promptFile: 123,
+          promptString: false,
+          reportPromptFile: null,
+          reportPromptString: 456,
+        },
+      });
+      setGlobalSettingsPath(settingsPath);
+      const errorSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined);
+      const resolvePromptSpy = vi.fn(
+        (promptString: string, promptFile: string) =>
+          resolvePrompt(promptString, promptFile),
+      );
+      const withPromptPatchSpy = vi.fn((tool: ToolDefinition) => tool);
+      const extension = createCodeReviewExtension({
+        ...DEFAULT_DEPS,
+        resolvePrompt: resolvePromptSpy as typeof DEFAULT_DEPS.resolvePrompt,
+        withPromptPatch:
+          withPromptPatchSpy as typeof DEFAULT_DEPS.withPromptPatch,
+      });
+      const harness = createMockExtensionApiHarness();
+
+      extension(harness.pi);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        "[@cvr/pi-config] invalid config for @cvr/pi-code-review; falling back to defaults.",
+      );
+      expect(resolvePromptSpy).toHaveBeenNthCalledWith(
+        1,
+        CONFIG_DEFAULTS.promptString,
+        CONFIG_DEFAULTS.promptFile,
+      );
+      expect(resolvePromptSpy).toHaveBeenNthCalledWith(
+        2,
+        CONFIG_DEFAULTS.reportPromptString,
+        CONFIG_DEFAULTS.reportPromptFile,
+      );
+      expect(withPromptPatchSpy).toHaveBeenCalledTimes(1);
+      expect(harness.tools).toHaveLength(1);
+    });
+  });
+}

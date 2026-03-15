@@ -1,0 +1,14 @@
+{
+  "name": "@cvr/pi-spawn",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "types": "index.ts",
+  "dependencies": {
+    "@cvr/pi-config": "workspace:*",
+    "@cvr/pi-interpolate": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}

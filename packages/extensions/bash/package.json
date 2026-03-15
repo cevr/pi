@@ -1,0 +1,28 @@
+{
+  "name": "@cvr/pi-bash",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "dependencies": {
+    "@cvr/pi-box-format": "workspace:*",
+    "@cvr/pi-config": "workspace:*",
+    "@cvr/pi-fs": "workspace:*",
+    "@cvr/pi-mutex": "workspace:*",
+    "@cvr/pi-output-buffer": "workspace:*",
+    "@cvr/pi-permissions": "workspace:*",
+    "@cvr/pi-prompt-patch": "workspace:*",
+    "@cvr/pi-tui": "workspace:*",
+    "@sinclair/typebox": "^0.34.0"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "catalog:",
+    "@mariozechner/pi-tui": "catalog:",
+    "vitest": "^3.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

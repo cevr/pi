@@ -1,0 +1,12 @@
+{
+  "name": "@cvr/pi-show-renderer",
+  "version": "0.0.1",
+  "main": "index.ts",
+  "dependencies": {
+    "@cvr/pi-show": "workspace:*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-tui": "catalog:",
+    "vitest": "^3.0.0"
+  }
+}

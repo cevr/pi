@@ -1,0 +1,9 @@
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      glob: "*.{ts,tsx}"
+      run: bunx oxlint --type-aware --format=stylish --type-check {staged_files}
+    format:
+      glob: "*.{ts,tsx,json,md}"
+      run: bunx oxfmt --check {staged_files}
