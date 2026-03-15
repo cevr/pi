@@ -23,15 +23,8 @@ const testSource: MentionSource = {
   }),
 };
 
-const runWithTest = <A, E>(
-  effect: Effect.Effect<A, E, MentionRegistry>,
-): Promise<A> =>
-  Effect.runPromise(
-    Effect.provide(
-      effect,
-      MentionRegistry.layerTest({ sources: [testSource] }),
-    ),
-  );
+const runWithTest = <A, E>(effect: Effect.Effect<A, E, MentionRegistry>): Promise<A> =>
+  Effect.runPromise(Effect.provide(effect, MentionRegistry.layerTest({ sources: [testSource] })));
 
 describe("MentionRegistry service", () => {
   it("lists registered sources", async () => {

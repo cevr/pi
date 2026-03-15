@@ -1,7 +1,6 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it, test } from "bun:test";
 import { headTail, formatHeadTail, OutputBuffer } from "./index";
-import { headTail, formatHeadTail, OutputBuffer } from "./index";
 
 describe("OutputBuffer", () => {
   describe("small output (no truncation)", () => {

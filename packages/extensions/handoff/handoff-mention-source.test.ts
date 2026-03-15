@@ -1,7 +1,6 @@
 // Extracted from handoff-mention-source.ts — review imports
 import { describe, expect, it } from "bun:test";
 import { createHandoffMentionSource } from "./handoff-mention-source";
-import { createHandoffMentionSource } from "./handoff-mention-source";
 
 const REGULAR_SESSION = {
   sessionId: "alpha1234",

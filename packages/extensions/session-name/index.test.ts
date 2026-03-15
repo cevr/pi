@@ -4,9 +4,7 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
-import { CONFIG_DEFAULTS } from "./index";
-import { CONFIG_DEFAULTS } from "./index";
-import { sessionNameExtension, CONFIG_DEFAULTS } from "./index";
+import { CONFIG_DEFAULTS, sessionNameExtension } from "./index";
 
 const tmpdir = os.tmpdir();
 

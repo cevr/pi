@@ -25,8 +25,9 @@ import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { boxRendererWindowed, type BoxSection, type Excerpt } from "@cvr/pi-box-format";
 import { getText } from "@cvr/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { withFileLock } from "@cvr/pi-mutex";
+import { Mutex } from "@cvr/pi-mutex";
 import { evaluatePermission, loadPermissions } from "@cvr/pi-permissions";
+import { Effect, ManagedRuntime } from "effect";
 import { resolveToAbsolute } from "@cvr/pi-fs";
 import { OutputBuffer } from "@cvr/pi-output-buffer";
 import {
@@ -339,6 +340,7 @@ const COLLAPSED_EXCERPTS: Excerpt[] = [
 export function createBashTool(
   backgroundState: BackgroundState = createBackgroundState(),
   config: BashExtConfig = CONFIG_DEFAULTS,
+  runtime?: ManagedRuntime.ManagedRuntime<Mutex, never>,
 ): ToolDefinition {
   return {
     name: "bash",
@@ -496,9 +498,14 @@ export function createBashTool(
               config,
             );
 
-      if (isGitCommand(command)) {
+      if (isGitCommand(command) && runtime) {
         const gitLockKey = path.join(effectiveCwd, ".git", "__pi_git_lock__");
-        return withFileLock(gitLockKey, run);
+        return runtime.runPromise(
+          Effect.gen(function* () {
+            const mutex = yield* Mutex;
+            return yield* mutex.withLock(gitLockKey, Effect.promise(run));
+          }),
+        );
       }
 
       return run();
@@ -698,10 +705,12 @@ export function createBashExtension(
     if (!enabled) return;
 
     const backgroundState = createBackgroundState();
+    const runtime = ManagedRuntime.make(Mutex.layer);
 
-    pi.registerTool(deps.withPromptPatch(createBashTool(backgroundState, cfg)));
+    pi.registerTool(deps.withPromptPatch(createBashTool(backgroundState, cfg, runtime)));
     pi.on("session_shutdown", async () => {
       await cleanupBackgroundProcesses(backgroundState, cfg.sigkillDelayMs);
+      await runtime.dispose();
     });
     pi.on("session_switch", async () => {
       await cleanupBackgroundProcesses(backgroundState, cfg.sigkillDelayMs);

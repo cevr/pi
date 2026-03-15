@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
-import { createLibrarianExtension, CONFIG_DEFAULTS, DEFAULT_DEPS } from "./index";
 import {
   createLibrarianExtension,
   CONFIG_DEFAULTS,

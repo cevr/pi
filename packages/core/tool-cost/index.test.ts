@@ -1,7 +1,6 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it } from "bun:test";
 import { hasToolCost, ToolCostDetails } from "./index";
-import { hasToolCost, ToolCostDetails } from "./index";
 
 describe("hasToolCost", () => {
   it("returns true for valid ToolCostDetails", () => {

@@ -4,12 +4,11 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
-import { createHandoffExtension, CONFIG_DEFAULTS, DEFAULT_DEPS } from "./index";
 import {
   createHandoffExtension,
   CONFIG_DEFAULTS,
-  HANDOFF_CONFIG_SCHEMA,
   DEFAULT_DEPS,
+  HANDOFF_CONFIG_SCHEMA,
 } from "./index";
 import { registerMentionSource } from "@cvr/pi-mentions";
 

@@ -40,10 +40,9 @@ import type { MentionKind, MentionToken, ResolvedMention } from "./types";
 // errors
 // ---------------------------------------------------------------------------
 
-export class MentionError extends Schema.TaggedErrorClass<MentionError>()(
-  "MentionError",
-  { message: Schema.String },
-) {}
+export class MentionError extends Schema.TaggedErrorClass<MentionError>()("MentionError", {
+  message: Schema.String,
+}) {}
 
 // ---------------------------------------------------------------------------
 // service
@@ -53,22 +52,16 @@ export class MentionRegistry extends ServiceMap.Service<
   MentionRegistry,
   {
     /** register a mention source, returns an unregister effect */
-    readonly registerSource: (
-      source: MentionSource,
-    ) => Effect.Effect<() => void>;
+    readonly registerSource: (source: MentionSource) => Effect.Effect<() => void>;
 
     /** get a registered source by kind */
-    readonly getSource: (
-      kind: MentionKind,
-    ) => Effect.Effect<Option.Option<MentionSource>>;
+    readonly getSource: (kind: MentionKind) => Effect.Effect<Option.Option<MentionSource>>;
 
     /** list all registered sources */
     readonly listSources: () => Effect.Effect<MentionSource[]>;
 
     /** list mention kinds enabled for the given context */
-    readonly listEnabledKinds: (
-      context: MentionSourceContext,
-    ) => Effect.Effect<MentionKind[]>;
+    readonly listEnabledKinds: (context: MentionSourceContext) => Effect.Effect<MentionKind[]>;
 
     /** resolve a single mention token */
     readonly resolve: (
@@ -83,9 +76,7 @@ export class MentionRegistry extends ServiceMap.Service<
     ) => Effect.Effect<ResolvedMention[]>;
 
     /** get the commit index for a directory */
-    readonly getCommitIndex: (
-      cwd: string,
-    ) => Effect.Effect<Option.Option<CommitIndex>>;
+    readonly getCommitIndex: (cwd: string) => Effect.Effect<Option.Option<CommitIndex>>;
 
     /** lookup a commit by SHA prefix */
     readonly lookupCommit: (
@@ -97,9 +88,7 @@ export class MentionRegistry extends ServiceMap.Service<
     readonly isGitRepo: (cwd: string) => Effect.Effect<boolean>;
 
     /** list mentionable sessions */
-    readonly listSessions: (
-      query: MentionableSessionQuery,
-    ) => Effect.Effect<MentionableSession[]>;
+    readonly listSessions: (query: MentionableSessionQuery) => Effect.Effect<MentionableSession[]>;
 
     /** search mentionable sessions */
     readonly searchSessions: (
@@ -115,11 +104,9 @@ export class MentionRegistry extends ServiceMap.Service<
    * production layer — delegates to sync functions.
    */
   static layer = Layer.succeed(MentionRegistry, {
-    registerSource: (source: MentionSource) =>
-      Effect.sync(() => registerMentionSource(source)),
+    registerSource: (source: MentionSource) => Effect.sync(() => registerMentionSource(source)),
 
-    getSource: (kind: MentionKind) =>
-      Effect.sync(() => Option.fromNullOr(getMentionSource(kind))),
+    getSource: (kind: MentionKind) => Effect.sync(() => Option.fromNullOr(getMentionSource(kind))),
 
     listSources: () => Effect.sync(() => listMentionSources()),
 
@@ -169,14 +156,12 @@ export class MentionRegistry extends ServiceMap.Service<
           }),
       }),
 
-    getCommitIndex: (cwd: string) =>
-      Effect.sync(() => Option.fromNullOr(getCommitIndex(cwd))),
+    getCommitIndex: (cwd: string) => Effect.sync(() => Option.fromNullOr(getCommitIndex(cwd))),
 
     lookupCommit: (prefix: string, index: CommitIndex) =>
       Effect.sync(() => lookupCommitByPrefix(prefix, index)),
 
-    isGitRepo: (cwd: string) =>
-      Effect.sync(() => resolveGitRoot(cwd) !== null),
+    isGitRepo: (cwd: string) => Effect.sync(() => resolveGitRoot(cwd) !== null),
 
     listSessions: (query: MentionableSessionQuery) =>
       Effect.sync(() => listMentionableSessions(query)),
@@ -199,9 +184,7 @@ export class MentionRegistry extends ServiceMap.Service<
     commitIndex?: CommitIndex;
     sessions?: MentionableSession[];
   }) => {
-    const sourcesMap = new Map(
-      (opts?.sources ?? []).map((s) => [s.kind, s] as const),
-    );
+    const sourcesMap = new Map((opts?.sources ?? []).map((s) => [s.kind, s] as const));
 
     return Layer.succeed(MentionRegistry, {
       registerSource: (source: MentionSource) =>
@@ -217,8 +200,7 @@ export class MentionRegistry extends ServiceMap.Service<
 
       listSources: () => Effect.sync(() => [...sourcesMap.values()]),
 
-      listEnabledKinds: () =>
-        Effect.sync(() => [...sourcesMap.keys()]),
+      listEnabledKinds: () => Effect.sync(() => [...sourcesMap.keys()]),
 
       resolve: (token: MentionToken, context: MentionSourceContext) =>
         Effect.tryPromise({
@@ -265,9 +247,7 @@ export class MentionRegistry extends ServiceMap.Service<
 
       getCommitIndex: () =>
         Effect.succeed(
-          opts?.commitIndex
-            ? Option.some(opts.commitIndex)
-            : Option.none<CommitIndex>(),
+          opts?.commitIndex ? Option.some(opts.commitIndex) : Option.none<CommitIndex>(),
         ),
 
       lookupCommit: (prefix: string, index: CommitIndex) =>
@@ -275,8 +255,7 @@ export class MentionRegistry extends ServiceMap.Service<
 
       isGitRepo: () => Effect.succeed(!!opts?.commitIndex),
 
-      listSessions: () =>
-        Effect.succeed(opts?.sessions ?? []),
+      listSessions: () => Effect.succeed(opts?.sessions ?? []),
 
       searchSessions: (sessions: MentionableSession[], query: string) =>
         Effect.sync(() => searchMentionableSessions(sessions, query)),

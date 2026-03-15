@@ -7,12 +7,6 @@ import {
   isPidAlive,
   cleanupBackgroundProcesses,
 } from "./index";
-import {
-  isPidAlive,
-  createBackgroundState,
-  cleanupBackgroundProcesses,
-  createBashTool,
-} from "./index";
 
 type BashToolResult = {
   content: [{ type: "text"; text: string }];

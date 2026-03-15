@@ -3,7 +3,6 @@ import { describe, expect, it, test, afterEach, mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createTaskTool, createTaskExtension, CONFIG_DEFAULTS, DEFAULT_DEPS } from "./index";
 import {
   createTaskTool,
   createTaskExtension,

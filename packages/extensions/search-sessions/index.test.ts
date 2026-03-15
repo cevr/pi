@@ -9,13 +9,9 @@ import {
   CONFIG_DEFAULTS,
   CUSTOM_TYPE,
   DEFAULT_EXTENSION_DEPS,
-} from "./index";
-import {
-  createSearchSessionsExtension,
-  CONFIG_DEFAULTS,
   SEARCH_SESSIONS_CONFIG_SCHEMA,
+  DEFAULT_DEPS,
 } from "./index";
-import { createSearchSessionsExtension, DEFAULT_DEPS, CONFIG_DEFAULTS, CUSTOM_TYPE } from "./index";
 
 const tmpdir = os.tmpdir();
 

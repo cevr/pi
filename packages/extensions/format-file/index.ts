@@ -21,8 +21,9 @@ import {
 } from "@cvr/pi-config";
 import { Type } from "@sinclair/typebox";
 import { saveChange, simpleDiff } from "@cvr/pi-file-tracker";
-import { withFileLock } from "@cvr/pi-mutex";
+import { Mutex } from "@cvr/pi-mutex";
 import { resolveWithVariants } from "@cvr/pi-fs";
+import { Effect, ManagedRuntime } from "effect";
 import { boxRendererWindowed, textSection, osc8Link, type Excerpt } from "@cvr/pi-box-format";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
@@ -97,6 +98,7 @@ function findFormatter(preferred: string, timeoutMs: number): Formatter | null {
 
 export function createFormatFileTool(
   config: FormatFileExtConfig = CONFIG_DEFAULTS,
+  runtime?: ManagedRuntime.ManagedRuntime<Mutex, never>,
 ): ToolDefinition {
   return {
     name: "format_file",
@@ -157,7 +159,7 @@ export function createFormatFileTool(
         } as any;
       }
 
-      return withFileLock(resolved, async () => {
+      const run = async () => {
         const before = fs.readFileSync(resolved, "utf-8");
 
         const result = spawnSync(formatter.name, formatter.args(resolved), {
@@ -215,7 +217,16 @@ export function createFormatFileTool(
           ],
           details: { header: resolved },
         } as any;
-      });
+      };
+
+      if (!runtime) return run();
+
+      return runtime.runPromise(
+        Effect.gen(function* () {
+          const mutex = yield* Mutex;
+          return yield* mutex.withLock(resolved, Effect.promise(run));
+        }),
+      );
     },
   };
 }
@@ -231,7 +242,11 @@ export function createFormatFileExtension(
     );
     if (!enabled) return;
 
-    pi.registerTool(deps.withPromptPatch(createFormatFileTool(cfg)));
+    const runtime = ManagedRuntime.make(Mutex.layer);
+    pi.registerTool(deps.withPromptPatch(createFormatFileTool(cfg, runtime)));
+    pi.on("session_shutdown", async () => {
+      await runtime.dispose();
+    });
   };
 }
 

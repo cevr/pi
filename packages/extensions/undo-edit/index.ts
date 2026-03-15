@@ -19,8 +19,9 @@ import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { Type } from "@sinclair/typebox";
 import { findLatestChange, revertChange, simpleDiff } from "@cvr/pi-file-tracker";
-import { withFileLock } from "@cvr/pi-mutex";
+import { Mutex } from "@cvr/pi-mutex";
 import { resolveWithVariants } from "@cvr/pi-fs";
+import { Effect, ManagedRuntime } from "effect";
 import { boxRendererWindowed, textSection, osc8Link, type Excerpt } from "@cvr/pi-box-format";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
@@ -74,7 +75,9 @@ interface UndoEditParams {
   path: string;
 }
 
-export function createUndoEditTool(): ToolDefinition {
+export function createUndoEditTool(
+  runtime: ManagedRuntime.ManagedRuntime<Mutex, never>,
+): ToolDefinition {
   return {
     name: "undo_edit",
     label: "Undo Edit",
@@ -119,65 +122,77 @@ export function createUndoEditTool(): ToolDefinition {
       const p = params as UndoEditParams;
       const resolved = resolveWithVariants(p.path, ctx.cwd);
 
-      return withFileLock(resolved, async () => {
-        const sessionId = ctx.sessionManager.getSessionId();
-        const activeIds = getActiveToolCallIds(ctx.sessionManager);
+      return runtime.runPromise(
+        Effect.gen(function* () {
+          const mutex = yield* Mutex;
+          return yield* mutex.withLock(
+            resolved,
+            Effect.promise(async () => {
+              const sessionId = ctx.sessionManager.getSessionId();
+              const activeIds = getActiveToolCallIds(ctx.sessionManager);
 
-        if (activeIds.length === 0) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "no edits found to undo (no tool calls in current branch).",
-              },
-            ],
-            isError: true,
-          } as any;
-        }
+              if (activeIds.length === 0) {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: "no edits found to undo (no tool calls in current branch).",
+                    },
+                  ],
+                  isError: true,
+                } as any;
+              }
 
-        const latest = findLatestChange(sessionId, resolved, activeIds);
-        if (!latest) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `no edits found to undo for ${path.basename(resolved)}.`,
-              },
-            ],
-            isError: true,
-          } as any;
-        }
+              const latest = findLatestChange(sessionId, resolved, activeIds);
+              if (!latest) {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: `no edits found to undo for ${path.basename(resolved)}.`,
+                    },
+                  ],
+                  isError: true,
+                } as any;
+              }
 
-        const reverted = revertChange(sessionId, latest.toolCallId, latest.change.id);
-        if (!reverted) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `failed to revert — change may have already been undone.`,
-              },
-            ],
-            isError: true,
-          } as any;
-        }
+              const reverted = revertChange(sessionId, latest.toolCallId, latest.change.id);
+              if (!reverted) {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: `failed to revert — change may have already been undone.`,
+                    },
+                  ],
+                  isError: true,
+                } as any;
+              }
 
-        // show reverse diff (after → before)
-        const diff = simpleDiff(path.basename(resolved), reverted.after, reverted.before);
+              // show reverse diff (after → before)
+              const diff = simpleDiff(path.basename(resolved), reverted.after, reverted.before);
 
-        let result = diff;
-        if (reverted.isNewFile) {
-          result += `\n\n(file was created by the reverted edit — file restored to empty)`;
-        }
+              let result = diff;
+              if (reverted.isNewFile) {
+                result += `\n\n(file was created by the reverted edit — file restored to empty)`;
+              }
 
-        return {
-          content: [{ type: "text" as const, text: result }],
-          details: { header: resolved },
-        } as any;
-      });
+              return {
+                content: [{ type: "text" as const, text: result }],
+                details: { header: resolved },
+              } as any;
+            }),
+          );
+        }),
+      );
     },
   };
 }
 
 export default function (pi: ExtensionAPI): void {
-  pi.registerTool(withPromptPatch(createUndoEditTool()));
+  const runtime = ManagedRuntime.make(Mutex.layer);
+  pi.registerTool(withPromptPatch(createUndoEditTool(runtime)));
+  pi.on("session_shutdown", async () => {
+    await runtime.dispose();
+  });
 }

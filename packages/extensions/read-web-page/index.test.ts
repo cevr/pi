@@ -9,11 +9,6 @@ import {
   CONFIG_DEFAULTS,
   DEFAULT_DEPS,
   DEFAULT_PROMPT_SYSTEM,
-} from "./index";
-import {
-  createReadWebPageExtension,
-  CONFIG_DEFAULTS,
-  DEFAULT_DEPS,
   READ_WEB_PAGE_CONFIG_SCHEMA,
 } from "./index";
 import { resolvePrompt } from "@cvr/pi-spawn";

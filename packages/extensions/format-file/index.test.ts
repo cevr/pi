@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
-import { createFormatFileExtension, CONFIG_DEFAULTS, DEFAULT_DEPS } from "./index";
 import {
   createFormatFileExtension,
   CONFIG_DEFAULTS,
@@ -23,14 +22,18 @@ function writeTmpJson(dir: string, filename: string, data: unknown): string {
 
 function createMockExtensionApiHarness() {
   const tools: unknown[] = [];
+  const listeners: Record<string, Function[]> = {};
 
   const pi = {
     registerTool(tool: unknown) {
       tools.push(tool);
     },
+    on(event: string, handler: Function) {
+      (listeners[event] ??= []).push(handler);
+    },
   } as unknown as ExtensionAPI;
 
-  return { pi, tools };
+  return { pi, tools, listeners };
 }
 
 afterEach(() => {

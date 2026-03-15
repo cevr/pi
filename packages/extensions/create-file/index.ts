@@ -17,8 +17,9 @@ import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { Type } from "@sinclair/typebox";
 import { saveChange, simpleDiff } from "@cvr/pi-file-tracker";
-import { withFileLock } from "@cvr/pi-mutex";
+import { Mutex } from "@cvr/pi-mutex";
 import { resolveToAbsolute } from "@cvr/pi-fs";
+import { Effect, ManagedRuntime } from "effect";
 import { boxRendererWindowed, textSection, osc8Link, type Excerpt } from "@cvr/pi-box-format";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
@@ -31,7 +32,9 @@ interface CreateFileParams {
   content: string;
 }
 
-export function createCreateFileTool(): ToolDefinition {
+export function createCreateFileTool(
+  runtime: ManagedRuntime.ManagedRuntime<Mutex, never>,
+): ToolDefinition {
   return {
     name: "write",
     label: "Create File",
@@ -81,45 +84,57 @@ export function createCreateFileTool(): ToolDefinition {
       const p = params as CreateFileParams;
       const resolved = resolveToAbsolute(p.path, ctx.cwd);
 
-      return withFileLock(resolved, async () => {
-        // capture before-state for undo tracking
-        const isNewFile = !fs.existsSync(resolved);
-        const beforeContent = isNewFile ? "" : fs.readFileSync(resolved, "utf-8");
+      return runtime.runPromise(
+        Effect.gen(function* () {
+          const mutex = yield* Mutex;
+          return yield* mutex.withLock(
+            resolved,
+            Effect.promise(async () => {
+              // capture before-state for undo tracking
+              const isNewFile = !fs.existsSync(resolved);
+              const beforeContent = isNewFile ? "" : fs.readFileSync(resolved, "utf-8");
 
-        // mkdirp
-        const dir = path.dirname(resolved);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
+              // mkdirp
+              const dir = path.dirname(resolved);
+              if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+              }
 
-        fs.writeFileSync(resolved, p.content, "utf-8");
+              fs.writeFileSync(resolved, p.content, "utf-8");
 
-        // track change for undo_edit
-        const sessionId = ctx.sessionManager.getSessionId();
-        const diff = simpleDiff(resolved, beforeContent, p.content);
-        saveChange(sessionId, toolCallId, {
-          uri: `file://${resolved}`,
-          before: beforeContent,
-          after: p.content,
-          diff,
-          isNewFile,
-          timestamp: Date.now(),
-        });
+              // track change for undo_edit
+              const sessionId = ctx.sessionManager.getSessionId();
+              const diff = simpleDiff(resolved, beforeContent, p.content);
+              saveChange(sessionId, toolCallId, {
+                uri: `file://${resolved}`,
+                before: beforeContent,
+                after: p.content,
+                diff,
+                isNewFile,
+                timestamp: Date.now(),
+              });
 
-        const lines = p.content.split("\n").length;
-        let result = isNewFile
-          ? `created ${path.basename(resolved)} (${lines} lines)`
-          : `overwrote ${path.basename(resolved)} (${lines} lines)`;
+              const lines = p.content.split("\n").length;
+              let result = isNewFile
+                ? `created ${path.basename(resolved)} (${lines} lines)`
+                : `overwrote ${path.basename(resolved)} (${lines} lines)`;
 
-        return {
-          content: [{ type: "text" as const, text: result }],
-          details: { header: resolved },
-        } as any;
-      });
+              return {
+                content: [{ type: "text" as const, text: result }],
+                details: { header: resolved },
+              } as any;
+            }),
+          );
+        }),
+      );
     },
   };
 }
 
 export default function (pi: ExtensionAPI): void {
-  pi.registerTool(withPromptPatch(createCreateFileTool()));
+  const runtime = ManagedRuntime.make(Mutex.layer);
+  pi.registerTool(withPromptPatch(createCreateFileTool(runtime)));
+  pi.on("session_shutdown", async () => {
+    await runtime.dispose();
+  });
 }

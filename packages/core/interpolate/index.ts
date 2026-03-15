@@ -345,7 +345,7 @@ export function interpolatePromptVars(
   const merged: PromptVariables = {
     ...DEFAULT_PROMPT_VARIABLES,
     ...configVars,
-    ...(variables ?? {}),
+    ...variables,
   };
 
   // compute runtime vars

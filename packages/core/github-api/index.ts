@@ -197,9 +197,7 @@ export class GhApi extends ServiceMap.Service<
       }),
   });
 
-  static layerTest = (
-    responses: Map<string, any>,
-  ) =>
+  static layerTest = (responses: Map<string, any>) =>
     Layer.succeed(GhApi, {
       api: (endpoint) => {
         const value = responses.get(endpoint);

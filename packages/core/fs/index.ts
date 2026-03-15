@@ -144,10 +144,7 @@ export class FsService extends ServiceMap.Service<
   FsService,
   {
     /** list directory entries, truncated to maxEntries. */
-    readonly listDirectory: (
-      dirPath: string,
-      maxEntries: number,
-    ) => Effect.Effect<string, FsError>;
+    readonly listDirectory: (dirPath: string, maxEntries: number) => Effect.Effect<string, FsError>;
 
     /** recursively walk a directory with filter/stopWhen callbacks. */
     readonly walkDirSync: (
@@ -156,10 +153,7 @@ export class FsService extends ServiceMap.Service<
     ) => Effect.Effect<string[], FsError>;
 
     /** resolve a file path with mac-friendly fallback variants. */
-    readonly resolveWithVariants: (
-      filePath: string,
-      cwd: string,
-    ) => Effect.Effect<string, FsError>;
+    readonly resolveWithVariants: (filePath: string, cwd: string) => Effect.Effect<string, FsError>;
   }
 >()("@cvr/pi-fs/index/FsService") {
   static layer = Layer.succeed(FsService, {

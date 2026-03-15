@@ -5,7 +5,6 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { findGitRoot, interpolatePromptVars } from "./index";
-import { findGitRoot, interpolatePromptVars } from "./index";
 
 const cwd = "/home/user/project";
 

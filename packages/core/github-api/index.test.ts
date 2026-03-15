@@ -1,7 +1,6 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it } from "bun:test";
 import { parseRepoUrl, repoSlug, decodeBase64Content, addLineNumbers, truncate } from "./index";
-import { parseRepoUrl, repoSlug, decodeBase64Content, addLineNumbers, truncate } from "./index";
 
 describe("github api helpers", () => {
   describe("parseRepoUrl", () => {

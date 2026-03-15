@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
-import { createGlobExtension, CONFIG_DEFAULTS, DEFAULT_DEPS } from "./index";
 import { createGlobExtension, CONFIG_DEFAULTS, DEFAULT_DEPS, GLOB_CONFIG_SCHEMA } from "./index";
 
 const tmpdir = os.tmpdir();

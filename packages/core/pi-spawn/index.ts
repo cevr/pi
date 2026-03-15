@@ -363,10 +363,9 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 // errors
 // ---------------------------------------------------------------------------
 
-export class SpawnError extends Schema.TaggedErrorClass<SpawnError>()(
-  "SpawnError",
-  { message: Schema.String },
-) {}
+export class SpawnError extends Schema.TaggedErrorClass<SpawnError>()("SpawnError", {
+  message: Schema.String,
+}) {}
 
 // ---------------------------------------------------------------------------
 // service
@@ -375,13 +374,8 @@ export class SpawnError extends Schema.TaggedErrorClass<SpawnError>()(
 export class PiSpawnService extends ServiceMap.Service<
   PiSpawnService,
   {
-    readonly spawn: (
-      config: PiSpawnConfig,
-    ) => Effect.Effect<PiSpawnResult, SpawnError>;
-    readonly resolvePrompt: (
-      promptString: string,
-      promptFile: string,
-    ) => Effect.Effect<string>;
+    readonly spawn: (config: PiSpawnConfig) => Effect.Effect<PiSpawnResult, SpawnError>;
+    readonly resolvePrompt: (promptString: string, promptFile: string) => Effect.Effect<string>;
   }
 >()("@cvr/pi-spawn/index/PiSpawnService") {
   static layer = Layer.succeed(PiSpawnService, {
@@ -410,7 +404,6 @@ export class PiSpawnService extends ServiceMap.Service<
           },
         ),
 
-      resolvePrompt: (_promptString: string, _promptFile: string) =>
-        Effect.succeed("test prompt"),
+      resolvePrompt: (_promptString: string, _promptFile: string) => Effect.succeed("test prompt"),
     });
 }

@@ -4,14 +4,13 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
-import { findSessionFile, CONFIG_DEFAULTS, DEFAULT_DEPS } from "./index";
 import {
   findSessionFile,
   CONFIG_DEFAULTS,
   DEFAULT_DEPS,
+  createReadSessionExtension,
   READ_SESSION_CONFIG_SCHEMA,
 } from "./index";
-import { createReadSessionExtension, DEFAULT_DEPS, CONFIG_DEFAULTS } from "./index";
 
 const tmpdir = os.tmpdir();
 const tmpRoots: string[] = [];

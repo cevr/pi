@@ -31,8 +31,9 @@ import {
 } from "@cvr/pi-box-format";
 import { Type } from "@sinclair/typebox";
 import { saveChange, simpleDiff } from "@cvr/pi-file-tracker";
-import { withFileLock } from "@cvr/pi-mutex";
+import { Mutex } from "@cvr/pi-mutex";
 import { resolveWithVariants } from "@cvr/pi-fs";
+import { Effect, ManagedRuntime } from "effect";
 
 // --- BOM / CRLF ---
 
@@ -323,7 +324,9 @@ interface EditFileParams {
   replace_all?: boolean;
 }
 
-export function createEditFileTool(): ToolDefinition {
+export function createEditFileTool(
+  runtime: ManagedRuntime.ManagedRuntime<Mutex, never>,
+): ToolDefinition {
   return {
     name: "edit",
     label: "Edit File",
@@ -406,103 +409,111 @@ export function createEditFileTool(): ToolDefinition {
         } as any;
       }
 
-      return withFileLock(resolved, async () => {
-        const rawContent = fs.readFileSync(resolved, "utf-8");
-        const { bom, text: bomStripped } = stripBom(rawContent);
-        const originalEnding = detectLineEnding(bomStripped);
-        const normalized = normalizeToLF(bomStripped);
-        const oldStr = normalizeToLF(p.old_str);
-        const newStr = normalizeToLF(p.new_str);
+      return runtime.runPromise(
+        Effect.gen(function* () {
+          const mutex = yield* Mutex;
+          return yield* mutex.withLock(
+            resolved,
+            Effect.promise(async () => {
+              const rawContent = fs.readFileSync(resolved, "utf-8");
+              const { bom, text: bomStripped } = stripBom(rawContent);
+              const originalEnding = detectLineEnding(bomStripped);
+              const normalized = normalizeToLF(bomStripped);
+              const oldStr = normalizeToLF(p.old_str);
+              const newStr = normalizeToLF(p.new_str);
 
-        if (oldStr === newStr) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "old_str and new_str are identical. no changes needed.",
-              },
-            ],
-            isError: true,
-          } as any;
-        }
+              if (oldStr === newStr) {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: "old_str and new_str are identical. no changes needed.",
+                    },
+                  ],
+                  isError: true,
+                } as any;
+              }
 
-        const strategy = findMatchStrategy(normalized, oldStr, newStr);
-        if (!strategy) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `could not find old_str in ${path.basename(resolved)}. the text must match exactly including whitespace and newlines.`,
-              },
-            ],
-            isError: true,
-          } as any;
-        }
+              const strategy = findMatchStrategy(normalized, oldStr, newStr);
+              if (!strategy) {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: `could not find old_str in ${path.basename(resolved)}. the text must match exactly including whitespace and newlines.`,
+                    },
+                  ],
+                  isError: true,
+                } as any;
+              }
 
-        const occurrences = countOccurrences(strategy.content, strategy.searchStr);
-        const replaceAll = p.replace_all ?? false;
+              const occurrences = countOccurrences(strategy.content, strategy.searchStr);
+              const replaceAll = p.replace_all ?? false;
 
-        if (!replaceAll && occurrences > 1) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `found ${occurrences} occurrences of old_str in ${path.basename(resolved)}. set replace_all to true, or add more context to make the match unique.`,
-              },
-            ],
-            isError: true,
-          } as any;
-        }
+              if (!replaceAll && occurrences > 1) {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: `found ${occurrences} occurrences of old_str in ${path.basename(resolved)}. set replace_all to true, or add more context to make the match unique.`,
+                    },
+                  ],
+                  isError: true,
+                } as any;
+              }
 
-        // perform replacement in the matched content space
-        let newContent: string;
-        if (replaceAll) {
-          newContent = strategy.content.split(strategy.searchStr).join(strategy.replaceStr);
-        } else {
-          newContent =
-            strategy.content.substring(0, strategy.index) +
-            strategy.replaceStr +
-            strategy.content.substring(strategy.index + strategy.matchLength);
-        }
+              // perform replacement in the matched content space
+              let newContent: string;
+              if (replaceAll) {
+                newContent = strategy.content.split(strategy.searchStr).join(strategy.replaceStr);
+              } else {
+                newContent =
+                  strategy.content.substring(0, strategy.index) +
+                  strategy.replaceStr +
+                  strategy.content.substring(strategy.index + strategy.matchLength);
+              }
 
-        if (strategy.content === newContent) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "no changes made — replacement produced identical content.",
-              },
-            ],
-            isError: true,
-          } as any;
-        }
+              if (strategy.content === newContent) {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: "no changes made — replacement produced identical content.",
+                    },
+                  ],
+                  isError: true,
+                } as any;
+              }
 
-        const finalContent = bom + restoreLineEndings(newContent, originalEnding);
-        fs.writeFileSync(resolved, finalContent, "utf-8");
+              const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+              fs.writeFileSync(resolved, finalContent, "utf-8");
 
-        // track change for undo_edit
-        const sessionId = ctx.sessionManager.getSessionId();
-        const trackingDiff = simpleDiff(resolved, rawContent, finalContent);
-        saveChange(sessionId, toolCallId, {
-          uri: `file://${resolved}`,
-          before: rawContent,
-          after: finalContent,
-          diff: trackingDiff,
-          isNewFile: false,
-          timestamp: Date.now(),
-        });
+              // track change for undo_edit
+              const sessionId = ctx.sessionManager.getSessionId();
+              const trackingDiff = simpleDiff(resolved, rawContent, finalContent);
+              saveChange(sessionId, toolCallId, {
+                uri: `file://${resolved}`,
+                before: rawContent,
+                after: finalContent,
+                diff: trackingDiff,
+                isNewFile: false,
+                timestamp: Date.now(),
+              });
 
-        // build result
-        const text = simpleDiff(resolved, strategy.content, newContent);
+              // build result
+              const text = simpleDiff(resolved, strategy.content, newContent);
 
-        return {
-          content: [{ type: "text" as const, text }],
-          details: {
-            filePath: resolved,
-            ...(replaceAll && occurrences > 1 ? { replaceCount: occurrences } : {}),
-          },
-        } as any;
-      });
+              return {
+                content: [{ type: "text" as const, text }],
+                details: {
+                  filePath: resolved,
+                  ...(replaceAll && occurrences > 1 ? { replaceCount: occurrences } : {}),
+                },
+              } as any;
+            }),
+          );
+        }),
+      );
     },
 
     renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) {
@@ -570,5 +581,9 @@ export function createEditFileTool(): ToolDefinition {
 }
 
 export default function (pi: ExtensionAPI): void {
-  pi.registerTool(withPromptPatch(createEditFileTool()));
+  const runtime = ManagedRuntime.make(Mutex.layer);
+  pi.registerTool(withPromptPatch(createEditFileTool(runtime)));
+  pi.on("session_shutdown", async () => {
+    await runtime.dispose();
+  });
 }
