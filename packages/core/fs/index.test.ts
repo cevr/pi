@@ -3,7 +3,7 @@ import { describe, expect, it, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { expandPath, resolveToAbsolute, resolveWithVariants, isSecretFile, listDirectory, walkDirSync } from "./index";
+import { expandPath, resolveToAbsolute, resolveWithVariants, resolveWithVariantsUsing, isSecretFile, listDirectory, walkDirSync } from "./index";
 
 const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = fs;
   const { join } = path;

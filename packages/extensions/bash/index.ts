@@ -708,3 +708,30 @@ async function runBackgroundCommand(
     });
   });
 }
+
+export function createBashExtension(
+  deps: BashExtensionDeps = DEFAULT_DEPS,
+): (pi: ExtensionAPI) => void {
+  return function bashExtension(pi: ExtensionAPI): void {
+    const { enabled, config: cfg } = deps.getEnabledExtensionConfig(
+      "@cvr/pi-bash",
+      CONFIG_DEFAULTS,
+      { schema: BASH_CONFIG_SCHEMA },
+    );
+    if (!enabled) return;
+
+    const backgroundState = createBackgroundState();
+
+    pi.registerTool(deps.withPromptPatch(createBashTool(backgroundState, cfg)));
+    pi.on("session_shutdown", async () => {
+      await cleanupBackgroundProcesses(backgroundState, cfg.sigkillDelayMs);
+    });
+    pi.on("session_switch", async () => {
+      await cleanupBackgroundProcesses(backgroundState, cfg.sigkillDelayMs);
+    });
+  };
+}
+
+const bashExtension: (pi: ExtensionAPI) => void = createBashExtension();
+
+export default bashExtension;

@@ -33,7 +33,7 @@ export function resolveToAbsolute(filePath: string, cwd: string): string {
  * callers already rely on this being tolerant of unicode normalization drift and
  * Finder-style narrow no-break spaces in timestamped names.
  */
-function resolveWithVariantsUsing(
+export function resolveWithVariantsUsing(
   filePath: string,
   cwd: string,
   exists: (candidate: string) => boolean,

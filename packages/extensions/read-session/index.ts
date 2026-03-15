@@ -507,3 +507,31 @@ export function createReadSessionTool(
     },
   };
 }
+
+export function createReadSessionExtension(
+  deps: ReadSessionExtensionDeps = DEFAULT_DEPS,
+): (pi: ExtensionAPI) => void {
+  return function readSessionExtension(pi: ExtensionAPI): void {
+    const { enabled, config: cfg } = deps.getEnabledExtensionConfig(
+      "@cvr/pi-read-session",
+      CONFIG_DEFAULTS,
+      { schema: READ_SESSION_CONFIG_SCHEMA },
+    );
+    if (!enabled) return;
+
+    pi.registerTool(
+      deps.withPromptPatch(
+        createReadSessionTool({
+          model: cfg.model,
+          sessionsDir: cfg.sessionsDir,
+          maxChars: cfg.maxChars,
+        }),
+      ),
+    );
+  };
+}
+
+const readSessionExtension: (pi: ExtensionAPI) => void =
+  createReadSessionExtension();
+
+export default readSessionExtension;
