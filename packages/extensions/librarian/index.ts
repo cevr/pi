@@ -75,6 +75,7 @@ export const CONFIG_DEFAULTS: LibrarianExtConfig = {
 async function repoFetch(
   spec: string,
   runtime: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   try {
     const result = await runtime.runPromise(
@@ -83,11 +84,13 @@ async function repoFetch(
         return yield* runner.run("repo", {
           args: ["fetch", spec],
           timeoutMs: 60_000,
+          signal,
         });
       }),
     );
-    const path = result.stdout.trim();
-    return path || null;
+    if (result.exitCode !== 0) return null;
+    const repoPath = result.stdout.trim();
+    return repoPath || null;
   } catch {
     return null;
   }
@@ -199,7 +202,7 @@ export function createLibrarianTool(
       // If a repo spec is given, fetch it locally
       let localRepoPath: string | null = null;
       if (p.repo && runtime) {
-        localRepoPath = await repoFetch(p.repo, runtime);
+        localRepoPath = await repoFetch(p.repo, runtime, signal);
       }
 
       const parts: string[] = [p.query];

@@ -46,7 +46,7 @@ export class GitClient extends ServiceMap.Service<
     ) => Effect.Effect<GitLogEntry[], GitError>;
 
     /** git diff --stat */
-    readonly diffStat: (cwd: string) => Effect.Effect<string, GitError>;
+    readonly diffStat: (cwd: string, opts?: { timeoutMs?: number }) => Effect.Effect<string, GitError>;
 
     /** git remote get-url origin */
     readonly remoteUrl: (cwd: string) => Effect.Effect<Option.Option<string>, GitError>;
@@ -63,8 +63,8 @@ export class GitClient extends ServiceMap.Service<
     Effect.gen(function* () {
       const runner = yield* ProcessRunner;
 
-      const git = (args: string[], cwd: string) =>
-        runner.run("git", { args, cwd }).pipe(
+      const git = (args: string[], cwd: string, opts?: { timeoutMs?: number }) =>
+        runner.run("git", { args, cwd, timeoutMs: opts?.timeoutMs }).pipe(
           Effect.flatMap((result) => {
             if (result.exitCode !== 0) {
               return Effect.fail(
@@ -115,7 +115,8 @@ export class GitClient extends ServiceMap.Service<
               });
           }),
 
-        diffStat: (cwd: string) => git(["diff", "--stat"], cwd),
+        diffStat: (cwd: string, opts?: { timeoutMs?: number }) =>
+          git(["diff", "--stat"], cwd, opts),
 
         remoteUrl: (cwd: string) =>
           git(["remote", "get-url", "origin"], cwd).pipe(

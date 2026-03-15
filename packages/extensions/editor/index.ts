@@ -343,7 +343,7 @@ async function getGitDiffStats(
     const out = await runtime.runPromise(
       Effect.gen(function* () {
         const git = yield* GitClient;
-        return yield* git.diffStat(cwd);
+        return yield* git.diffStat(cwd, { timeoutMs: 3000 });
       }),
     );
     if (!out) return "";
