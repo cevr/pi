@@ -348,7 +348,14 @@ export async function getGitDiffStats(
     );
     if (!out) return "";
     const lines = out.split("\n");
-    const summary = lines[lines.length - 1];
+    // git diff --stat ends with \n — find the last non-empty line (the summary)
+    let summary = "";
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i]?.trim()) {
+        summary = lines[i]!;
+        break;
+      }
+    }
     if (!summary) return "";
     const filesMatch = summary.match(/(\d+)\s+files?\s+changed/);
     const insMatch = summary.match(/(\d+)\s+insertions?\(\+\)/);

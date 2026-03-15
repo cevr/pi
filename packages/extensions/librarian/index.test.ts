@@ -143,17 +143,22 @@ describe("librarian extension", () => {
 describe("repoFetch", () => {
   function makeRuntime(results: Map<string, ProcessResult>) {
     const spawnLog = Ref.makeUnsafe<Array<SpawnRecord>>([]);
-    return ManagedRuntime.make(ProcessRunner.layerTest(spawnLog, results));
+    const runtime = ManagedRuntime.make(ProcessRunner.layerTest(spawnLog, results));
+    return { runtime, spawnLog };
   }
 
-  it("returns path on successful fetch", async () => {
+  it("returns path on successful fetch and issues correct command", async () => {
     const results = new Map<string, ProcessResult>([
       ["repo", { exitCode: 0, stdout: "/home/.cache/repo/owner/repo\n", stderr: "" }],
     ]);
-    const runtime = makeRuntime(results);
+    const { runtime, spawnLog } = makeRuntime(results);
     try {
       const result = await repoFetch("owner/repo", runtime);
       expect(result).toBe("/home/.cache/repo/owner/repo");
+      const log = Effect.runSync(Ref.get(spawnLog));
+      expect(log).toHaveLength(1);
+      expect(log[0]!.command).toBe("repo");
+      expect(log[0]!.args).toEqual(["fetch", "owner/repo"]);
     } finally {
       await runtime.dispose();
     }
@@ -163,7 +168,7 @@ describe("repoFetch", () => {
     const results = new Map<string, ProcessResult>([
       ["repo", { exitCode: 1, stdout: "", stderr: "not found" }],
     ]);
-    const runtime = makeRuntime(results);
+    const { runtime } = makeRuntime(results);
     try {
       const result = await repoFetch("bad/spec", runtime);
       expect(result).toBeNull();
@@ -176,7 +181,7 @@ describe("repoFetch", () => {
     const results = new Map<string, ProcessResult>([
       ["repo", { exitCode: 0, stdout: "  \n", stderr: "" }],
     ]);
-    const runtime = makeRuntime(results);
+    const { runtime } = makeRuntime(results);
     try {
       const result = await repoFetch("owner/repo", runtime);
       expect(result).toBeNull();

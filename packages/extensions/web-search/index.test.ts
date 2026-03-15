@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
-import { ManagedRuntime, Ref } from "effect";
+import { Effect, ManagedRuntime, Ref } from "effect";
 import { ProcessRunner, type ProcessResult, type SpawnRecord } from "@cvr/pi-process-runner";
 import {
   createWebSearchExtension,
@@ -126,15 +126,16 @@ describe("web-search extension", () => {
 describe("searchParallel", () => {
   function makeRuntime(results: Map<string, ProcessResult>) {
     const spawnLog = Ref.makeUnsafe<Array<SpawnRecord>>([]);
-    return ManagedRuntime.make(ProcessRunner.layerTest(spawnLog, results));
+    const runtime = ManagedRuntime.make(ProcessRunner.layerTest(spawnLog, results));
+    return { runtime, spawnLog };
   }
 
-  it("returns parsed data on successful curl", async () => {
+  it("returns parsed data on successful curl and issues correct command", async () => {
     const response = { results: [{ url: "https://example.com", title: "Example", excerpts: [] }] };
     const results = new Map<string, ProcessResult>([
       ["curl", { exitCode: 0, stdout: JSON.stringify(response), stderr: "" }],
     ]);
-    const runtime = makeRuntime(results);
+    const { runtime, spawnLog } = makeRuntime(results);
     try {
       const { data, error } = await searchParallel(
         "test-key",
@@ -147,6 +148,12 @@ describe("searchParallel", () => {
       expect(error).toBeUndefined();
       expect(data?.results).toHaveLength(1);
       expect(data?.results[0]?.title).toBe("Example");
+      // verify correct curl invocation
+      const log = Effect.runSync(Ref.get(spawnLog));
+      expect(log).toHaveLength(1);
+      expect(log[0]!.command).toBe("curl");
+      expect(log[0]!.args).toContain("https://api.test/search");
+      expect(log[0]!.args).toContain("x-api-key: test-key");
     } finally {
       await runtime.dispose();
     }
@@ -156,7 +163,7 @@ describe("searchParallel", () => {
     const results = new Map<string, ProcessResult>([
       ["curl", { exitCode: 7, stdout: "", stderr: "connection refused" }],
     ]);
-    const runtime = makeRuntime(results);
+    const { runtime } = makeRuntime(results);
     try {
       const { data, error } = await searchParallel(
         "test-key",
@@ -178,7 +185,7 @@ describe("searchParallel", () => {
     const results = new Map<string, ProcessResult>([
       ["curl", { exitCode: 0, stdout: "not json {{{", stderr: "" }],
     ]);
-    const runtime = makeRuntime(results);
+    const { runtime } = makeRuntime(results);
     try {
       const { data, error } = await searchParallel(
         "test-key",

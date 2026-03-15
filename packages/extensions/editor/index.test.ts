@@ -31,9 +31,9 @@ describe("editor extension", () => {
     });
 
     it("returns formatted stats from git diff --stat output", async () => {
-      // git diff --stat output: last line is summary, no trailing newline
+      // real git diff --stat always ends with trailing newline
       const runtime = makeGitRuntime(
-        " src/foo.ts | 10 ++++---\n src/bar.ts | 5 ++--\n 2 files changed, 8 insertions(+), 5 deletions(-)",
+        " src/foo.ts | 10 ++++---\n src/bar.ts | 5 ++--\n 2 files changed, 8 insertions(+), 5 deletions(-)\n",
       );
       try {
         const result = await getGitDiffStats("/tmp", runtime);
@@ -53,9 +53,9 @@ describe("editor extension", () => {
       }
     });
 
-    it("handles insertions-only summary", async () => {
+    it("handles insertions-only summary with trailing newline", async () => {
       const runtime = makeGitRuntime(
-        " src/new.ts | 20 +++++++++++\n 1 file changed, 20 insertions(+)",
+        " src/new.ts | 20 +++++++++++\n 1 file changed, 20 insertions(+)\n",
       );
       try {
         const result = await getGitDiffStats("/tmp", runtime);
