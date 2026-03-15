@@ -71,6 +71,7 @@ const CONFIG_DEFAULTS: LibrarianExtConfig = {
 
 /**
  * Fetch a repo locally via the `repo` CLI, returning the cached path.
+ * Always fetches (pulls latest if already cached).
  * Spec formats: "owner/repo", "npm:pkg", "pypi:pkg", "crates:crate"
  */
 function repoFetch(spec: string): string | null {
@@ -78,19 +79,6 @@ function repoFetch(spec: string): string | null {
     return execSync(`repo fetch ${spec}`, {
       encoding: "utf-8",
       timeout: 60_000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-/** Check if a repo is already cached, returning the path or null. */
-function repoPath(spec: string): string | null {
-  try {
-    return execSync(`repo path ${spec}`, {
-      encoding: "utf-8",
-      timeout: 5_000,
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();
   } catch {
@@ -207,7 +195,7 @@ export function createLibrarianTool(
       // If a repo spec is given, fetch it locally
       let localRepoPath: string | null = null;
       if (p.repo) {
-        localRepoPath = repoPath(p.repo) ?? repoFetch(p.repo);
+        localRepoPath = repoFetch(p.repo);
       }
 
       const parts: string[] = [p.query];
