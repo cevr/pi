@@ -14,7 +14,7 @@
 import { spawnSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll } from "bun:test";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
