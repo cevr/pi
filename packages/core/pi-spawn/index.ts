@@ -16,6 +16,7 @@ import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
 import { resolveGlobalSettingsPath } from "@cvr/pi-config";
 import { interpolatePromptVars } from "@cvr/pi-interpolate";
+import { Effect, Layer, Schema, ServiceMap } from "effect";
 
 // --- types ---
 
@@ -73,10 +74,7 @@ export interface PiSpawnConfig {
 
 // --- helpers ---
 
-function writePromptToTempFile(
-  label: string,
-  prompt: string,
-): { dir: string; filePath: string } {
+function writePromptToTempFile(label: string, prompt: string): { dir: string; filePath: string } {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
   const safeName = label.replace(/[^\w.-]+/g, "_");
   const filePath = path.join(tmpDir, `prompt-${safeName}.md`);
@@ -103,10 +101,7 @@ export function zeroUsage(): UsageStats {
  * lets extensions externalize prompt content via config while
  * keeping sops-managed .md files as the default source.
  */
-export function resolvePrompt(
-  promptString: string,
-  promptFile: string,
-): string {
+export function resolvePrompt(promptString: string, promptFile: string): string {
   if (promptString) return promptString;
   return readAgentPrompt(promptFile);
 }
@@ -116,13 +111,7 @@ export function resolvePrompt(
  * looks in ~/.pi/agent/agents/{filename}.
  */
 export function readAgentPrompt(filename: string): string {
-  const promptPath = path.join(
-    os.homedir(),
-    ".pi",
-    "agent",
-    "agents",
-    filename,
-  );
+  const promptPath = path.join(os.homedir(), ".pi", "agent", "agents", filename);
   try {
     const content = fs.readFileSync(promptPath, "utf-8");
     if (content.startsWith("---")) {
@@ -164,11 +153,10 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 
   try {
     if (config.systemPromptBody?.trim()) {
-      const interpolated = interpolatePromptVars(
-        config.systemPromptBody,
-        config.cwd,
-        { sessionId: config.sessionId, repo: config.repo },
-      );
+      const interpolated = interpolatePromptVars(config.systemPromptBody, config.cwd, {
+        sessionId: config.sessionId,
+        repo: config.repo,
+      });
       const tmp = writePromptToTempFile("subagent", interpolated);
       tmpPromptDir = tmp.dir;
       tmpPromptPath = tmp.filePath;
@@ -263,16 +251,12 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
               result.usage.cost += usage.cost?.total || 0;
               result.usage.contextTokens = usage.totalTokens || 0;
             }
-            if (!result.model && (msg as any).model)
-              result.model = (msg as any).model;
-            if ((msg as any).stopReason)
-              result.stopReason = (msg as any).stopReason;
-            if ((msg as any).errorMessage)
-              result.errorMessage = (msg as any).errorMessage;
+            if (!result.model && (msg as any).model) result.model = (msg as any).model;
+            if ((msg as any).stopReason) result.stopReason = (msg as any).stopReason;
+            if ((msg as any).errorMessage) result.errorMessage = (msg as any).errorMessage;
 
             const stopReason = (msg as any).stopReason as string | undefined;
-            const isTurnEnd =
-              stopReason === "end_turn" || stopReason === "stop";
+            const isTurnEnd = stopReason === "end_turn" || stopReason === "stop";
             const expectedTurns = config.followUp ? 2 : 1;
             debug("turn_end", {
               stopReason,
@@ -296,10 +280,7 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
             }
 
             // RPC: if agent errors, terminate immediately
-            if (
-              useRpc &&
-              (stopReason === "error" || stopReason === "aborted")
-            ) {
+            if (useRpc && (stopReason === "error" || stopReason === "aborted")) {
               debug("kill_after_error", { stopReason });
               proc.kill("SIGTERM");
               setTimeout(() => {
@@ -376,4 +357,60 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
         /* ignore */
       }
   }
+}
+
+// ---------------------------------------------------------------------------
+// errors
+// ---------------------------------------------------------------------------
+
+export class SpawnError extends Schema.TaggedErrorClass<SpawnError>()(
+  "SpawnError",
+  { message: Schema.String },
+) {}
+
+// ---------------------------------------------------------------------------
+// service
+// ---------------------------------------------------------------------------
+
+export class PiSpawnService extends ServiceMap.Service<
+  PiSpawnService,
+  {
+    readonly spawn: (
+      config: PiSpawnConfig,
+    ) => Effect.Effect<PiSpawnResult, SpawnError>;
+    readonly resolvePrompt: (
+      promptString: string,
+      promptFile: string,
+    ) => Effect.Effect<string>;
+  }
+>()("@cvr/pi-spawn/index/PiSpawnService") {
+  static layer = Layer.succeed(PiSpawnService, {
+    spawn: (config: PiSpawnConfig) =>
+      Effect.tryPromise({
+        try: () => piSpawn(config),
+        catch: (err) =>
+          new SpawnError({
+            message: err instanceof Error ? err.message : String(err),
+          }),
+      }),
+
+    resolvePrompt: (promptString: string, promptFile: string) =>
+      Effect.sync(() => resolvePrompt(promptString, promptFile)),
+  });
+
+  static layerTest = (results?: Map<string, PiSpawnResult>) =>
+    Layer.succeed(PiSpawnService, {
+      spawn: (config: PiSpawnConfig) =>
+        Effect.succeed(
+          results?.get(config.model ?? "default") ?? {
+            exitCode: 0,
+            messages: [],
+            stderr: "",
+            usage: zeroUsage(),
+          },
+        ),
+
+      resolvePrompt: (_promptString: string, _promptFile: string) =>
+        Effect.succeed("test prompt"),
+    });
 }

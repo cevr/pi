@@ -8,7 +8,7 @@
     "@cvr/pi-config": "workspace:*",
     "@cvr/pi-interpolate": "workspace:*"
   },
-  "devDependencies": {
-    "vitest": "^3.0.0"
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }
