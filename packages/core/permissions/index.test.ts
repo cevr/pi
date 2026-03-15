@@ -1,6 +1,7 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it } from "bun:test";
 import { evaluatePermission, PermissionRule } from "./index";
+import { evaluatePermission, PermissionRule } from "./index";
 
 const RULES: PermissionRule[] = [
     {

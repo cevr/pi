@@ -1,6 +1,7 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it, test } from "bun:test";
 import { isHtml, htmlToMarkdown } from "./index";
+import { isHtml, htmlToMarkdown } from "./index";
 
 describe("isHtml", () => {
     it("returns true for doctype", () => {

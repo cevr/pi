@@ -3,6 +3,10 @@ import { describe, expect, it, test, afterEach, mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
+import { createCodeReviewExtension, CONFIG_DEFAULTS, DEFAULT_DEPS } from "./index";
+import { createCodeReviewExtension, CONFIG_DEFAULTS, DEFAULT_DEPS, CODE_REVIEW_CONFIG_SCHEMA } from "./index";
+import { resolvePrompt } from "@cvr/pi-spawn";
 
 const tmpdir = os.tmpdir();
 
@@ -122,8 +126,7 @@ const tmpdir = os.tmpdir();
         },
       });
       setGlobalSettingsPath(settingsPath);
-      const errorSpy = vi
-        .spyOn(console, "error")
+      const errorSpy = spyOn(console, "error")
         .mockImplementation(() => undefined);
       const resolvePromptSpy = mock(
         (promptString: string, promptFile: string) =>

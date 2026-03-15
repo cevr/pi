@@ -1,6 +1,7 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it } from "bun:test";
-import { formatBoxesWindowed, textSection, osc8Link, BoxSection } from "./index";
+import { formatBoxesWindowed, textSection, osc8Link, BoxSection, chromeWidth, visibleWidth, truncateToWidth } from "./index";
+import { visibleWidth, truncateToWidth, chromeWidth, formatBoxesWindowed, textSection, osc8Link, BoxSection } from "./index";
 
 describe("visibleWidth", () => {
     it("counts plain text characters", () => {

@@ -2,6 +2,7 @@
 import { describe, expect, it, test } from "bun:test";
 import * as path from "node:path";
 import { withFileLock } from "./index";
+import { withFileLock } from "./index";
 
 describe("withFileLock", () => {
     it("executes function and returns result", async () => {

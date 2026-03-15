@@ -50,7 +50,7 @@ type LookAtExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: LookAtExtConfig = {
+export const CONFIG_DEFAULTS: LookAtExtConfig = {
   model: "openrouter/google/gemini-3-flash-preview",
   extensionTools: ["read", "ls"],
   builtinTools: ["read", "ls"],
@@ -58,7 +58,7 @@ const CONFIG_DEFAULTS: LookAtExtConfig = {
   promptString: "",
 };
 
-const DEFAULT_DEPS: LookAtExtensionDeps = {
+export const DEFAULT_DEPS: LookAtExtensionDeps = {
   getEnabledExtensionConfig,
   resolvePrompt,
   withPromptPatch,
@@ -86,7 +86,7 @@ function isLookAtExtConfig(
   );
 }
 
-const LOOK_AT_CONFIG_SCHEMA: ExtensionConfigSchema<LookAtExtConfig> = {
+export const LOOK_AT_CONFIG_SCHEMA: ExtensionConfigSchema<LookAtExtConfig> = {
   validate: isLookAtExtConfig,
 };
 
@@ -279,7 +279,7 @@ export function createLookAtTool(config: LookAtConfig = {}): ToolDefinition {
   };
 }
 
-function createLookAtExtension(
+export function createLookAtExtension(
   deps: LookAtExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function lookAtExtension(pi: ExtensionAPI): void {

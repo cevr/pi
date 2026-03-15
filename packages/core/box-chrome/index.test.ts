@@ -1,6 +1,7 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it } from "bun:test";
 import { boxTop, boxRow, boxBorderLR, boxBottom } from "./index";
+import { boxTop, boxRow, boxBorderLR, boxBottom } from "./index";
 
 // identity style for testing raw output
   const identity = { dim: (s: string) => s };

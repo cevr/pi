@@ -72,14 +72,14 @@ type ReadExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: ReadExtConfig = {
+export const CONFIG_DEFAULTS: ReadExtConfig = {
   maxLines: 500,
   maxFileBytes: 65536,
   maxLineBytes: 4096,
   maxDirEntries: 1000,
 };
 
-const DEFAULT_DEPS: ReadExtensionDeps = {
+export const DEFAULT_DEPS: ReadExtensionDeps = {
   getEnabledExtensionConfig,
   withPromptPatch,
 };
@@ -97,7 +97,7 @@ function isReadConfig(value: Record<string, unknown>): value is ReadExtConfig {
   );
 }
 
-const READ_CONFIG_SCHEMA: ExtensionConfigSchema<ReadExtConfig> = {
+export const READ_CONFIG_SCHEMA: ExtensionConfigSchema<ReadExtConfig> = {
   validate: isReadConfig,
 };
 
@@ -401,7 +401,7 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
  * disabled, but keep this module's exports stable so imports like `@cvr/pi-read`
  * in `ls` still evaluate normally.
  */
-function createReadExtension(
+export function createReadExtension(
   deps: ReadExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function readExtension(pi: ExtensionAPI): void {

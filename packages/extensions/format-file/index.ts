@@ -50,12 +50,12 @@ type FormatFileExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: FormatFileExtConfig = {
+export const CONFIG_DEFAULTS: FormatFileExtConfig = {
   preferredFormatter: "auto",
   formatterLookupTimeoutMs: 3000,
 };
 
-const DEFAULT_DEPS: FormatFileExtensionDeps = {
+export const DEFAULT_DEPS: FormatFileExtensionDeps = {
   getEnabledExtensionConfig,
   withPromptPatch,
 };
@@ -88,7 +88,7 @@ function isFormatFileConfig(
   );
 }
 
-const FORMAT_FILE_CONFIG_SCHEMA: ExtensionConfigSchema<FormatFileExtConfig> = {
+export const FORMAT_FILE_CONFIG_SCHEMA: ExtensionConfigSchema<FormatFileExtConfig> = {
   validate: isFormatFileConfig,
 };
 
@@ -252,7 +252,7 @@ export function createFormatFileTool(
   };
 }
 
-function createFormatFileExtension(
+export function createFormatFileExtension(
   deps: FormatFileExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function formatFileExtension(pi: ExtensionAPI): void {

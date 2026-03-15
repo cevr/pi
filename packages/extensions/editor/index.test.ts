@@ -1,5 +1,7 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it } from "bun:test";
+import { formatModelDisplay } from "./index";
+import { formatModelDisplay } from "./index";
 
 describe("editor extension", () => {
     describe("formatModelDisplay", () => {

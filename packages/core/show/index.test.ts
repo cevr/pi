@@ -1,6 +1,7 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it } from "bun:test";
 import { windowItems, show } from "./index";
+import { windowItems, show } from "./index";
 
 describe("windowItems", () => {
     it("returns all items when no excerpts", () => {

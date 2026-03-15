@@ -12,7 +12,7 @@ import {
   type ResolvedMention,
 } from "@cvr/pi-mentions";
 
-const CUSTOM_TYPE = "mentions:resolved";
+export const CUSTOM_TYPE = "mentions:resolved";
 
 type MentionProviderFactory = EditorAutocompleteContributor["enhance"];
 
@@ -27,7 +27,7 @@ interface MentionAdapterDeps {
   clearCommitIndexCache: typeof clearCommitIndexCache;
 }
 
-const DEFAULT_DEPS: MentionAdapterDeps = {
+export const DEFAULT_DEPS: MentionAdapterDeps = {
   registerAutocompleteContributor: registerEditorAutocompleteContributor,
   createMentionProvider(baseProvider, context) {
     return new MentionAwareProvider({
@@ -46,7 +46,7 @@ const DEFAULT_DEPS: MentionAdapterDeps = {
  * also registers mention autocomplete as an optional editor contributor.
  * context is injected per turn, not persisted, so old references dont accumulate.
  */
-function createMentionsExtension(deps: MentionAdapterDeps) {
+export function createMentionsExtension(deps: MentionAdapterDeps) {
   return function mentionsExtension(pi: ExtensionAPI): void {
     let activeMentionContext = "";
 
@@ -115,7 +115,7 @@ function createMentionsExtension(deps: MentionAdapterDeps) {
   };
 }
 
-const mentionsExtension: (pi: ExtensionAPI) => void =
+export const mentionsExtension: (pi: ExtensionAPI) => void =
   createMentionsExtension(DEFAULT_DEPS);
 
 export default mentionsExtension;

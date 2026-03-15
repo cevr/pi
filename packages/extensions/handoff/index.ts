@@ -53,7 +53,7 @@ type HandoffExtConfig = {
   promptString: string;
 };
 
-const CONFIG_DEFAULTS: HandoffExtConfig = {
+export const CONFIG_DEFAULTS: HandoffExtConfig = {
   threshold: 0.85,
   model: {
     provider: "openrouter",
@@ -89,7 +89,7 @@ function isHandoffConfig(
   );
 }
 
-const HANDOFF_CONFIG_SCHEMA: ExtensionConfigSchema<HandoffExtConfig> = {
+export const HANDOFF_CONFIG_SCHEMA: ExtensionConfigSchema<HandoffExtConfig> = {
   validate: isHandoffConfig,
 };
 
@@ -166,7 +166,7 @@ interface HandoffExtensionDeps {
   resolvePrompt: typeof resolvePrompt;
 }
 
-const DEFAULT_DEPS: HandoffExtensionDeps = {
+export const DEFAULT_DEPS: HandoffExtensionDeps = {
   getEnabledExtensionConfig,
   registerMentionSource,
   resolvePrompt,
@@ -231,7 +231,7 @@ function showProvenance(ctx: ExtensionContext, parentPath: string): void {
   }));
 }
 
-function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS) {
+export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS) {
   return function handoffExtension(pi: ExtensionAPI): void {
     const { enabled, config: cfg } = deps.getEnabledExtensionConfig(
       "@cvr/pi-handoff",

@@ -25,7 +25,7 @@ type SessionNameExtConfig = {
   renameInterval: number;
 };
 
-const CONFIG_DEFAULTS: SessionNameExtConfig = {
+export const CONFIG_DEFAULTS: SessionNameExtConfig = {
   model: {
     provider: "openrouter",
     id: "google/gemini-3-flash-preview",
@@ -61,12 +61,12 @@ function isSessionNameConfig(
   );
 }
 
-const SESSION_NAME_CONFIG_SCHEMA: ExtensionConfigSchema<SessionNameExtConfig> =
+export const SESSION_NAME_CONFIG_SCHEMA: ExtensionConfigSchema<SessionNameExtConfig> =
   {
     validate: isSessionNameConfig,
   };
 
-function sessionNameExtension(pi: ExtensionAPI): void {
+export function sessionNameExtension(pi: ExtensionAPI): void {
   const { enabled, config: cfg } = getEnabledExtensionConfig(
     "@cvr/pi-session-name",
     CONFIG_DEFAULTS,

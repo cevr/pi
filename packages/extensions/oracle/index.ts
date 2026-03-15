@@ -50,7 +50,7 @@ type OracleExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: OracleExtConfig = {
+export const CONFIG_DEFAULTS: OracleExtConfig = {
   model: "openrouter/openai/gpt-5.2",
   extensionTools: ["read", "grep", "find", "ls", "bash"],
   builtinTools: ["read", "grep", "find", "ls", "bash"],
@@ -58,7 +58,7 @@ const CONFIG_DEFAULTS: OracleExtConfig = {
   promptString: "",
 };
 
-const DEFAULT_DEPS: OracleExtensionDeps = {
+export const DEFAULT_DEPS: OracleExtensionDeps = {
   getEnabledExtensionConfig,
   resolvePrompt,
   withPromptPatch,
@@ -86,7 +86,7 @@ function isOracleConfig(
   );
 }
 
-const ORACLE_CONFIG_SCHEMA: ExtensionConfigSchema<OracleExtConfig> = {
+export const ORACLE_CONFIG_SCHEMA: ExtensionConfigSchema<OracleExtConfig> = {
   validate: isOracleConfig,
 };
 
@@ -268,7 +268,7 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
   };
 }
 
-function createOracleExtension(
+export function createOracleExtension(
   deps: OracleExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function oracleExtension(pi: ExtensionAPI): void {

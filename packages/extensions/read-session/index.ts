@@ -42,7 +42,7 @@ type ReadSessionExtConfig = {
   maxChars: number;
 };
 
-const CONFIG_DEFAULTS: ReadSessionExtConfig = {
+export const CONFIG_DEFAULTS: ReadSessionExtConfig = {
   model: "openrouter/google/gemini-3-flash-preview",
   sessionsDir: path.join(os.homedir(), ".pi", "agent", "sessions"),
   maxChars: 120_000,
@@ -53,7 +53,7 @@ export type ReadSessionExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const DEFAULT_DEPS: ReadSessionExtensionDeps = {
+export const DEFAULT_DEPS: ReadSessionExtensionDeps = {
   getEnabledExtensionConfig,
   withPromptPatch,
 };
@@ -74,7 +74,7 @@ function isReadSessionConfig(
   );
 }
 
-const READ_SESSION_CONFIG_SCHEMA: ExtensionConfigSchema<ReadSessionExtConfig> =
+export const READ_SESSION_CONFIG_SCHEMA: ExtensionConfigSchema<ReadSessionExtConfig> =
   {
     validate: isReadSessionConfig,
   };
@@ -122,7 +122,7 @@ interface ReadSessionParams {
   leaf_id?: string;
 }
 
-function findSessionFile(
+export function findSessionFile(
   sessionId: string,
   sessionsDir: string,
 ): string | null {

@@ -52,7 +52,7 @@ type LibrarianExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: LibrarianExtConfig = {
+export const CONFIG_DEFAULTS: LibrarianExtConfig = {
   model: "openrouter/google/gemini-3-flash-preview",
   extensionTools: [
     "read_github",
@@ -86,7 +86,7 @@ function repoFetch(spec: string): string | null {
   }
 }
 
-const DEFAULT_DEPS: LibrarianExtensionDeps = {
+export const DEFAULT_DEPS: LibrarianExtensionDeps = {
   getEnabledExtensionConfig,
   resolvePrompt,
   withPromptPatch,
@@ -114,7 +114,7 @@ function isLibrarianConfig(
   );
 }
 
-const LIBRARIAN_CONFIG_SCHEMA: ExtensionConfigSchema<LibrarianExtConfig> = {
+export const LIBRARIAN_CONFIG_SCHEMA: ExtensionConfigSchema<LibrarianExtConfig> = {
   validate: isLibrarianConfig,
 };
 
@@ -312,7 +312,7 @@ export function createLibrarianTool(
   };
 }
 
-function createLibrarianExtension(
+export function createLibrarianExtension(
   deps: LibrarianExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function librarianExtension(pi: ExtensionAPI): void {

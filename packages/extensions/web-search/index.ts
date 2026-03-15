@@ -50,13 +50,13 @@ type WebSearchExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: WebSearchExtConfig = {
+export const CONFIG_DEFAULTS: WebSearchExtConfig = {
   defaultMaxResults: 10,
   endpoint: "https://api.parallel.ai/v1beta/search",
   curlTimeoutSecs: 30,
 };
 
-const DEFAULT_DEPS: WebSearchExtensionDeps = {
+export const DEFAULT_DEPS: WebSearchExtensionDeps = {
   getEnabledExtensionConfig,
   withPromptPatch,
 };
@@ -76,7 +76,7 @@ function isWebSearchConfig(
   );
 }
 
-const WEB_SEARCH_CONFIG_SCHEMA: ExtensionConfigSchema<WebSearchExtConfig> = {
+export const WEB_SEARCH_CONFIG_SCHEMA: ExtensionConfigSchema<WebSearchExtConfig> = {
   validate: isWebSearchConfig,
 };
 
@@ -408,7 +408,7 @@ export function createWebSearchTool(
   };
 }
 
-function createWebSearchExtension(
+export function createWebSearchExtension(
   deps: WebSearchExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function webSearchExtension(pi: ExtensionAPI): void {

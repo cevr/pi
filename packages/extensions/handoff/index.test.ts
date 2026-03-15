@@ -3,6 +3,10 @@ import { describe, expect, it, test, afterEach, mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
+import { createHandoffExtension, CONFIG_DEFAULTS, DEFAULT_DEPS } from "./index";
+import { createHandoffExtension, CONFIG_DEFAULTS, HANDOFF_CONFIG_SCHEMA, DEFAULT_DEPS } from "./index";
+import { registerMentionSource } from "@cvr/pi-mentions";
 
 const tmpdir = os.tmpdir();
 
@@ -198,8 +202,7 @@ const tmpdir = os.tmpdir();
         },
       });
       setGlobalSettingsPath(settingsPath);
-      const errorSpy = vi
-        .spyOn(console, "error")
+      const errorSpy = spyOn(console, "error")
         .mockImplementation(() => undefined);
       const registerMentionSourceSpy = mock();
       const resolvePromptSpy = mock(() => "");

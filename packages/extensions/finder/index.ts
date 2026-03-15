@@ -51,7 +51,7 @@ type FinderExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: FinderExtConfig = {
+export const CONFIG_DEFAULTS: FinderExtConfig = {
   model: "openrouter/google/gemini-3-flash-preview",
   extensionTools: ["read", "grep", "find", "ls"],
   builtinTools: ["read", "grep", "find", "ls"],
@@ -59,7 +59,7 @@ const CONFIG_DEFAULTS: FinderExtConfig = {
   promptString: "",
 };
 
-const DEFAULT_DEPS: FinderExtensionDeps = {
+export const DEFAULT_DEPS: FinderExtensionDeps = {
   getEnabledExtensionConfig,
   resolvePrompt,
   withPromptPatch,
@@ -87,7 +87,7 @@ function isFinderConfig(
   );
 }
 
-const FINDER_CONFIG_SCHEMA: ExtensionConfigSchema<FinderExtConfig> = {
+export const FINDER_CONFIG_SCHEMA: ExtensionConfigSchema<FinderExtConfig> = {
   validate: isFinderConfig,
 };
 
@@ -238,7 +238,7 @@ export function createFinderTool(config: FinderConfig = {}): ToolDefinition {
   };
 }
 
-function createFinderExtension(
+export function createFinderExtension(
   deps: FinderExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function finderExtension(pi: ExtensionAPI): void {

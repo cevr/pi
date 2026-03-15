@@ -3,6 +3,10 @@ import { describe, expect, it, test, afterEach, mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
+import { CONFIG_DEFAULTS } from "./index";
+import { CONFIG_DEFAULTS } from "./index";
+import { sessionNameExtension, CONFIG_DEFAULTS } from "./index";
 
 const tmpdir = os.tmpdir();
 
@@ -85,8 +89,7 @@ const tmpdir = os.tmpdir();
         },
       });
       setGlobalSettingsPath(settingsPath);
-      const errorSpy = vi
-        .spyOn(console, "error")
+      const errorSpy = spyOn(console, "error")
         .mockImplementation(() => undefined);
       const harness = createMockExtensionApiHarness();
       const model = { id: "fallback-model" } as unknown as Model<Api>;

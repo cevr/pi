@@ -67,13 +67,13 @@ type BashExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: BashExtConfig = {
+export const CONFIG_DEFAULTS: BashExtConfig = {
   headLines: 50,
   tailLines: 50,
   sigkillDelayMs: 3000,
 };
 
-const DEFAULT_DEPS: BashExtensionDeps = {
+export const DEFAULT_DEPS: BashExtensionDeps = {
   getEnabledExtensionConfig,
   withPromptPatch,
 };
@@ -92,7 +92,7 @@ function isBashConfig(value: Record<string, unknown>): value is BashExtConfig {
   );
 }
 
-const BASH_CONFIG_SCHEMA: ExtensionConfigSchema<BashExtConfig> = {
+export const BASH_CONFIG_SCHEMA: ExtensionConfigSchema<BashExtConfig> = {
   validate: isBashConfig,
 };
 
@@ -289,7 +289,7 @@ function killGracefully(pid: number, delayMs: number): void {
   }, delayMs);
 }
 
-function isPidAlive(pid: number): boolean {
+export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -298,7 +298,7 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-function createBackgroundState(): BackgroundState {
+export function createBackgroundState(): BackgroundState {
   return {
     nextId: 1,
     processes: new Map(),
@@ -325,7 +325,7 @@ async function terminateBackgroundProcess(
   }
 }
 
-async function cleanupBackgroundProcesses(
+export async function cleanupBackgroundProcesses(
   backgroundState: BackgroundState,
   delayMs: number,
 ): Promise<void> {

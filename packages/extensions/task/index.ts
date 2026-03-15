@@ -49,7 +49,7 @@ type TaskExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: TaskExtConfig = {
+export const CONFIG_DEFAULTS: TaskExtConfig = {
   builtinTools: ["read", "grep", "find", "ls", "bash", "edit", "write"],
   extensionTools: [
     "read",
@@ -65,7 +65,7 @@ const CONFIG_DEFAULTS: TaskExtConfig = {
   ],
 };
 
-const DEFAULT_DEPS: TaskExtensionDeps = {
+export const DEFAULT_DEPS: TaskExtensionDeps = {
   createTaskTool,
   getEnabledExtensionConfig,
   withPromptPatch,
@@ -83,7 +83,7 @@ function isTaskConfig(value: Record<string, unknown>): value is TaskExtConfig {
   );
 }
 
-const TASK_CONFIG_SCHEMA: ExtensionConfigSchema<TaskExtConfig> = {
+export const TASK_CONFIG_SCHEMA: ExtensionConfigSchema<TaskExtConfig> = {
   validate: isTaskConfig,
 };
 
@@ -232,7 +232,7 @@ export function createTaskTool(config: TaskConfig = {}): ToolDefinition {
   };
 }
 
-function createTaskExtension(
+export function createTaskExtension(
   deps: TaskExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function taskExtension(pi: ExtensionAPI): void {

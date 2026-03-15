@@ -1,6 +1,7 @@
 // Extracted from session-mention-source.ts — review imports
 import { describe, expect, it } from "bun:test";
 import { createSessionMentionSource } from "./session-mention-source";
+import { createSessionMentionSource } from "./session-mention-source";
 
 const SESSION_FIXTURE = {
     sessionId: "alpha1234",

@@ -56,13 +56,13 @@ type ReadWebPageExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: ReadWebPageExtConfig = {
+export const CONFIG_DEFAULTS: ReadWebPageExtConfig = {
   model: "openrouter/google/gemini-3-flash-preview",
   promptFile: "",
   promptString: "",
 };
 
-const DEFAULT_DEPS: ReadWebPageExtensionDeps = {
+export const DEFAULT_DEPS: ReadWebPageExtensionDeps = {
   getEnabledExtensionConfig,
   resolvePrompt,
   withPromptPatch,
@@ -82,12 +82,12 @@ function isReadWebPageConfig(
   );
 }
 
-const READ_WEB_PAGE_CONFIG_SCHEMA: ExtensionConfigSchema<ReadWebPageExtConfig> =
+export const READ_WEB_PAGE_CONFIG_SCHEMA: ExtensionConfigSchema<ReadWebPageExtConfig> =
   {
     validate: isReadWebPageConfig,
   };
 
-const DEFAULT_PROMPT_SYSTEM = `Analyze web page content and answer questions. Be concise, answer from provided content only. No filler.`;
+export const DEFAULT_PROMPT_SYSTEM = `Analyze web page content and answer questions. Be concise, answer from provided content only. No filler.`;
 
 function fetchUrl(
   url: string,
@@ -399,7 +399,7 @@ export function createReadWebPageTool(
   };
 }
 
-function createReadWebPageExtension(
+export function createReadWebPageExtension(
   deps: ReadWebPageExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function readWebPageExtension(pi: ExtensionAPI): void {

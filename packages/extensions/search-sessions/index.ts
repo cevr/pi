@@ -52,7 +52,7 @@ type SearchSessionsExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: SearchSessionsExtConfig = {
+export const CONFIG_DEFAULTS: SearchSessionsExtConfig = {
   maxResults: 50,
   sessionsDir: path.join(os.homedir(), ".pi", "agent", "sessions"),
   rgTimeoutMs: 10000,
@@ -73,12 +73,12 @@ function isSearchSessionsConfig(
   );
 }
 
-const SEARCH_SESSIONS_CONFIG_SCHEMA: ExtensionConfigSchema<SearchSessionsExtConfig> =
+export const SEARCH_SESSIONS_CONFIG_SCHEMA: ExtensionConfigSchema<SearchSessionsExtConfig> =
   {
     validate: isSearchSessionsConfig,
   };
 
-const DEFAULT_EXTENSION_DEPS: SearchSessionsExtensionDeps = {
+export const DEFAULT_EXTENSION_DEPS: SearchSessionsExtensionDeps = {
   getEnabledExtensionConfig,
   registerMentionSource,
   withPromptPatch,
@@ -525,7 +525,7 @@ export function createSearchSessionsTool(
   };
 }
 
-function createSearchSessionsExtension(
+export function createSearchSessionsExtension(
   deps: SearchSessionsExtensionDeps = DEFAULT_EXTENSION_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function searchSessionsExtension(pi: ExtensionAPI): void {

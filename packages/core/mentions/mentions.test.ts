@@ -3,9 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AutocompleteProvider } from "@mariozechner/pi-tui";
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, test } from "bun:test";
 import { detectMentionPrefix, parseMentions } from "./parse";
 import { MentionAwareProvider } from "./provider";
+import { resolveMentions } from "./resolve";
+import { toResolvedSessionMention } from "./types";
 import {
   renderResolvedMentionsBlock,
   renderResolvedMentionsText,
@@ -16,7 +18,6 @@ import {
   lookupCommitByPrefix,
   parseCommitLog,
 } from "./commit-index";
-import { resolveMentions } from "./resolve";
 import {
   clearSessionMentionCache,
   resolveMentionableSession,
@@ -27,7 +28,6 @@ import {
   registerMentionSource,
   type MentionSource,
 } from "./sources";
-import { toResolvedSessionMention } from "./types";
 
 describe("parseMentions", () => {
   it("parses canonical mention tokens", () => {

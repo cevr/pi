@@ -1,8 +1,10 @@
 // Extracted from index.ts — review imports
+import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
 import { describe, expect, test, afterEach } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { findGitRoot, interpolatePromptVars } from "./index";
 import { findGitRoot, interpolatePromptVars } from "./index";
 
 const cwd = "/home/user/project";

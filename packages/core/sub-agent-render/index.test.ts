@@ -1,6 +1,7 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it } from "bun:test";
 import { getFinalOutput, getDisplayItems, subAgentResult, formatUsageStats } from "./index";
+import { getFinalOutput, getDisplayItems, subAgentResult, formatUsageStats } from "./index";
 
 describe("formatUsageStats", () => {
     it("formats all fields when present", () => {

@@ -1,3 +1,8 @@
+import { describe, it, expect, test } from "bun:test";
+import { withPromptPatch } from "@cvr/pi-prompt-patch";
+import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+
 /**
  * unit tests for tools/index.ts — withPromptPatch.
  *
@@ -7,10 +12,6 @@
  * run: bun test user/pi/extensions/tools/index.test.ts
  */
 
-import { describe, it, expect } from "bun:test";
-import { withPromptPatch } from "@cvr/pi-prompt-patch";
-import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 
 // Minimal valid tool for testing withPromptPatch
 function makeTool(overrides: Partial<ToolDefinition> = {}): ToolDefinition {

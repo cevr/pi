@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { saveChange, loadChanges, revertChange, findLatestChange, simpleDiff } from "./index";
+import { saveChange, loadChanges, revertChange, findLatestChange, simpleDiff } from "./index";
 
 let tmpDir: string;
   let sessionId: string;

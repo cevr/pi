@@ -1,5 +1,8 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it, test, afterEach } from "bun:test";
+import * as fs from "node:fs";
+import { createBashTool, createBackgroundState, isPidAlive, cleanupBackgroundProcesses } from "./index";
+import { isPidAlive, createBackgroundState, cleanupBackgroundProcesses, createBashTool } from "./index";
 
 type BashToolResult = {
     content: [{ type: "text"; text: string }];
@@ -228,8 +231,6 @@ type BashToolResult = {
       it("kills background commands during cleanup", async () => {
         const result = await execute(
           `python3 -c "import time; time.sleep(60)" &`,
-import * as fs from "node:fs";
-import { createBashTool } from "./index";
         );
         const pid = result.details!.background!.pid;
 

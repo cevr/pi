@@ -3,6 +3,10 @@ import { describe, expect, it, test, afterEach, mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
+import { createSearchSessionsExtension, CONFIG_DEFAULTS, CUSTOM_TYPE, DEFAULT_EXTENSION_DEPS } from "./index";
+import { createSearchSessionsExtension, CONFIG_DEFAULTS, SEARCH_SESSIONS_CONFIG_SCHEMA } from "./index";
+import { createSearchSessionsExtension, DEFAULT_DEPS, CONFIG_DEFAULTS, CUSTOM_TYPE } from "./index";
 
 const tmpdir = os.tmpdir();
 
@@ -132,8 +136,7 @@ const tmpdir = os.tmpdir();
         },
       });
       setGlobalSettingsPath(settingsPath);
-      const errorSpy = vi
-        .spyOn(console, "error")
+      const errorSpy = spyOn(console, "error")
         .mockImplementation(() => undefined);
       const registerMentionSourceSpy = mock();
       const withPromptPatchSpy = mock((tool: ToolDefinition) => tool);

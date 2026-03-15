@@ -1,5 +1,9 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it, beforeEach, mock, spyOn } from "bun:test";
+import { createMentionsExtension, CUSTOM_TYPE } from "./index";
+import { createMentionsExtension } from "./index";
+import { createMentionsExtension, DEFAULT_DEPS } from "./index";
+import { registerMentionSource } from "@cvr/pi-mentions";
 
 type RegisteredHandler = (...args: any[]) => any;
 
@@ -87,7 +91,7 @@ type RegisteredHandler = (...args: any[]) => any;
 
   describe("mentions extension", () => {
     beforeEach(() => {
-      vi.clearAllMocks();
+      // mock cleanup;
     });
 
     it("registers an editor autocomplete contributor", () => {

@@ -1,3 +1,8 @@
+import { spawnSync } from "node:child_process";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, it, expect, afterAll, test } from "bun:test";
+
 /**
  * e2e tests for editor extension — model_select event handling.
  *
@@ -11,10 +16,6 @@
  * set PI_E2E_MODEL to override the startup model.
  */
 
-import { spawnSync } from "node:child_process";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, it, expect, afterAll } from "bun:test";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

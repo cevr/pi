@@ -54,7 +54,7 @@ type CodeReviewExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: CodeReviewExtConfig = {
+export const CONFIG_DEFAULTS: CodeReviewExtConfig = {
   model: "openrouter/google/gemini-3.1-pro-preview",
   builtinTools: ["read", "grep", "find", "ls", "bash"],
   extensionTools: [
@@ -79,7 +79,7 @@ Current working directory (cwd): {cwd}`;
 
 const DEFAULT_REPORT_FORMAT = `Emit findings as XML: <codeReview><comment> elements with filename, startLine, endLine, severity (critical/high/medium/low), commentType (bug/suggested_edit/compliment/non_actionable), text, why, and fix fields.`;
 
-const DEFAULT_DEPS: CodeReviewExtensionDeps = {
+export const DEFAULT_DEPS: CodeReviewExtensionDeps = {
   getEnabledExtensionConfig,
   resolvePrompt,
   withPromptPatch,
@@ -109,7 +109,7 @@ function isCodeReviewConfig(
   );
 }
 
-const CODE_REVIEW_CONFIG_SCHEMA: ExtensionConfigSchema<CodeReviewExtConfig> = {
+export const CODE_REVIEW_CONFIG_SCHEMA: ExtensionConfigSchema<CodeReviewExtConfig> = {
   validate: isCodeReviewConfig,
 };
 
@@ -349,7 +349,7 @@ export function createCodeReviewTool(
   };
 }
 
-function createCodeReviewExtension(
+export function createCodeReviewExtension(
   deps: CodeReviewExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function codeReviewExtension(pi: ExtensionAPI): void {

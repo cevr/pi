@@ -41,7 +41,7 @@ const ANSI_RE = /\x1b\[[0-9;]*m|\x1b\]8;;[^\x07]*\x07/g;
 /** tab stop width — terminals default to 8 but most code uses 4 */
 const TAB_WIDTH = 4;
 
-function visibleWidth(text: string): number {
+export function visibleWidth(text: string): number {
   const stripped = text.replace(ANSI_RE, "");
   let w = 0;
   for (const ch of stripped) {
@@ -50,7 +50,7 @@ function visibleWidth(text: string): number {
   return w;
 }
 
-function truncateToWidth(
+export function truncateToWidth(
   text: string,
   maxWidth: number,
   ellipsis = "…",
@@ -163,7 +163,7 @@ function expandBlock(block: BoxBlock, contentWidth: number): VisualBoxLine[] {
  * with gutter:  "  42 │ " = gutterWidth + 3
  * without:      "│ "      = 2
  */
-function chromeWidth(gutterWidth: number): number {
+export function chromeWidth(gutterWidth: number): number {
   return gutterWidth > 0 ? gutterWidth + 3 : 2;
 }
 

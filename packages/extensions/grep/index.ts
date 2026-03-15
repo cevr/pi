@@ -52,14 +52,14 @@ type GrepExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: GrepExtConfig = {
+export const CONFIG_DEFAULTS: GrepExtConfig = {
   maxTotalMatches: 100,
   maxPerFile: 10,
   maxLineChars: 200,
   contextLines: 1,
 };
 
-const DEFAULT_DEPS: GrepExtensionDeps = {
+export const DEFAULT_DEPS: GrepExtensionDeps = {
   getEnabledExtensionConfig,
   withPromptPatch,
 };
@@ -79,7 +79,7 @@ function isGrepConfig(value: Record<string, unknown>): value is GrepExtConfig {
   );
 }
 
-const GREP_CONFIG_SCHEMA: ExtensionConfigSchema<GrepExtConfig> = {
+export const GREP_CONFIG_SCHEMA: ExtensionConfigSchema<GrepExtConfig> = {
   validate: isGrepConfig,
 };
 
@@ -592,7 +592,7 @@ export function createGrepTool(
  * into grep, while letting default top-level sessions inherit pi's own active
  * tool policy instead of forcing this wrapper on.
  */
-function createGrepExtension(
+export function createGrepExtension(
   deps: GrepExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function grepExtension(pi: ExtensionAPI): void {

@@ -50,11 +50,11 @@ type GlobExtensionDeps = {
   withPromptPatch: typeof withPromptPatch;
 };
 
-const CONFIG_DEFAULTS: GlobExtConfig = {
+export const CONFIG_DEFAULTS: GlobExtConfig = {
   defaultLimit: 500,
 };
 
-const DEFAULT_DEPS: GlobExtensionDeps = {
+export const DEFAULT_DEPS: GlobExtensionDeps = {
   getEnabledExtensionConfig,
   withPromptPatch,
 };
@@ -67,7 +67,7 @@ function isGlobConfig(value: Record<string, unknown>): value is GlobExtConfig {
   );
 }
 
-const GLOB_CONFIG_SCHEMA: ExtensionConfigSchema<GlobExtConfig> = {
+export const GLOB_CONFIG_SCHEMA: ExtensionConfigSchema<GlobExtConfig> = {
   validate: isGlobConfig,
 };
 
@@ -265,7 +265,7 @@ export function createGlobTool(
   };
 }
 
-function createGlobExtension(
+export function createGlobExtension(
   deps: GlobExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
   return function globExtension(pi: ExtensionAPI): void {

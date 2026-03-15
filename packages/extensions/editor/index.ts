@@ -257,7 +257,7 @@ function shortenPath(cwd: string): string {
   return cwd;
 }
 
-function formatModelDisplay(
+export function formatModelDisplay(
   provider: string | undefined,
   modelId: string,
 ): string {

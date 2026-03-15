@@ -41,7 +41,7 @@ type SystemPromptExtensionDeps = {
   resolvePrompt: typeof resolvePrompt;
 };
 
-const CONFIG_DEFAULTS: SystemPromptExtConfig = {
+export const CONFIG_DEFAULTS: SystemPromptExtConfig = {
   identity: "Amp",
   harness: "pi",
   promptFile: "prompt.amp.system.md",
@@ -50,7 +50,7 @@ const CONFIG_DEFAULTS: SystemPromptExtConfig = {
   harnessDocsPromptString: "",
 };
 
-const DEFAULT_DEPS: SystemPromptExtensionDeps = {
+export const DEFAULT_DEPS: SystemPromptExtensionDeps = {
   getEnabledExtensionConfig,
   resolvePrompt,
 };
@@ -72,12 +72,12 @@ function isSystemPromptConfig(
   );
 }
 
-const SYSTEM_PROMPT_CONFIG_SCHEMA: ExtensionConfigSchema<SystemPromptExtConfig> =
+export const SYSTEM_PROMPT_CONFIG_SCHEMA: ExtensionConfigSchema<SystemPromptExtConfig> =
   {
     validate: isSystemPromptConfig,
   };
 
-function createSystemPromptExtension(
+export function createSystemPromptExtension(
   deps: SystemPromptExtensionDeps = DEFAULT_DEPS,
 ) {
   return function systemPromptExtension(pi: ExtensionAPI): void {
