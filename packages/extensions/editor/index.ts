@@ -23,11 +23,10 @@ import {
 import { HorizontalLineWidget, WidgetRowRegistry } from "./widget-row";
 import type { KeybindingsManager } from "@mariozechner/pi-coding-agent";
 import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { hasToolCost } from "@cvr/pi-tool-cost";
-
-const execFileAsync = promisify(execFile);
+import { GitClient } from "@cvr/pi-git-client";
+import { ProcessRunner } from "@cvr/pi-process-runner";
+import { Effect, Layer, ManagedRuntime } from "effect";
 
 interface Label {
   key: string;
@@ -335,15 +334,19 @@ function updateStatsLabels(
   }
 }
 
-async function getGitDiffStats(cwd: string): Promise<string> {
+async function getGitDiffStats(
+  cwd: string,
+  runtime?: ManagedRuntime.ManagedRuntime<GitClient, never>,
+): Promise<string> {
+  if (!runtime) return "";
   try {
-    const { stdout } = await execFileAsync("git", ["diff", "--stat"], {
-      cwd,
-      timeout: 3000,
-    });
-    const out = stdout.trim();
+    const out = await runtime.runPromise(
+      Effect.gen(function* () {
+        const git = yield* GitClient;
+        return yield* git.diffStat(cwd);
+      }),
+    );
     if (!out) return "";
-    // last line is summary: " N files changed, N insertions(+), N deletions(-)"
     const lines = out.split("\n");
     const summary = lines[lines.length - 1];
     if (!summary) return "";
@@ -463,6 +466,7 @@ function editorExtension(pi: ExtensionAPI): void {
   let branchUnsub: (() => void) | null = null;
   let statusRow: WidgetRowRegistry | null = null;
   const activity = createActivityState();
+  const gitRuntime = ManagedRuntime.make(GitClient.layer.pipe(Layer.provide(ProcessRunner.layer)));
 
   subscribeEditorAutocompleteContributors(() => {
     editor?.refreshAutocompleteProvider();
@@ -631,7 +635,7 @@ function editorExtension(pi: ExtensionAPI): void {
     statusRow?.remove(ACTIVITY_SEGMENT);
     if (editor) updateStatsLabels(editor, pi, ctx, statsCacheBranchLen);
 
-    const diffStats = await getGitDiffStats(ctx.cwd);
+    const diffStats = await getGitDiffStats(ctx.cwd, gitRuntime);
     updateGitSegment(diffStats);
   });
 

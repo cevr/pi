@@ -191,9 +191,10 @@ export class ProcessRunner extends ServiceMap.Service<
           });
         },
         catch: (err) => {
-          if (err instanceof CommandError) return err;
-          if (err instanceof CommandTimeout) return err;
-          if (err instanceof CommandAborted) return err;
+          const tag = err != null && typeof err === "object" && "_tag" in err ? (err as any)._tag : null;
+          if (tag === "CommandError") return err as CommandError;
+          if (tag === "CommandTimeout") return err as CommandTimeout;
+          if (tag === "CommandAborted") return err as CommandAborted;
           return new CommandError({
             command,
             message: err instanceof Error ? err.message : String(err),
@@ -216,9 +217,10 @@ export class ProcessRunner extends ServiceMap.Service<
             });
           },
           catch: (err) => {
-            if (err instanceof CommandError) return err;
-            if (err instanceof CommandTimeout) return err;
-            if (err instanceof CommandAborted) return err;
+            const tag = err != null && typeof err === "object" && "_tag" in err ? (err as any)._tag : null;
+            if (tag === "CommandError") return err as CommandError;
+            if (tag === "CommandTimeout") return err as CommandTimeout;
+            if (tag === "CommandAborted") return err as CommandAborted;
             return new CommandError({
               command,
               message: err instanceof Error ? err.message : String(err),

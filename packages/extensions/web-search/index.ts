@@ -14,7 +14,6 @@
  *   pricing: https://docs.parallel.ai/pricing (Search API section)
  */
 
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -28,6 +27,8 @@ import {
 } from "@cvr/pi-config";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { boxRendererWindowed, osc8Link, type BoxSection, type Excerpt } from "@cvr/pi-box-format";
+import { ProcessRunner } from "@cvr/pi-process-runner";
+import { Effect, ManagedRuntime } from "effect";
 import { Type } from "@sinclair/typebox";
 import type { ToolCostDetails } from "@cvr/pi-tool-cost";
 
@@ -112,86 +113,65 @@ interface SearchResponse {
   usage?: UsageItem[];
 }
 
-function searchParallel(
+async function searchParallel(
   apiKey: string,
   body: Record<string, unknown>,
   endpoint: string,
   curlTimeoutSecs: number,
   signal?: AbortSignal,
+  runtime?: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
 ): Promise<{ data?: SearchResponse; error?: string }> {
-  return new Promise((resolve) => {
-    const payload = JSON.stringify(body);
+  const payload = JSON.stringify(body);
 
-    const args = [
-      "-sL",
-      "-X",
-      "POST",
-      "-H",
-      "Content-Type: application/json",
-      "-H",
-      `x-api-key: ${apiKey}`,
-      "-H",
-      "parallel-beta: search-extract-2025-10-10",
-      "-m",
-      String(curlTimeoutSecs),
-      "-d",
-      payload,
-      endpoint,
-    ];
+  const args = [
+    "-sL",
+    "-X",
+    "POST",
+    "-H",
+    "Content-Type: application/json",
+    "-H",
+    `x-api-key: ${apiKey}`,
+    "-H",
+    "parallel-beta: search-extract-2025-10-10",
+    "-m",
+    String(curlTimeoutSecs),
+    "-d",
+    payload,
+    endpoint,
+  ];
 
-    const child = spawn("curl", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+  if (!runtime) {
+    return { error: "ProcessRunner runtime not available" };
+  }
 
-    let stdout = "";
-    let stderr = "";
-    let aborted = false;
+  try {
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ProcessRunner;
+        return yield* runner.run("curl", { args, signal });
+      }),
+    );
 
-    const onAbort = () => {
-      aborted = true;
-      if (!child.killed) child.kill("SIGTERM");
-    };
-    if (signal) {
-      if (signal.aborted) {
-        onAbort();
-      } else signal.addEventListener("abort", onAbort, { once: true });
+    if (result.exitCode !== 0) {
+      return {
+        error: `search failed: ${result.stderr.trim() || `curl exited with code ${result.exitCode}`}`,
+      };
     }
 
-    child.stdout?.on("data", (data: Buffer) => {
-      stdout += data.toString("utf-8");
-    });
-
-    child.stderr?.on("data", (data: Buffer) => {
-      stderr += data.toString("utf-8");
-    });
-
-    child.on("error", (err) => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ error: `curl error: ${err.message}` });
-    });
-
-    child.on("close", (code) => {
-      signal?.removeEventListener("abort", onAbort);
-      if (aborted) {
-        resolve({ error: "search aborted" });
-        return;
-      }
-      if (code !== 0) {
-        resolve({
-          error: `search failed: ${stderr.trim() || `curl exited with code ${code}`}`,
-        });
-        return;
-      }
-      try {
-        const parsed = JSON.parse(stdout) as SearchResponse;
-        resolve({ data: parsed });
-      } catch {
-        resolve({
-          error: `invalid response from Parallel API: ${stdout.slice(0, 200)}`,
-        });
-      }
-    });
-  });
+    try {
+      const parsed = JSON.parse(result.stdout) as SearchResponse;
+      return { data: parsed };
+    } catch {
+      return {
+        error: `invalid response from Parallel API: ${result.stdout.slice(0, 200)}`,
+      };
+    }
+  } catch (err) {
+    if (err && typeof err === "object" && "_tag" in err && (err as any)._tag === "CommandAborted") {
+      return { error: "search aborted" };
+    }
+    return { error: `curl error: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 function formatResults(results: SearchResult[]): {
@@ -256,7 +236,10 @@ interface WebSearchParams {
   max_results?: number;
 }
 
-export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS): ToolDefinition {
+export function createWebSearchTool(
+  config: WebSearchExtConfig = CONFIG_DEFAULTS,
+  runtime?: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
+): ToolDefinition {
   return {
     name: "web_search",
     label: "Web Search",
@@ -320,6 +303,7 @@ export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS
         config.endpoint,
         config.curlTimeoutSecs,
         signal,
+        runtime,
       );
 
       if (error) {
@@ -394,7 +378,11 @@ export function createWebSearchExtension(
     );
     if (!enabled) return;
 
-    pi.registerTool(deps.withPromptPatch(createWebSearchTool(cfg)));
+    const runtime = ManagedRuntime.make(ProcessRunner.layer);
+    pi.registerTool(deps.withPromptPatch(createWebSearchTool(cfg, runtime)));
+    pi.on("session_shutdown", async () => {
+      await runtime.dispose();
+    });
   };
 }
 

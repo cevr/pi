@@ -277,28 +277,26 @@ export class FileTracker extends ServiceMap.Service<
 // simpleDiff — pure function, no service needed
 // ---------------------------------------------------------------------------
 
-let createPatchFn:
-  | ((
+const _diffLib = (() => {
+  try {
+    const esmRequire = createRequire(import.meta.url);
+    const diffLib = esmRequire("diff");
+    return { createPatch: diffLib.createPatch as (
       fileName: string,
       oldStr: string,
       newStr: string,
       oldHeader?: string,
       newHeader?: string,
       options?: { context?: number },
-    ) => string)
-  | null = null;
-
-try {
-  const esmRequire = createRequire(import.meta.url);
-  const diffLib = esmRequire("diff");
-  createPatchFn = diffLib.createPatch;
-} catch {
-  /* diff not installed — use fallback */
-}
+    ) => string };
+  } catch {
+    return null;
+  }
+})();
 
 export function simpleDiff(filePath: string, before: string, after: string): string {
-  if (createPatchFn) {
-    const patch = createPatchFn(path.basename(filePath), before, after, "original", "modified", {
+  if (_diffLib) {
+    const patch = _diffLib.createPatch(path.basename(filePath), before, after, "original", "modified", {
       context: 3,
     });
     const lines = patch.split("\n");

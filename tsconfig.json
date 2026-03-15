@@ -49,7 +49,7 @@
           "unnecessaryPipe": "warning",
           "unnecessaryPipeChain": "warning",
           "extendsNativeError": "error",
-          "nodeBuiltinImport": "off",
+          "nodeBuiltinImport": "suggestion",
           "serviceNotAsClass": "warning",
           "outdatedApi": "warning"
         },

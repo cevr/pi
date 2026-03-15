@@ -5,7 +5,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@cvr/pi-editor-capabilities": "workspace:*"
+    "@cvr/pi-editor-capabilities": "workspace:*",
+    "@cvr/pi-git-client": "workspace:*",
+    "@cvr/pi-process-runner": "workspace:*"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "catalog:",

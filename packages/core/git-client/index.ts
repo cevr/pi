@@ -78,7 +78,9 @@ export class GitClient extends ServiceMap.Service<
             return Effect.succeed(result.stdout);
           }),
           Effect.catch((err) => {
-            if (err instanceof GitError) return Effect.fail(err);
+            if (err != null && typeof err === "object" && "_tag" in err && (err as any)._tag === "GitError") {
+              return Effect.fail(err as GitError);
+            }
             return Effect.fail(
               new GitError({
                 command: `git ${args.join(" ")}`,

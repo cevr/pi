@@ -7,10 +7,14 @@
   "dependencies": {
     "@cvr/pi-config": "workspace:*",
     "@cvr/pi-github": "workspace:*",
+    "@cvr/pi-process-runner": "workspace:*",
     "@cvr/pi-prompt-patch": "workspace:*",
     "@cvr/pi-spawn": "workspace:*",
     "@cvr/pi-sub-agent-render": "workspace:*",
     "@sinclair/typebox": "^0.34.0"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "catalog:",

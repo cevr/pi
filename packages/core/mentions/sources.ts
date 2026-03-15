@@ -8,11 +8,18 @@ import {
 import type { MentionableSession } from "./session-index";
 import { type MentionKind, type MentionToken, type ResolvedMention } from "./types";
 
-const mentionKindDescriptions = new Map<MentionKind, string>([
-  ["commit", "git commit"],
-  ["session", "previous pi session"],
-  ["handoff", "forked session with resumable context"],
-]);
+// ---------------------------------------------------------------------------
+// encapsulated state — no bare module-level mutable singletons
+// ---------------------------------------------------------------------------
+
+const _state = {
+  kindDescriptions: new Map<MentionKind, string>([
+    ["commit", "git commit"],
+    ["session", "previous pi session"],
+    ["handoff", "forked session with resumable context"],
+  ]),
+  sources: new Map<MentionKind, MentionSource>(),
+};
 
 export interface MentionSourceContext {
   cwd: string;
@@ -33,24 +40,22 @@ export interface MentionSource {
   ): ResolvedMention | Promise<ResolvedMention>;
 }
 
-const _state = { sources: new Map<MentionKind, MentionSource>() };
-
 function isGitEnabled(context: MentionSourceContext): boolean {
   return context.gitEnabled ?? resolveGitRoot(context.cwd) !== null;
 }
 
 export function listMentionKinds(): MentionKind[] {
-  return [...mentionKindDescriptions.keys()];
+  return [..._state.kindDescriptions.keys()];
 }
 
 export function isMentionKind(kind: string): kind is MentionKind {
-  return mentionKindDescriptions.has(kind as MentionKind);
+  return _state.kindDescriptions.has(kind as MentionKind);
 }
 
 export function createCommitMentionSource(): MentionSource {
   return {
     kind: "commit",
-    description: mentionKindDescriptions.get("commit") ?? "git commit",
+    description: _state.kindDescriptions.get("commit") ?? "git commit",
     isEnabled: (context) => isGitEnabled(context),
     getSuggestions(query, context) {
       if (!isGitEnabled(context)) return [];
@@ -108,9 +113,9 @@ export function getMentionSource(kind: MentionKind): MentionSource | null {
 }
 
 export function registerMentionSource(source: MentionSource): () => void {
-  mentionKindDescriptions.set(
+  _state.kindDescriptions.set(
     source.kind,
-    mentionKindDescriptions.get(source.kind) ?? source.description,
+    _state.kindDescriptions.get(source.kind) ?? source.description,
   );
 
   const previous = _state.sources.get(source.kind);
@@ -133,5 +138,5 @@ export function listEnabledMentionKinds(context: MentionSourceContext): MentionK
 }
 
 export function getMentionKindDescription(kind: MentionKind): string {
-  return getMentionSource(kind)?.description ?? mentionKindDescriptions.get(kind) ?? kind;
+  return getMentionSource(kind)?.description ?? _state.kindDescriptions.get(kind) ?? kind;
 }

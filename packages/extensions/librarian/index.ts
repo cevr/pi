@@ -16,7 +16,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
@@ -28,6 +27,8 @@ import {
 } from "@cvr/pi-config";
 import { piSpawn, resolvePrompt, zeroUsage } from "@cvr/pi-spawn";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
+import { ProcessRunner } from "@cvr/pi-process-runner";
+import { Effect, ManagedRuntime } from "effect";
 import {
   getFinalOutput,
   renderAgentTree,
@@ -71,13 +72,22 @@ export const CONFIG_DEFAULTS: LibrarianExtConfig = {
  * Always fetches (pulls latest if already cached).
  * Spec formats: "owner/repo", "npm:pkg", "pypi:pkg", "crates:crate"
  */
-function repoFetch(spec: string): string | null {
+async function repoFetch(
+  spec: string,
+  runtime: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
+): Promise<string | null> {
   try {
-    return execSync(`repo fetch ${spec}`, {
-      encoding: "utf-8",
-      timeout: 60_000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ProcessRunner;
+        return yield* runner.run("repo", {
+          args: ["fetch", spec],
+          timeoutMs: 60_000,
+        });
+      }),
+    );
+    const path = result.stdout.trim();
+    return path || null;
   } catch {
     return null;
   }
@@ -124,7 +134,10 @@ interface LibrarianParams {
   context?: string;
 }
 
-export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinition {
+export function createLibrarianTool(
+  config: LibrarianConfig = {},
+  runtime?: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
+): ToolDefinition {
   return {
     name: "librarian",
     label: "Librarian",
@@ -185,8 +198,8 @@ export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinitio
 
       // If a repo spec is given, fetch it locally
       let localRepoPath: string | null = null;
-      if (p.repo) {
-        localRepoPath = repoFetch(p.repo);
+      if (p.repo && runtime) {
+        localRepoPath = await repoFetch(p.repo, runtime);
       }
 
       const parts: string[] = [p.query];
@@ -303,16 +316,24 @@ export function createLibrarianExtension(
     );
     if (!enabled) return;
 
+    const runtime = ManagedRuntime.make(ProcessRunner.layer);
+
     pi.registerTool(
       deps.withPromptPatch(
-        createLibrarianTool({
-          systemPrompt: deps.resolvePrompt(cfg.promptString, cfg.promptFile),
-          model: cfg.model,
-          extensionTools: cfg.extensionTools,
-          builtinTools: cfg.builtinTools,
-        }),
+        createLibrarianTool(
+          {
+            systemPrompt: deps.resolvePrompt(cfg.promptString, cfg.promptFile),
+            model: cfg.model,
+            extensionTools: cfg.extensionTools,
+            builtinTools: cfg.builtinTools,
+          },
+          runtime,
+        ),
       ),
     );
+    pi.on("session_shutdown", async () => {
+      await runtime.dispose();
+    });
   };
 }
 
