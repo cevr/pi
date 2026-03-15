@@ -15,6 +15,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vm from "node:vm";
+import { Effect, Layer, Schema, ServiceMap } from "effect";
 import {
   getGlobalConfig,
   resolveConfigDir,
@@ -181,10 +182,8 @@ function getDeps(def: VariableDefinition, knownVars: Set<string>): string[] {
   // alias is a direct var name reference, not a template
   if (def.alias !== undefined && knownVars.has(def.alias)) deps.add(def.alias);
   for (const ref of extractRefs(def.file, knownVars)) deps.add(ref);
-  for (const ref of extractRefs(def.dangerously_evaluate_js, knownVars))
-    deps.add(ref);
-  for (const ref of extractRefs(def.dangerously_evaluate_sh, knownVars))
-    deps.add(ref);
+  for (const ref of extractRefs(def.dangerously_evaluate_js, knownVars)) deps.add(ref);
+  for (const ref of extractRefs(def.dangerously_evaluate_sh, knownVars)) deps.add(ref);
   for (const ref of extractRefs(def.cwd, knownVars)) deps.add(ref);
   for (const ref of extractRefs(def.default, knownVars)) deps.add(ref);
   return [...deps];
@@ -342,9 +341,7 @@ export function interpolatePromptVars(
 ): string {
   // merge variable definitions
   const configVars =
-    variables === undefined
-      ? (getGlobalConfig<PromptVariables>("promptVariables") ?? {})
-      : {};
+    variables === undefined ? (getGlobalConfig<PromptVariables>("promptVariables") ?? {}) : {};
   const merged: PromptVariables = {
     ...DEFAULT_PROMPT_VARIABLES,
     ...configVars,
@@ -360,8 +357,7 @@ export function interpolatePromptVars(
   const resolved: Record<string, string> = {};
   for (const name of order) {
     const def = merged[name];
-    if (def)
-      resolved[name] = resolveVariable(def, resolved, runtimeVars, configDir);
+    if (def) resolved[name] = resolveVariable(def, resolved, runtimeVars, configDir);
   }
 
   // determine which vars are empty and which are filled, respecting dropLineIfEmpty
@@ -381,10 +377,7 @@ export function interpolatePromptVars(
 
   // pass 1: drop entire lines whose var resolved to empty
   if (dropKeys.length > 0) {
-    result = result.replace(
-      new RegExp(`^.*\\{(${dropKeys.join("|")})\\}.*\\n?`, "gm"),
-      "",
-    );
+    result = result.replace(new RegExp(`^.*\\{(${dropKeys.join("|")})\\}.*\\n?`, "gm"), "");
   }
 
   // pass 2: substitute all non-empty vars in one pass
@@ -397,6 +390,60 @@ export function interpolatePromptVars(
   }
 
   return result;
+}
+
+// ── errors ──────────────────────────────────────────────────────────────
+
+export class InterpolateError extends Schema.TaggedErrorClass<InterpolateError>()(
+  "InterpolateError",
+  { message: Schema.String },
+) {}
+
+// ── service ─────────────────────────────────────────────────────────────
+
+export class InterpolateService extends ServiceMap.Service<
+  InterpolateService,
+  {
+    /** resolve template variables in a prompt string. */
+    readonly interpolate: (
+      prompt: string,
+      cwd: string,
+      extra?: InterpolateContext,
+      variables?: PromptVariables,
+    ) => Effect.Effect<string, InterpolateError>;
+
+    /** compute the built-in runtime variables map. */
+    readonly runtimeVars: (
+      cwd: string,
+      extra?: InterpolateContext,
+    ) => Effect.Effect<Record<string, string>, InterpolateError>;
+  }
+>()("@cvr/pi-interpolate/index/InterpolateService") {
+  static layer = Layer.succeed(InterpolateService, {
+    interpolate: (prompt, cwd, extra, variables) =>
+      Effect.try({
+        try: () => interpolatePromptVars(prompt, cwd, extra, variables),
+        catch: (cause) =>
+          new InterpolateError({
+            message: cause instanceof Error ? cause.message : String(cause),
+          }),
+      }),
+
+    runtimeVars: (cwd, extra) =>
+      Effect.try({
+        try: () => computeRuntimeVars(cwd, extra),
+        catch: (cause) =>
+          new InterpolateError({
+            message: cause instanceof Error ? cause.message : String(cause),
+          }),
+      }),
+  });
+
+  static layerTest = (vars: Record<string, string>) =>
+    Layer.succeed(InterpolateService, {
+      interpolate: (prompt) => Effect.succeed(prompt),
+      runtimeVars: () => Effect.succeed(vars),
+    });
 }
 
 // ── inline tests ───────────────────────────────────────────────────────

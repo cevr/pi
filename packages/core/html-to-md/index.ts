@@ -5,6 +5,7 @@
  */
 
 import { createRequire } from "node:module";
+import { Effect, Layer, Option, Schema, ServiceMap } from "effect";
 
 let cheerioLoad: ((html: string) => any) | null = null;
 
@@ -50,9 +51,7 @@ const MAIN_SELECTORS = [
 export function isHtml(text: string): boolean {
   const trimmed = text.trimStart().slice(0, 200).toLowerCase();
   return (
-    trimmed.startsWith("<!doctype") ||
-    trimmed.startsWith("<html") ||
-    trimmed.startsWith("<?xml")
+    trimmed.startsWith("<!doctype") || trimmed.startsWith("<html") || trimmed.startsWith("<?xml")
   );
 }
 
@@ -86,8 +85,7 @@ function nodeToMd($: any, node: any): string {
     const href = el.attr("href");
     const text = inner().trim();
     if (!text) return "";
-    if (!href || href.startsWith("#") || href.startsWith("javascript:"))
-      return text;
+    if (!href || href.startsWith("#") || href.startsWith("javascript:")) return text;
     return `[${text}](${href})`;
   }
 
@@ -212,6 +210,42 @@ export function htmlToMarkdown(html: string): string | null {
     .map((n: any) => nodeToMd($, n))
     .join("");
   return collapseWhitespace(md);
+}
+
+// ---------------------------------------------------------------------------
+// errors
+// ---------------------------------------------------------------------------
+
+export class HtmlToMdError extends Schema.TaggedErrorClass<HtmlToMdError>()("HtmlToMdError", {
+  message: Schema.String,
+}) {}
+
+// ---------------------------------------------------------------------------
+// service
+// ---------------------------------------------------------------------------
+
+export class HtmlToMdService extends ServiceMap.Service<
+  HtmlToMdService,
+  {
+    /** convert HTML to markdown. returns Option.none() when conversion isn't possible. */
+    readonly convert: (html: string) => Effect.Effect<Option.Option<string>, HtmlToMdError>;
+  }
+>()("@cvr/pi-html-to-md/index/HtmlToMdService") {
+  static layer = Layer.succeed(HtmlToMdService, {
+    convert: (html) =>
+      Effect.try({
+        try: () => Option.fromNullishOr(htmlToMarkdown(html)),
+        catch: (cause) =>
+          new HtmlToMdError({
+            message: cause instanceof Error ? cause.message : String(cause),
+          }),
+      }),
+  });
+
+  static layerTest = (result: Option.Option<string>) =>
+    Layer.succeed(HtmlToMdService, {
+      convert: () => Effect.succeed(result),
+    });
 }
 
 // inline tests

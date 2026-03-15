@@ -11,6 +11,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Effect, Layer, Schema, ServiceMap } from "effect";
 
 export interface AgentsGuidance {
   /** absolute path to the AGENTS.md file */
@@ -29,10 +30,7 @@ const GLOBAL_PATH = path.join(os.homedir(), ".config", "pi", FILENAME);
  * most specific scope. walks from workspace root down to the file's
  * directory, prepending the global config if it exists.
  */
-export function discoverAgentsMd(
-  filePath: string,
-  workspaceRoot: string,
-): AgentsGuidance[] {
+export function discoverAgentsMd(filePath: string, workspaceRoot: string): AgentsGuidance[] {
   const results: AgentsGuidance[] = [];
   const root = path.resolve(workspaceRoot);
 
@@ -88,6 +86,42 @@ export function formatGuidance(guidance: AgentsGuidance[]): string {
       return `${header}\n\n<instructions>\n${g.content}\n</instructions>`;
     })
     .join("\n\n");
+}
+
+// ---------------------------------------------------------------------------
+// errors
+// ---------------------------------------------------------------------------
+
+export class AgentsMdError extends Schema.TaggedErrorClass<AgentsMdError>()("AgentsMdError", {
+  message: Schema.String,
+}) {}
+
+// ---------------------------------------------------------------------------
+// service
+// ---------------------------------------------------------------------------
+
+export class AgentsMdService extends ServiceMap.Service<
+  AgentsMdService,
+  {
+    /** discover AGENTS.md files for a target path inside a workspace root. */
+    readonly discover: (
+      dirs: [filePath: string, workspaceRoot: string],
+    ) => Effect.Effect<AgentsGuidance[], AgentsMdError>;
+  }
+>()("@cvr/pi-agents-md/index/AgentsMdService") {
+  static layer = Layer.succeed(AgentsMdService, {
+    discover: ([filePath, workspaceRoot]) =>
+      Effect.try({
+        try: () => discoverAgentsMd(filePath, workspaceRoot),
+        catch: (cause) =>
+          new AgentsMdError({ message: cause instanceof Error ? cause.message : String(cause) }),
+      }),
+  });
+
+  static layerTest = (guidance: AgentsGuidance[]) =>
+    Layer.succeed(AgentsMdService, {
+      discover: () => Effect.succeed(guidance),
+    });
 }
 
 // inline tests

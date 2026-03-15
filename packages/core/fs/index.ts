@@ -1,13 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Effect, Layer, Schema, ServiceMap } from "effect";
 
 const SECRET_PATTERNS = [/^\.env$/, /^\.env\..+$/];
-const SECRET_EXCEPTIONS = new Set([
-  ".env.example",
-  ".env.sample",
-  ".env.template",
-]);
+const SECRET_EXCEPTIONS = new Set([".env.example", ".env.sample", ".env.template"]);
 
 /**
  * normalizes the path shorthands our local tools already accept.
@@ -51,9 +48,7 @@ export function resolveWithVariantsUsing(
 }
 
 export function resolveWithVariants(filePath: string, cwd: string): string {
-  return resolveWithVariantsUsing(filePath, cwd, (candidate) =>
-    fs.existsSync(candidate),
-  );
+  return resolveWithVariantsUsing(filePath, cwd, (candidate) => fs.existsSync(candidate));
 }
 
 export function isSecretFile(filePath: string): boolean {
@@ -104,10 +99,7 @@ export interface WalkDirOptions {
  * this is intentionally literal: no hidden ignore rules, no async layer, no
  * glob language. callers keep ownership of filtering and early-stop policy.
  */
-export function walkDirSync(
-  rootDir: string,
-  options: WalkDirOptions = {},
-): string[] {
+export function walkDirSync(rootDir: string, options: WalkDirOptions = {}): string[] {
   const matches: string[] = [];
 
   const walk = (dir: string): boolean => {
@@ -133,6 +125,91 @@ export function walkDirSync(
 
   walk(rootDir);
   return matches;
+}
+
+// ---------------------------------------------------------------------------
+// errors
+// ---------------------------------------------------------------------------
+
+export class FsError extends Schema.TaggedErrorClass<FsError>()("FsError", {
+  message: Schema.String,
+  path: Schema.optional(Schema.String),
+}) {}
+
+// ---------------------------------------------------------------------------
+// service
+// ---------------------------------------------------------------------------
+
+export class FsService extends ServiceMap.Service<
+  FsService,
+  {
+    /** list directory entries, truncated to maxEntries. */
+    readonly listDirectory: (
+      dirPath: string,
+      maxEntries: number,
+    ) => Effect.Effect<string, FsError>;
+
+    /** recursively walk a directory with filter/stopWhen callbacks. */
+    readonly walkDirSync: (
+      rootDir: string,
+      options?: WalkDirOptions,
+    ) => Effect.Effect<string[], FsError>;
+
+    /** resolve a file path with mac-friendly fallback variants. */
+    readonly resolveWithVariants: (
+      filePath: string,
+      cwd: string,
+    ) => Effect.Effect<string, FsError>;
+  }
+>()("@cvr/pi-fs/index/FsService") {
+  static layer = Layer.succeed(FsService, {
+    listDirectory: (dirPath, maxEntries) =>
+      Effect.try({
+        try: () => listDirectory(dirPath, maxEntries),
+        catch: (cause) =>
+          new FsError({
+            message: cause instanceof Error ? cause.message : String(cause),
+            path: dirPath,
+          }),
+      }),
+
+    walkDirSync: (rootDir, options) =>
+      Effect.try({
+        try: () => walkDirSync(rootDir, options),
+        catch: (cause) =>
+          new FsError({
+            message: cause instanceof Error ? cause.message : String(cause),
+            path: rootDir,
+          }),
+      }),
+
+    resolveWithVariants: (filePath, cwd) =>
+      Effect.try({
+        try: () => resolveWithVariants(filePath, cwd),
+        catch: (cause) =>
+          new FsError({
+            message: cause instanceof Error ? cause.message : String(cause),
+            path: filePath,
+          }),
+      }),
+  });
+
+  static layerTest = (files: Map<string, string | string[]>) =>
+    Layer.succeed(FsService, {
+      listDirectory: (dirPath) => {
+        const value = files.get(dirPath);
+        return typeof value === "string"
+          ? Effect.succeed(value)
+          : Effect.fail(new FsError({ message: `no mock for ${dirPath}`, path: dirPath }));
+      },
+      walkDirSync: (rootDir) => {
+        const value = files.get(rootDir);
+        return Array.isArray(value)
+          ? Effect.succeed(value)
+          : Effect.fail(new FsError({ message: `no mock for ${rootDir}`, path: rootDir }));
+      },
+      resolveWithVariants: (filePath) => Effect.succeed(filePath),
+    });
 }
 
 // inline tests live here so the helper seam can move without depending on the

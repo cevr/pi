@@ -8,6 +8,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { Effect, Layer, Schema, ServiceMap } from "effect";
 
 export interface RepoRef {
   owner: string;
@@ -30,9 +31,7 @@ export function parseRepoUrl(input: string): RepoRef {
 
   const parts = cleaned.split("/");
   if (parts.length < 2) {
-    throw new Error(
-      `invalid repository: "${input}" — expected "owner/repo" or full URL`,
-    );
+    throw new Error(`invalid repository: "${input}" — expected "owner/repo" or full URL`);
   }
   return { owner: parts[0]!, repo: parts[1]! };
 }
@@ -61,9 +60,7 @@ export function ghApi<T = any>(
   let url = endpoint;
   if (opts?.params) {
     const qs = Object.entries(opts.params)
-      .map(
-        ([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`,
-      )
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
       .join("&");
     url += (url.includes("?") ? "&" : "?") + qs;
   }
@@ -138,4 +135,83 @@ export function addLineNumbers(content: string, startLine = 1): string {
 export function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return `${text.slice(0, maxLen)}\n... (truncated, ${text.length} total characters)`;
+}
+
+// ---------------------------------------------------------------------------
+// errors
+// ---------------------------------------------------------------------------
+
+export class GhApiError extends Schema.TaggedErrorClass<GhApiError>()("GhApiError", {
+  message: Schema.String,
+  endpoint: Schema.optional(Schema.String),
+}) {}
+
+// ---------------------------------------------------------------------------
+// service
+// ---------------------------------------------------------------------------
+
+export class GhApi extends ServiceMap.Service<
+  GhApi,
+  {
+    /** call `gh api` and return parsed JSON. */
+    readonly api: <T = any>(
+      endpoint: string,
+      opts?: {
+        method?: string;
+        params?: Record<string, string | number>;
+        rawOutput?: boolean;
+        accept?: string;
+      },
+    ) => Effect.Effect<T, GhApiError>;
+
+    /** paginated `gh api` call — collects items across pages. */
+    readonly apiPaginated: <T = any>(
+      endpoint: string,
+      opts?: {
+        params?: Record<string, string | number>;
+        limit?: number;
+        offset?: number;
+      },
+    ) => Effect.Effect<T[], GhApiError>;
+  }
+>()("@cvr/pi-github-api/index/GhApi") {
+  static layer = Layer.succeed(GhApi, {
+    api: (endpoint, opts) =>
+      Effect.try({
+        try: () => ghApi(endpoint, opts),
+        catch: (cause) =>
+          new GhApiError({
+            message: cause instanceof Error ? cause.message : String(cause),
+            endpoint,
+          }),
+      }),
+
+    apiPaginated: (endpoint, opts) =>
+      Effect.try({
+        try: () => ghApiPaginated(endpoint, opts),
+        catch: (cause) =>
+          new GhApiError({
+            message: cause instanceof Error ? cause.message : String(cause),
+            endpoint,
+          }),
+      }),
+  });
+
+  static layerTest = (
+    responses: Map<string, any>,
+  ) =>
+    Layer.succeed(GhApi, {
+      api: (endpoint) => {
+        const value = responses.get(endpoint);
+        return value !== undefined
+          ? Effect.succeed(value)
+          : Effect.fail(new GhApiError({ message: `no mock for ${endpoint}`, endpoint }));
+      },
+      apiPaginated: (endpoint) => {
+        const value = responses.get(endpoint);
+        return value !== undefined
+          ? Effect.succeed(Array.isArray(value) ? value : [value])
+          : Effect.fail(new GhApiError({ message: `no mock for ${endpoint}`, endpoint }));
+      },
+    });
 }
