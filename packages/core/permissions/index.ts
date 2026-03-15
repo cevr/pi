@@ -1,23 +1,22 @@
 /**
  * permission evaluation for tool calls.
  *
- * reads rules from ~/.pi/agent/permissions.json (separate from
- * settings.json since this is extension-owned config). rules are
- * evaluated first-match-wins, matching tool name and params via
- * glob patterns. default action when no rule matches: allow.
+ * reads rules from ~/.pi/agent/permissions.json. rules are evaluated
+ * first-match-wins, matching tool name and params via glob patterns.
+ * default action when no rule matches: allow.
  *
- * format mirrors amp's amp.permissions schema:
- *   { tool, matches?, action, message? }
- *
- * only "allow" and "reject" actions for now — no "ask" or "delegate"
- * because pi's tool execute API has no confirmation mechanism.
+ * `Permissions` Effect service for loading rules + evaluating.
+ * `evaluatePermission` pure function for direct use.
  */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
-import * as path from "node:path";
+import * as nodePath from "node:path";
+import { Effect, Layer, Schema, ServiceMap } from "effect";
 
-// --- types ---
+// ---------------------------------------------------------------------------
+// types
+// ---------------------------------------------------------------------------
 
 export interface PermissionRule {
   tool: string;
@@ -31,19 +30,32 @@ export interface PermissionVerdict {
   message?: string;
 }
 
-// --- glob matching ---
+// ---------------------------------------------------------------------------
+// errors
+// ---------------------------------------------------------------------------
 
-/**
- * convert a simple glob pattern (only `*` wildcards) to a regex.
- * covers all patterns amp documents: `*git push*`, `rm *`, `*`.
- */
+export class PermissionDenied extends Schema.TaggedErrorClass<PermissionDenied>()(
+  "PermissionDenied",
+  {
+    tool: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+export class PermissionsLoadError extends Schema.TaggedErrorClass<PermissionsLoadError>()(
+  "PermissionsLoadError",
+  { message: Schema.String },
+) {}
+
+// ---------------------------------------------------------------------------
+// pure evaluation (shared by Effect and legacy paths)
+// ---------------------------------------------------------------------------
+
 function globToRegex(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   const withWildcards = escaped.replace(/\*/g, ".*");
   return new RegExp(`^${withWildcards}$`, "i");
 }
-
-// --- evaluation ---
 
 export function evaluatePermission(
   toolName: string,
@@ -54,11 +66,8 @@ export function evaluatePermission(
     if (!globToRegex(rule.tool).test(toolName)) continue;
 
     if (rule.matches?.cmd) {
-      const patterns = Array.isArray(rule.matches.cmd)
-        ? rule.matches.cmd
-        : [rule.matches.cmd];
-      if (!patterns.some((p) => globToRegex(p).test(params.cmd ?? "")))
-        continue;
+      const patterns = Array.isArray(rule.matches.cmd) ? rule.matches.cmd : [rule.matches.cmd];
+      if (!patterns.some((p) => globToRegex(p).test(params.cmd ?? ""))) continue;
     }
 
     return { action: rule.action, message: rule.message };
@@ -67,14 +76,62 @@ export function evaluatePermission(
   return { action: "allow" };
 }
 
-// --- loading ---
+// ---------------------------------------------------------------------------
+// service
+// ---------------------------------------------------------------------------
 
-const PERMISSIONS_PATH = path.join(
-  os.homedir(),
-  ".pi",
-  "agent",
-  "permissions.json",
-);
+export class Permissions extends ServiceMap.Service<
+  Permissions,
+  {
+    readonly loadRules: () => Effect.Effect<PermissionRule[], PermissionsLoadError>;
+    readonly evaluate: (
+      toolName: string,
+      params: { cmd?: string },
+    ) => Effect.Effect<PermissionVerdict, PermissionsLoadError>;
+  }
+>()("@cvr/pi-permissions/index/Permissions") {
+  static layer = (permissionsPath?: string) =>
+    Layer.succeed(Permissions, {
+      loadRules: () =>
+        Effect.try({
+          try: () => {
+            const p =
+              permissionsPath ?? nodePath.join(os.homedir(), ".pi", "agent", "permissions.json");
+            const raw = fs.readFileSync(p, "utf-8");
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed)) return [];
+            return parsed as PermissionRule[];
+          },
+          catch: () => [] as PermissionRule[],
+        }) as Effect.Effect<PermissionRule[], PermissionsLoadError>,
+
+      evaluate: (toolName: string, params: { cmd?: string }) =>
+        Effect.try({
+          try: () => {
+            const p =
+              permissionsPath ?? nodePath.join(os.homedir(), ".pi", "agent", "permissions.json");
+            const raw = fs.readFileSync(p, "utf-8");
+            const parsed = JSON.parse(raw);
+            const rules: PermissionRule[] = Array.isArray(parsed) ? parsed : [];
+            return evaluatePermission(toolName, params, rules);
+          },
+          catch: () => evaluatePermission(toolName, params, []),
+        }) as Effect.Effect<PermissionVerdict, PermissionsLoadError>,
+    });
+
+  static layerTest = (rules: PermissionRule[]) =>
+    Layer.succeed(Permissions, {
+      loadRules: () => Effect.succeed(rules),
+      evaluate: (toolName: string, params: { cmd?: string }) =>
+        Effect.succeed(evaluatePermission(toolName, params, rules)),
+    });
+}
+
+// ---------------------------------------------------------------------------
+// sync API — for non-Effect callers
+// ---------------------------------------------------------------------------
+
+const PERMISSIONS_PATH = nodePath.join(os.homedir(), ".pi", "agent", "permissions.json");
 
 export function loadPermissions(): PermissionRule[] {
   try {
@@ -86,5 +143,3 @@ export function loadPermissions(): PermissionRule[] {
     return [];
   }
 }
-
-// --- tests ---

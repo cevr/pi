@@ -1,10 +1,11 @@
 import type { AutocompleteProvider } from "@mariozechner/pi-tui";
 import { describe, expect, it } from "bun:test";
-import {
+import { Effect } from "effect";
+import { EditorCapabilities } from "./index";
 
-  composeEditorAutocompleteProvider,
-  registerEditorAutocompleteContributor,
-} from "./index";
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
 
 function createBaseProvider(log: string[]): AutocompleteProvider {
   return {
@@ -17,158 +18,113 @@ function createBaseProvider(log: string[]): AutocompleteProvider {
     },
     applyCompletion: (lines, cursorLine, cursorCol, item, prefix) => {
       log.push(`base:apply:${item.value}:${prefix}`);
+      return { lines, cursorLine, cursorCol };
+    },
+  };
+}
+
+function createMentionsContributor(log: string[]) {
+  return {
+    id: "mentions",
+    enhance(provider: AutocompleteProvider, context: { cwd: string }): AutocompleteProvider {
+      log.push(`enhance:${context.cwd}`);
       return {
-        lines,
-        cursorLine,
-        cursorCol,
+        getSuggestions(lines, cursorLine, cursorCol) {
+          const line = lines[cursorLine] ?? "";
+          if (line.startsWith("@commit/")) {
+            log.push("mentions:get");
+            return {
+              items: [{ value: "@commit/abc123", label: "@commit/abc123" }],
+              prefix: "@commit/",
+            };
+          }
+          return provider.getSuggestions(lines, cursorLine, cursorCol);
+        },
+        applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+          if (item.value.startsWith("@commit/")) {
+            log.push(`mentions:apply:${prefix}`);
+            return { lines, cursorLine, cursorCol };
+          }
+          return provider.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+        },
       };
     },
   };
 }
 
-describe("editor autocomplete capabilities", () => {
-  it("lets contributors decorate the base provider and keep fallback behavior", () => {
-    const log: string[] = [];
-    const unregister = registerEditorAutocompleteContributor({
-      id: "mentions",
-      enhance(provider, context) {
-        log.push(`enhance:${context.cwd}`);
-        return {
-          getSuggestions(lines, cursorLine, cursorCol) {
-            const line = lines[cursorLine] ?? "";
-            if (line.startsWith("@commit/")) {
-              log.push("mentions:get");
-              return {
-                items: [{ value: "@commit/abc123", label: "@commit/abc123" }],
-                prefix: "@commit/",
-              };
-            }
-            return provider.getSuggestions(lines, cursorLine, cursorCol);
-          },
-          applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
-            if (item.value.startsWith("@commit/")) {
-              log.push(`mentions:apply:${prefix}`);
-              return {
-                lines,
-                cursorLine,
-                cursorCol,
-              };
-            }
-            return provider.applyCompletion(
-              lines,
-              cursorLine,
-              cursorCol,
-              item,
-              prefix,
-            );
-          },
-        };
-      },
-    });
+// ---------------------------------------------------------------------------
+// Effect EditorCapabilities service tests
+// ---------------------------------------------------------------------------
 
-    try {
-      const provider = composeEditorAutocompleteProvider(
-        createBaseProvider(log),
-        {
-          cwd: "/repo/app",
-        },
-      );
+const runWithService = <A, E>(effect: Effect.Effect<A, E, EditorCapabilities>): Promise<A> =>
+  Effect.runPromise(Effect.provide(effect, EditorCapabilities.layer));
 
-      expect(provider.getSuggestions(["@commit/"], 0, 8)).toEqual({
-        items: [{ value: "@commit/abc123", label: "@commit/abc123" }],
-        prefix: "@commit/",
-      });
+describe("EditorCapabilities service", () => {
+  it("registers and lists contributors", async () => {
+    const result = await runWithService(
+      Effect.gen(function* () {
+        const caps = yield* EditorCapabilities;
+        const unregister = yield* caps.register({
+          id: "test",
+          priority: 5,
+          enhance: (p) => p,
+        });
+        const list = yield* caps.list();
+        yield* unregister();
+        const after = yield* caps.list();
+        return { list, after };
+      }),
+    );
 
-      expect(provider.getSuggestions(["@f"], 0, 2)).toEqual({
-        items: [{ value: "@file/src/index.ts", label: "@file/src/index.ts" }],
-        prefix: "@f",
-      });
-
-      provider.applyCompletion(
-        ["@f"],
-        0,
-        2,
-        { value: "@file/src/index.ts", label: "@file/src/index.ts" },
-        "@f",
-      );
-
-      expect(log).toEqual([
-        "enhance:/repo/app",
-        "mentions:get",
-        "base:get:@f:2",
-        "base:apply:@file/src/index.ts:@f",
-      ]);
-    } finally {
-      unregister();
-    }
+    expect(result.list).toHaveLength(1);
+    expect(result.list[0]!.id).toBe("test");
+    expect(result.after).toHaveLength(0);
   });
 
-  it("applies higher priority contributors last so they become the outer host layer", () => {
-    const order: string[] = [];
-    const unregisterInner = registerEditorAutocompleteContributor({
-      id: "inner",
-      priority: 0,
-      enhance(provider) {
-        order.push("enhance:inner");
-        return {
-          getSuggestions(lines, cursorLine, cursorCol) {
-            order.push("get:inner");
-            return provider.getSuggestions(lines, cursorLine, cursorCol);
-          },
-          applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
-            return provider.applyCompletion(
-              lines,
-              cursorLine,
-              cursorCol,
-              item,
-              prefix,
-            );
-          },
-        };
-      },
-    });
-    const unregisterOuter = registerEditorAutocompleteContributor({
-      id: "outer",
-      priority: 10,
-      enhance(provider) {
-        order.push("enhance:outer");
-        return {
-          getSuggestions(lines, cursorLine, cursorCol) {
-            order.push("get:outer");
-            return provider.getSuggestions(lines, cursorLine, cursorCol);
-          },
-          applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
-            return provider.applyCompletion(
-              lines,
-              cursorLine,
-              cursorCol,
-              item,
-              prefix,
-            );
-          },
-        };
-      },
-    });
+  it("composes providers through contributors", async () => {
+    const log: string[] = [];
+    const result = await runWithService(
+      Effect.gen(function* () {
+        const caps = yield* EditorCapabilities;
+        yield* caps.register(createMentionsContributor(log));
+        const base = createBaseProvider(log);
+        const composed = yield* caps.compose(base, { cwd: "/repo" });
+        return composed.getSuggestions(["@commit/"], 0, 8);
+      }),
+    );
 
-    try {
-      const provider = composeEditorAutocompleteProvider(
-        createBaseProvider(order),
-        {
-          cwd: "/repo/app",
-        },
-      );
-      provider.getSuggestions(["@f"], 0, 2);
+    expect(result).toEqual({
+      items: [{ value: "@commit/abc123", label: "@commit/abc123" }],
+      prefix: "@commit/",
+    });
+    expect(log).toContain("enhance:/repo");
+    expect(log).toContain("mentions:get");
+  });
 
-      expect(order).toEqual([
-        "enhance:inner",
-        "enhance:outer",
-        "get:outer",
-        "get:inner",
-        "base:get:@f:2",
-      ]);
-    } finally {
-      unregisterOuter();
-      unregisterInner();
-    }
+  it("sorts by priority then id", async () => {
+    const result = await runWithService(
+      Effect.gen(function* () {
+        const caps = yield* EditorCapabilities;
+        yield* caps.register({ id: "z", priority: 0, enhance: (p) => p });
+        yield* caps.register({ id: "a", priority: 10, enhance: (p) => p });
+        yield* caps.register({ id: "m", priority: 0, enhance: (p) => p });
+        return yield* caps.list();
+      }),
+    );
+
+    expect(result.map((c) => c.id)).toEqual(["m", "z", "a"]);
+  });
+
+  it("layerTest works the same as layer", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const caps = yield* EditorCapabilities;
+        yield* caps.register({ id: "test", enhance: (p) => p });
+        return yield* caps.list();
+      }).pipe(Effect.provide(EditorCapabilities.layerTest)),
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.id).toBe("test");
   });
 });

@@ -1,0 +1,164 @@
+/**
+ * git client service — typed wrapper around git CLI operations.
+ *
+ * uses ProcessRunner internally. provides the git operations that
+ * pi extensions commonly need: log, diff, status, remote, rev-parse.
+ */
+
+import { Effect, Layer, Option, Schema, ServiceMap } from "effect";
+import { ProcessRunner } from "@cvr/pi-process-runner";
+
+// ---------------------------------------------------------------------------
+// errors
+// ---------------------------------------------------------------------------
+
+export class GitError extends Schema.TaggedErrorClass<GitError>()("GitError", {
+  command: Schema.String,
+  message: Schema.String,
+  stderr: Schema.optional(Schema.String),
+}) {}
+
+// ---------------------------------------------------------------------------
+// types
+// ---------------------------------------------------------------------------
+
+export interface GitLogEntry {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  committedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// service
+// ---------------------------------------------------------------------------
+
+export class GitClient extends ServiceMap.Service<
+  GitClient,
+  {
+    /** run arbitrary git command, return stdout */
+    readonly exec: (args: string[], cwd: string) => Effect.Effect<string, GitError>;
+
+    /** git log with format: sha, date, subject */
+    readonly log: (
+      cwd: string,
+      opts?: { maxCount?: number },
+    ) => Effect.Effect<GitLogEntry[], GitError>;
+
+    /** git diff --stat */
+    readonly diffStat: (cwd: string) => Effect.Effect<string, GitError>;
+
+    /** git remote get-url origin */
+    readonly remoteUrl: (cwd: string) => Effect.Effect<Option.Option<string>, GitError>;
+
+    /** git rev-parse HEAD */
+    readonly headSha: (cwd: string) => Effect.Effect<string, GitError>;
+
+    /** check if cwd is inside a git repo */
+    readonly isRepo: (cwd: string) => Effect.Effect<boolean>;
+  }
+>()("@cvr/pi-git-client/index/GitClient") {
+  static layer = Layer.effect(
+    GitClient,
+    Effect.gen(function* () {
+      const runner = yield* ProcessRunner;
+
+      const git = (args: string[], cwd: string) =>
+        runner.run("git", { args, cwd }).pipe(
+          Effect.flatMap((result) => {
+            if (result.exitCode !== 0) {
+              return Effect.fail(
+                new GitError({
+                  command: `git ${args.join(" ")}`,
+                  message: `exit code ${result.exitCode}`,
+                  stderr: result.stderr,
+                }),
+              );
+            }
+            return Effect.succeed(result.stdout);
+          }),
+          Effect.catch((err) => {
+            if (err instanceof GitError) return Effect.fail(err);
+            return Effect.fail(
+              new GitError({
+                command: `git ${args.join(" ")}`,
+                message: err instanceof Error ? err.message : String(err),
+              }),
+            );
+          }),
+        );
+
+      return {
+        exec: git,
+
+        log: (cwd: string, opts?: { maxCount?: number }) =>
+          Effect.gen(function* () {
+            const maxCount = opts?.maxCount ?? 50;
+            const stdout = yield* git(
+              ["log", `--max-count=${maxCount}`, "--format=%H\t%aI\t%s"],
+              cwd,
+            );
+            return stdout
+              .trim()
+              .split("\n")
+              .filter((l) => l.includes("\t"))
+              .map((line) => {
+                const [sha = "", committedAt = "", subject = ""] = line.split("\t");
+                return {
+                  sha,
+                  shortSha: sha.slice(0, 12),
+                  subject,
+                  committedAt,
+                };
+              });
+          }),
+
+        diffStat: (cwd: string) => git(["diff", "--stat"], cwd),
+
+        remoteUrl: (cwd: string) =>
+          git(["remote", "get-url", "origin"], cwd).pipe(
+            Effect.map((s) => Option.some(s.trim())),
+            Effect.catch(() => Effect.succeed(Option.none())),
+          ),
+
+        headSha: (cwd: string) => git(["rev-parse", "HEAD"], cwd).pipe(Effect.map((s) => s.trim())),
+
+        isRepo: (cwd: string) =>
+          runner
+            .run("git", {
+              args: ["rev-parse", "--is-inside-work-tree"],
+              cwd,
+            })
+            .pipe(
+              Effect.map((r) => r.exitCode === 0),
+              Effect.catch(() => Effect.succeed(false)),
+            ),
+      };
+    }),
+  );
+
+  /**
+   * test layer — canned responses, no real git.
+   */
+  static layerTest = (responses?: {
+    log?: GitLogEntry[];
+    diffStat?: string;
+    remoteUrl?: string;
+    headSha?: string;
+    isRepo?: boolean;
+  }) =>
+    Layer.succeed(GitClient, {
+      exec: (_args: string[], _cwd: string) => Effect.succeed(""),
+
+      log: () => Effect.succeed(responses?.log ?? []),
+
+      diffStat: () => Effect.succeed(responses?.diffStat ?? ""),
+
+      remoteUrl: () =>
+        Effect.succeed(responses?.remoteUrl ? Option.some(responses.remoteUrl) : Option.none()),
+
+      headSha: () => Effect.succeed(responses?.headSha ?? "abc1234"),
+
+      isRepo: () => Effect.succeed(responses?.isRepo ?? true),
+    });
+}

@@ -1,8 +1,8 @@
-// Extracted from index.ts
 import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Effect } from "effect";
 import {
   clearConfigCache,
   getExtensionConfig,
@@ -11,6 +11,7 @@ import {
   getGlobalConfig,
   resolveConfigDir,
   setGlobalSettingsPath,
+  ConfigService,
 } from "./index";
 
 const tmpdir = os.tmpdir();
@@ -26,9 +27,7 @@ const originalPiCvrConfigPath = process.env.PI_CVR_CONFIG_PATH;
 
 afterEach(() => {
   clearConfigCache();
-  setGlobalSettingsPath(
-    path.join(tmpdir, `nonexistent-${Date.now()}.json`),
-  );
+  setGlobalSettingsPath(path.join(tmpdir, `nonexistent-${Date.now()}.json`));
   if (originalPiCvrConfigPath === undefined) {
     delete process.env.PI_CVR_CONFIG_PATH;
   } else {
@@ -38,9 +37,7 @@ afterEach(() => {
 
 describe("getExtensionConfig", () => {
   test("returns defaults when no settings file exists", () => {
-    setGlobalSettingsPath(
-      path.join(tmpdir, `nonexistent-${Date.now()}.json`),
-    );
+    setGlobalSettingsPath(path.join(tmpdir, `nonexistent-${Date.now()}.json`));
     const result = getExtensionConfig("@cvr/pi-test", { foo: "bar", n: 1 });
     expect(result).toEqual({ foo: "bar", n: 1 });
   });
@@ -65,13 +62,9 @@ describe("getExtensionConfig", () => {
       "@cvr/pi-test": { foo: "from-env" },
     });
     const manualDir = fs.mkdtempSync(path.join(tmpdir, "pi-config-manual-"));
-    const manualSettingsPath = writeTmpJson(
-      manualDir,
-      "manual-settings.json",
-      {
-        "@cvr/pi-test": { foo: "from-setter" },
-      },
-    );
+    const manualSettingsPath = writeTmpJson(manualDir, "manual-settings.json", {
+      "@cvr/pi-test": { foo: "from-setter" },
+    });
     process.env.PI_CVR_CONFIG_PATH = envSettingsPath;
     setGlobalSettingsPath(manualSettingsPath);
 
@@ -111,10 +104,7 @@ describe("getExtensionConfig", () => {
     setGlobalSettingsPath(settingsPath);
 
     getExtensionConfig("@cvr/pi-test", { v: 0 });
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({ "@cvr/pi-test": { v: 999 } }),
-    );
+    fs.writeFileSync(settingsPath, JSON.stringify({ "@cvr/pi-test": { v: 999 } }));
     const result = getExtensionConfig("@cvr/pi-test", { v: 0 });
     expect(result).toEqual({ v: 1 });
   });
@@ -127,10 +117,7 @@ describe("getExtensionConfig", () => {
     setGlobalSettingsPath(settingsPath);
 
     getExtensionConfig("@cvr/pi-test", { v: 0 });
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({ "@cvr/pi-test": { v: 999 } }),
-    );
+    fs.writeFileSync(settingsPath, JSON.stringify({ "@cvr/pi-test": { v: 999 } }));
     clearConfigCache();
     const result = getExtensionConfig("@cvr/pi-test", { v: 0 });
     expect(result).toEqual({ v: 999 });
@@ -164,9 +151,7 @@ describe("getExtensionConfig", () => {
     });
     setGlobalSettingsPath(globalPath);
 
-    const projectDir = fs.mkdtempSync(
-      path.join(tmpdir, "pi-config-project-"),
-    );
+    const projectDir = fs.mkdtempSync(path.join(tmpdir, "pi-config-project-"));
     writeTmpJson(projectDir, ".pi/settings.json", {
       "@cvr/pi-test": { b: "project", c: "project" },
     });
@@ -186,18 +171,12 @@ describe("getExtensionConfig", () => {
     });
     setGlobalSettingsPath(globalPath);
 
-    const projectDir = fs.mkdtempSync(
-      path.join(tmpdir, "pi-config-project-"),
-    );
+    const projectDir = fs.mkdtempSync(path.join(tmpdir, "pi-config-project-"));
     writeTmpJson(projectDir, ".pi/settings.json", {
       "@cvr/pi-test": { a: "project" },
     });
 
-    const result = getExtensionConfig(
-      "@cvr/pi-test",
-      { a: "default" },
-      { cwd: projectDir },
-    );
+    const result = getExtensionConfig("@cvr/pi-test", { a: "default" }, { cwd: projectDir });
     expect(result).toEqual({ a: "global" });
   });
 });
@@ -220,8 +199,7 @@ describe("getExtensionConfigWithSchema", () => {
           ): value is {
             foo: string;
             count: number;
-          } =>
-            typeof value.foo === "string" && typeof value.count === "number",
+          } => typeof value.foo === "string" && typeof value.count === "number",
           normalize: (value) => ({
             ...value,
             foo: value.foo.trim().toUpperCase(),
@@ -246,8 +224,7 @@ describe("getExtensionConfigWithSchema", () => {
       { foo: "default" },
       {
         schema: {
-          validate: (value): value is { foo: string } =>
-            typeof value.foo === "string",
+          validate: (value): value is { foo: string } => typeof value.foo === "string",
         },
       },
     );
@@ -291,8 +268,7 @@ describe("getEnabledExtensionConfig", () => {
           ): value is {
             foo: string;
             count: number;
-          } =>
-            typeof value.foo === "string" && typeof value.count === "number",
+          } => typeof value.foo === "string" && typeof value.count === "number",
           normalize: (value) => ({ ...value, foo: value.foo.trim() }),
         },
       },
@@ -321,9 +297,7 @@ describe("getEnabledExtensionConfig", () => {
 
 describe("getGlobalConfig", () => {
   test("returns undefined when no settings file exists", () => {
-    setGlobalSettingsPath(
-      path.join(tmpdir, `nonexistent-${Date.now()}.json`),
-    );
+    setGlobalSettingsPath(path.join(tmpdir, `nonexistent-${Date.now()}.json`));
     expect(getGlobalConfig("missing")).toBeUndefined();
   });
 
@@ -350,5 +324,97 @@ describe("resolveConfigDir", () => {
   test("returns dirname of global settings path", () => {
     setGlobalSettingsPath("/fake/dir/settings.json");
     expect(resolveConfigDir()).toBe("/fake/dir");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Effect ConfigService tests
+// ---------------------------------------------------------------------------
+
+describe("ConfigService", () => {
+  const testData = {
+    "@cvr/pi-test": { foo: "overridden", count: 2 },
+    "@cvr/pi-gated": { enabled: false, bar: "value" },
+    promptVariables: { foo: { literal: "bar" } },
+  };
+
+  const runWithConfig = <A, E>(effect: Effect.Effect<A, E, ConfigService>): Promise<A> =>
+    Effect.runPromise(Effect.provide(effect, ConfigService.layerTest(testData)));
+
+  test("getExtension merges with defaults", async () => {
+    const result = await runWithConfig(
+      Effect.gen(function* () {
+        const config = yield* ConfigService;
+        return yield* config.getExtension("@cvr/pi-test", {
+          foo: "default",
+          extra: true,
+        });
+      }),
+    );
+    expect(result).toEqual({ foo: "overridden", extra: true, count: 2 });
+  });
+
+  test("getExtension returns defaults for missing namespace", async () => {
+    const result = await runWithConfig(
+      Effect.gen(function* () {
+        const config = yield* ConfigService;
+        return yield* config.getExtension("@cvr/pi-missing", { x: 1 });
+      }),
+    );
+    expect(result).toEqual({ x: 1 });
+  });
+
+  test("getEnabled returns enabled flag", async () => {
+    const result = await runWithConfig(
+      Effect.gen(function* () {
+        const config = yield* ConfigService;
+        return yield* config.getEnabled("@cvr/pi-gated", { bar: "default" });
+      }),
+    );
+    expect(result.enabled).toBe(false);
+    expect(result.config.bar).toBe("value");
+  });
+
+  test("getEnabled defaults to true when no enabled flag", async () => {
+    const result = await runWithConfig(
+      Effect.gen(function* () {
+        const config = yield* ConfigService;
+        return yield* config.getEnabled("@cvr/pi-test", {
+          foo: "default",
+          count: 0,
+        });
+      }),
+    );
+    expect(result.enabled).toBe(true);
+  });
+
+  test("getGlobal reads top-level key", async () => {
+    const result = await runWithConfig(
+      Effect.gen(function* () {
+        const config = yield* ConfigService;
+        return yield* config.getGlobal("promptVariables");
+      }),
+    );
+    expect(result).toEqual({ foo: { literal: "bar" } });
+  });
+
+  test("getGlobal returns undefined for missing key", async () => {
+    const result = await runWithConfig(
+      Effect.gen(function* () {
+        const config = yield* ConfigService;
+        return yield* config.getGlobal("missing");
+      }),
+    );
+    expect(result).toBeUndefined();
+  });
+
+  test("configDir returns test path", async () => {
+    const result = await runWithConfig(
+      Effect.gen(function* () {
+        const config = yield* ConfigService;
+        return yield* config.configDir();
+      }),
+    );
+    expect(result).toBe("/test/config");
   });
 });

@@ -16,6 +16,52 @@
     "module": "preserve",
     "noEmit": true,
     "types": ["bun"],
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnostics": true,
+        "diagnosticsName": true,
+        "diagnosticSeverity": {
+          "anyUnknownInErrorContext": "error",
+          "deterministicKeys": "warning",
+          "importFromBarrel": "warning",
+          "instanceOfSchema": "warning",
+          "missedPipeableOpportunity": "suggestion",
+          "missingEffectServiceDependency": "warning",
+          "schemaUnionOfLiterals": "warning",
+          "strictBooleanExpressions": "off",
+          "strictEffectProvide": "warning",
+          "catchAllToMapError": "warning",
+          "catchUnfailableEffect": "warning",
+          "effectFnOpportunity": "warning",
+          "effectMapVoid": "warning",
+          "effectSucceedWithVoid": "warning",
+          "leakingRequirements": "warning",
+          "preferSchemaOverJson": "warning",
+          "redundantSchemaTagIdentifier": "warning",
+          "returnEffectInGen": "warning",
+          "runEffectInsideEffect": "error",
+          "schemaStructWithTag": "warning",
+          "schemaSyncInEffect": "warning",
+          "tryCatchInEffectGen": "warning",
+          "unnecessaryEffectGen": "warning",
+          "unnecessaryFailYieldableError": "warning",
+          "unnecessaryPipe": "warning",
+          "unnecessaryPipeChain": "warning",
+          "extendsNativeError": "error",
+          "nodeBuiltinImport": "off",
+          "serviceNotAsClass": "warning",
+          "outdatedApi": "warning"
+        },
+        "keyPatterns": [
+          {
+            "target": "service",
+            "pattern": "default",
+            "skipLeadingPath": ["packages/core/", "packages/extensions/"]
+          }
+        ]
+      }
+    ],
     "paths": {
       "@/*": ["./*"],
       "@cvr/pi-agents-md": ["./packages/core/agents-md/index.ts"],
@@ -30,6 +76,8 @@
       "@cvr/pi-interpolate": ["./packages/core/interpolate/index.ts"],
       "@cvr/pi-mentions": ["./packages/core/mentions/index.ts"],
       "@cvr/pi-mutex": ["./packages/core/mutex/index.ts"],
+      "@cvr/pi-process-runner": ["./packages/core/process-runner/index.ts"],
+      "@cvr/pi-git-client": ["./packages/core/git-client/index.ts"],
       "@cvr/pi-output-buffer": ["./packages/core/output-buffer/index.ts"],
       "@cvr/pi-permissions": ["./packages/core/permissions/index.ts"],
       "@cvr/pi-spawn": ["./packages/core/pi-spawn/index.ts"],

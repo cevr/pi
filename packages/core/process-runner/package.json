@@ -1,5 +1,5 @@
 {
-  "name": "@cvr/pi-permissions",
+  "name": "@cvr/pi-process-runner",
   "version": "0.0.0",
   "private": true,
   "main": "index.ts",

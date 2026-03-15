@@ -8,11 +8,16 @@
  * PI_CVR_CONFIG_PATH | ~/.pi/agent/cvr-pi.json) → project-local
  * (.pi/settings.json). project-local is opt-in via `allowProjectConfig`
  * to prevent malicious repo overrides.
+ *
+ * provides both:
+ * - sync functions (existing) — for extension init bootstrap
+ * - `ConfigService` Effect service (new) — for effectful use inside execute()
  */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Effect, Layer, Schema, ServiceMap } from "effect";
 
 let _globalSettingsPath: string | null = null;
 
@@ -102,9 +107,7 @@ type RawExtensionConfig = Record<string, unknown> & {
   enabled?: unknown;
 };
 
-function stripEnabledFlag(
-  value: Record<string, unknown>,
-): Record<string, unknown> {
+function stripEnabledFlag(value: Record<string, unknown>): Record<string, unknown> {
   const { enabled: _enabled, ...rest } = value as RawExtensionConfig;
   return rest;
 }
@@ -116,9 +119,7 @@ function applyExtensionSchema<T extends Record<string, unknown>>(
   schema?: ExtensionConfigSchema<T>,
 ): T {
   if (schema?.validate && !schema.validate(candidate)) {
-    console.error(
-      `[@cvr/pi-config] invalid config for ${namespace}; falling back to defaults.`,
-    );
+    console.error(`[@cvr/pi-config] invalid config for ${namespace}; falling back to defaults.`);
     return schema.normalize ? schema.normalize(defaults) : defaults;
   }
 
@@ -136,20 +137,14 @@ export function getExtensionConfig<T extends Record<string, unknown>>(
   const globalPath = resolveGlobalSettingsPath();
   const globalSettings = readJsonFile(globalPath);
   if (globalSettings && isPlainObject(globalSettings[namespace])) {
-    merged = deepMerge(
-      merged,
-      globalSettings[namespace] as Record<string, unknown>,
-    );
+    merged = deepMerge(merged, globalSettings[namespace] as Record<string, unknown>);
   }
 
   if (opts?.allowProjectConfig && opts.cwd) {
     const projectPath = path.join(opts.cwd, ".pi", "settings.json");
     const projectSettings = readJsonFile(projectPath);
     if (projectSettings && isPlainObject(projectSettings[namespace])) {
-      merged = deepMerge(
-        merged,
-        projectSettings[namespace] as Record<string, unknown>,
-      );
+      merged = deepMerge(merged, projectSettings[namespace] as Record<string, unknown>);
     }
   }
 
@@ -170,18 +165,9 @@ export function getEnabledExtensionConfig<T extends Record<string, unknown>>(
   defaults: T,
   opts?: GetExtensionConfigWithSchemaOpts<T>,
 ): EnabledExtensionConfig<T> {
-  const merged = getExtensionConfig(
-    namespace,
-    defaults,
-    opts,
-  ) as RawExtensionConfig;
+  const merged = getExtensionConfig(namespace, defaults, opts) as RawExtensionConfig;
   const enabled = typeof merged.enabled === "boolean" ? merged.enabled : true;
-  const config = applyExtensionSchema(
-    namespace,
-    stripEnabledFlag(merged),
-    defaults,
-    opts?.schema,
-  );
+  const config = applyExtensionSchema(namespace, stripEnabledFlag(merged), defaults, opts?.schema);
 
   return { enabled, config };
 }
@@ -199,3 +185,120 @@ export function resolveConfigDir(): string {
   return path.dirname(resolveGlobalSettingsPath());
 }
 
+// ---------------------------------------------------------------------------
+// errors
+// ---------------------------------------------------------------------------
+
+export class ConfigError extends Schema.TaggedErrorClass<ConfigError>()("ConfigError", {
+  namespace: Schema.String,
+  message: Schema.String,
+}) {}
+
+// ---------------------------------------------------------------------------
+// Effect service
+// ---------------------------------------------------------------------------
+
+export class ConfigService extends ServiceMap.Service<
+  ConfigService,
+  {
+    readonly getExtension: <T extends Record<string, unknown>>(
+      namespace: string,
+      defaults: T,
+      opts?: GetExtensionConfigOpts,
+    ) => Effect.Effect<T>;
+    readonly getExtensionWithSchema: <T extends Record<string, unknown>>(
+      namespace: string,
+      defaults: T,
+      opts?: GetExtensionConfigWithSchemaOpts<T>,
+    ) => Effect.Effect<T, ConfigError>;
+    readonly getEnabled: <T extends Record<string, unknown>>(
+      namespace: string,
+      defaults: T,
+      opts?: GetExtensionConfigWithSchemaOpts<T>,
+    ) => Effect.Effect<EnabledExtensionConfig<T>, ConfigError>;
+    readonly getGlobal: <T>(key: string) => Effect.Effect<T | undefined>;
+    readonly configDir: () => Effect.Effect<string>;
+  }
+>()("@cvr/pi-config/index/ConfigService") {
+  /**
+   * production layer — delegates to the sync functions, wrapping errors.
+   */
+  static layer = Layer.succeed(ConfigService, {
+    getExtension: <T extends Record<string, unknown>>(
+      namespace: string,
+      defaults: T,
+      opts?: GetExtensionConfigOpts,
+    ) => Effect.sync(() => getExtensionConfig(namespace, defaults, opts)),
+
+    getExtensionWithSchema: <T extends Record<string, unknown>>(
+      namespace: string,
+      defaults: T,
+      opts?: GetExtensionConfigWithSchemaOpts<T>,
+    ) => Effect.sync(() => getExtensionConfigWithSchema(namespace, defaults, opts)),
+
+    getEnabled: <T extends Record<string, unknown>>(
+      namespace: string,
+      defaults: T,
+      opts?: GetExtensionConfigWithSchemaOpts<T>,
+    ) => Effect.sync(() => getEnabledExtensionConfig(namespace, defaults, opts)),
+
+    getGlobal: <T>(key: string) => Effect.sync(() => getGlobalConfig<T>(key)),
+
+    configDir: () => Effect.sync(() => resolveConfigDir()),
+  });
+
+  /**
+   * test layer — backed by a provided config map (no disk reads).
+   */
+  static layerTest = (configData: Record<string, unknown>) =>
+    Layer.succeed(ConfigService, {
+      getExtension: <T extends Record<string, unknown>>(namespace: string, defaults: T) => {
+        const nsConfig = configData[namespace];
+        if (isPlainObject(nsConfig)) {
+          return Effect.succeed(deepMerge(defaults, nsConfig));
+        }
+        return Effect.succeed({ ...defaults });
+      },
+
+      getExtensionWithSchema: <T extends Record<string, unknown>>(
+        namespace: string,
+        defaults: T,
+        opts?: GetExtensionConfigWithSchemaOpts<T>,
+      ) => {
+        const nsConfig = configData[namespace];
+        const merged = isPlainObject(nsConfig) ? deepMerge(defaults, nsConfig) : { ...defaults };
+        return Effect.succeed(
+          applyExtensionSchema(
+            namespace,
+            merged as Record<string, unknown>,
+            defaults,
+            opts?.schema,
+          ),
+        );
+      },
+
+      getEnabled: <T extends Record<string, unknown>>(
+        namespace: string,
+        defaults: T,
+        opts?: GetExtensionConfigWithSchemaOpts<T>,
+      ) => {
+        const nsConfig = configData[namespace];
+        const merged = isPlainObject(nsConfig)
+          ? deepMerge(defaults, nsConfig)
+          : ({ ...defaults } as Record<string, unknown>);
+        const raw = merged as RawExtensionConfig;
+        const enabled = typeof raw.enabled === "boolean" ? raw.enabled : true;
+        const config = applyExtensionSchema(
+          namespace,
+          stripEnabledFlag(merged),
+          defaults,
+          opts?.schema,
+        );
+        return Effect.succeed({ enabled, config });
+      },
+
+      getGlobal: <T>(key: string) => Effect.succeed(configData[key] as T | undefined),
+
+      configDir: () => Effect.succeed("/test/config"),
+    });
+}

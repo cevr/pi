@@ -1,75 +1,75 @@
 /**
  * file change tracker — persists before/after content to disk for undo_edit.
  *
- * each edit writes a JSON file to
- * ~/.pi/file-changes/{sessionId}/{toolCallId}.json containing
- * the full before/after content and a unified diff.
+ * each edit writes a JSON file to a configurable directory (default:
+ * ~/.pi/file-changes/{sessionId}/{toolCallId}.{uuid}).
  *
- * branch awareness comes from the conversation tree, not from
- * this module. tool call IDs live in assistant messages — when
- * the user navigates branches, only tool calls on the active
- * branch are visible. the undo_edit tool filters by active
- * tool call IDs before consulting the disk.
+ * `FileTracker` Effect service for effectful callers.
+ * Sync functions (`saveChange`, `loadChanges`, etc.) for non-Effect callers.
+ * `simpleDiff` is a pure function (no service needed).
  */
 
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Effect, Layer, Option, Schema, ServiceMap } from "effect";
 
-// allow test injection via global — checked at runtime, not import
-const getFileChangesDir = () =>
-  (globalThis as any).__PI_FILE_CHANGES_DIR__ ??
-  path.join(os.homedir(), ".pi", "file-changes");
+// ---------------------------------------------------------------------------
+// types
+// ---------------------------------------------------------------------------
 
 export interface FileChange {
-  /** unique id for this change record */
   id: string;
-  /** file:// URI of the changed file */
   uri: string;
-  /** full content before the edit */
   before: string;
-  /** full content after the edit */
   after: string;
-  /** unified diff */
   diff: string;
-  /** true if this was a newly created file */
   isNewFile: boolean;
-  /** true if undo_edit has reverted this change */
   reverted: boolean;
-  /** epoch ms when the edit occurred */
   timestamp: number;
 }
 
-function sessionDir(sessionId: string): string {
-  return path.join(getFileChangesDir(), sessionId);
+// ---------------------------------------------------------------------------
+// errors
+// ---------------------------------------------------------------------------
+
+export class FileTrackerError extends Schema.TaggedErrorClass<FileTrackerError>()(
+  "FileTrackerError",
+  { message: Schema.String },
+) {}
+
+// ---------------------------------------------------------------------------
+// sync internals (shared by service layer and sync API)
+// ---------------------------------------------------------------------------
+
+const getFileChangesDir = () =>
+  (globalThis as any).__PI_FILE_CHANGES_DIR__ ?? path.join(os.homedir(), ".pi", "file-changes");
+
+function sessionDir(sessionId: string, baseDir?: string): string {
+  return path.join(baseDir ?? getFileChangesDir(), sessionId);
 }
 
 function changePath(
   sessionId: string,
   toolCallId: string,
   changeId: string,
+  baseDir?: string,
 ): string {
-  return path.join(sessionDir(sessionId), `${toolCallId}.${changeId}`);
+  return path.join(sessionDir(sessionId, baseDir), `${toolCallId}.${changeId}`);
 }
 
-/** ensure the session's file-changes directory exists. */
-function ensureDir(sessionId: string): void {
-  const dir = sessionDir(sessionId);
+function ensureDir(sessionId: string, baseDir?: string): void {
+  const dir = sessionDir(sessionId, baseDir);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
 
-/**
- * record a file change to disk. call after performing the edit.
- * the toolCallId comes from the execute() function's first argument.
- * returns the change ID (UUID) for the written record.
- *
- * one tool call can produce multiple changes (e.g., Task sub-agent
- * creating several files). each gets a unique UUID, stored as
- * {toolCallId}.{uuid}.
- */
+// ---------------------------------------------------------------------------
+// sync API — for non-Effect callers
+// ---------------------------------------------------------------------------
+
 export function saveChange(
   sessionId: string,
   toolCallId: string,
@@ -77,27 +77,12 @@ export function saveChange(
 ): string {
   ensureDir(sessionId);
   const id = crypto.randomUUID();
-  const record: FileChange = {
-    ...change,
-    id,
-    reverted: false,
-  };
-  fs.writeFileSync(
-    changePath(sessionId, toolCallId, id),
-    JSON.stringify(record, null, 2),
-    "utf-8",
-  );
+  const record: FileChange = { ...change, id, reverted: false };
+  fs.writeFileSync(changePath(sessionId, toolCallId, id), JSON.stringify(record, null, 2), "utf-8");
   return id;
 }
 
-/**
- * load all change records for a tool call. one tool call can produce
- * multiple changes (different files), each with its own UUID.
- */
-export function loadChanges(
-  sessionId: string,
-  toolCallId: string,
-): FileChange[] {
+export function loadChanges(sessionId: string, toolCallId: string): FileChange[] {
   const dir = sessionDir(sessionId);
   if (!fs.existsSync(dir)) return [];
 
@@ -108,9 +93,7 @@ export function loadChanges(
       .filter((f) => f.startsWith(prefix))
       .map((f) => {
         try {
-          return JSON.parse(
-            fs.readFileSync(path.join(dir, f), "utf-8"),
-          ) as FileChange;
+          return JSON.parse(fs.readFileSync(path.join(dir, f), "utf-8")) as FileChange;
         } catch {
           return null;
         }
@@ -121,10 +104,6 @@ export function loadChanges(
   }
 }
 
-/**
- * mark a specific change as reverted and restore the file.
- * returns the change record, or null if not found / already reverted.
- */
 export function revertChange(
   sessionId: string,
   toolCallId: string,
@@ -141,24 +120,15 @@ export function revertChange(
   }
   if (change.reverted) return null;
 
-  // restore the file to its pre-edit state
   const filePath = change.uri.replace(/^file:\/\//, "");
   fs.writeFileSync(filePath, change.before, "utf-8");
 
-  // mark as reverted on disk
   change.reverted = true;
   fs.writeFileSync(p, JSON.stringify(change, null, 2), "utf-8");
 
   return change;
 }
 
-/**
- * find the most recent non-reverted change for a file path,
- * filtered to only the given tool call IDs (branch awareness).
- *
- * the caller gets activeToolCallIds by scanning the current
- * session branch for edit_file/create_file tool calls.
- */
 export function findLatestChange(
   sessionId: string,
   filePath: string,
@@ -166,12 +136,10 @@ export function findLatestChange(
 ): { toolCallId: string; change: FileChange } | null {
   const uri = `file://${path.resolve(filePath)}`;
 
-  // check in reverse order (most recent first)
   for (let i = activeToolCallIds.length - 1; i >= 0; i--) {
     const toolCallId = activeToolCallIds[i];
     if (!toolCallId) continue;
     const changes = loadChanges(sessionId, toolCallId);
-    // within a tool call, find the matching file (most recent by timestamp)
     const match = changes
       .filter((c) => !c.reverted && c.uri === uri)
       .sort((a, b) => b.timestamp - a.timestamp)[0];
@@ -183,11 +151,123 @@ export function findLatestChange(
   return null;
 }
 
-/**
- * graceful require for the `diff` package — falls back to a naive
- * line-by-line diff when the package isn't resolvable (same pattern
- * as cheerio in html-to-md.ts).
- */
+// ---------------------------------------------------------------------------
+// service
+// ---------------------------------------------------------------------------
+
+export class FileTracker extends ServiceMap.Service<
+  FileTracker,
+  {
+    readonly save: (
+      sessionId: string,
+      toolCallId: string,
+      change: Omit<FileChange, "id" | "reverted">,
+    ) => Effect.Effect<string, FileTrackerError>;
+    readonly load: (sessionId: string, toolCallId: string) => Effect.Effect<FileChange[]>;
+    readonly revert: (
+      sessionId: string,
+      toolCallId: string,
+      changeId: string,
+    ) => Effect.Effect<Option.Option<FileChange>, FileTrackerError>;
+    readonly findLatest: (
+      sessionId: string,
+      filePath: string,
+      activeToolCallIds: string[],
+    ) => Effect.Effect<Option.Option<{ toolCallId: string; change: FileChange }>>;
+  }
+>()("@cvr/pi-file-tracker/index/FileTracker") {
+  static layer = Layer.succeed(FileTracker, {
+    save: (sessionId: string, toolCallId: string, change: Omit<FileChange, "id" | "reverted">) =>
+      Effect.try({
+        try: () => saveChange(sessionId, toolCallId, change),
+        catch: (err) =>
+          new FileTrackerError({
+            message: `save failed: ${err instanceof Error ? err.message : String(err)}`,
+          }),
+      }),
+
+    load: (sessionId: string, toolCallId: string) =>
+      Effect.sync(() => loadChanges(sessionId, toolCallId)),
+
+    revert: (sessionId: string, toolCallId: string, changeId: string) =>
+      Effect.try({
+        try: () => Option.fromNullOr(revertChange(sessionId, toolCallId, changeId)),
+        catch: (err) =>
+          new FileTrackerError({
+            message: `revert failed: ${err instanceof Error ? err.message : String(err)}`,
+          }),
+      }),
+
+    findLatest: (sessionId: string, filePath: string, activeToolCallIds: string[]) =>
+      Effect.sync(() =>
+        Option.fromNullOr(findLatestChange(sessionId, filePath, activeToolCallIds)),
+      ),
+  });
+
+  static layerTest = Layer.effect(
+    FileTracker,
+    Effect.sync(() => {
+      const store = new Map<string, FileChange>();
+
+      return {
+        save: (
+          sessionId: string,
+          toolCallId: string,
+          change: Omit<FileChange, "id" | "reverted">,
+        ) =>
+          Effect.sync(() => {
+            const id = crypto.randomUUID();
+            const record: FileChange = { ...change, id, reverted: false };
+            store.set(`${sessionId}/${toolCallId}.${id}`, record);
+            return id;
+          }),
+
+        load: (sessionId: string, toolCallId: string) =>
+          Effect.sync(() => {
+            const prefix = `${sessionId}/${toolCallId}.`;
+            const results: FileChange[] = [];
+            for (const [key, value] of store) {
+              if (key.startsWith(prefix)) results.push(value);
+            }
+            return results;
+          }),
+
+        revert: (sessionId: string, toolCallId: string, changeId: string) =>
+          Effect.sync(() => {
+            const key = `${sessionId}/${toolCallId}.${changeId}`;
+            const change = store.get(key);
+            if (!change || change.reverted) return Option.none<FileChange>();
+            change.reverted = true;
+            return Option.some(change);
+          }),
+
+        findLatest: (sessionId: string, filePath: string, activeToolCallIds: string[]) =>
+          Effect.sync(() => {
+            const uri = `file://${path.resolve(filePath)}`;
+            for (let i = activeToolCallIds.length - 1; i >= 0; i--) {
+              const toolCallId = activeToolCallIds[i];
+              if (!toolCallId) continue;
+              const prefix = `${sessionId}/${toolCallId}.`;
+              for (const [key, change] of store) {
+                if (key.startsWith(prefix) && !change.reverted && change.uri === uri) {
+                  return Option.some({ toolCallId, change });
+                }
+              }
+            }
+            return Option.none<{
+              toolCallId: string;
+              change: FileChange;
+            }>();
+          }),
+      };
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// simpleDiff — pure function, no service needed
+// ---------------------------------------------------------------------------
+
 let createPatchFn:
   | ((
       fileName: string,
@@ -207,40 +287,16 @@ try {
   /* diff not installed — use fallback */
 }
 
-/**
- * generate a unified diff between two strings.
- *
- * uses the `diff` npm package (Myers algorithm) when available for
- * proper hunk-based output with context lines. context=3 matches
- * git's default, producing gaps between distant changes that show()
- * can elide in collapsed display.
- *
- * falls back to a naive line-by-line comparison when `diff` isn't
- * installed (produces correct but less optimal output — every line
- * is either +, -, or context with no hunk headers).
- */
-export function simpleDiff(
-  filePath: string,
-  before: string,
-  after: string,
-): string {
+export function simpleDiff(filePath: string, before: string, after: string): string {
   if (createPatchFn) {
-    const patch = createPatchFn(
-      path.basename(filePath),
-      before,
-      after,
-      "original",
-      "modified",
-      { context: 3 },
-    );
-    // strip the Index: and === lines that createPatch prepends —
-    // they add noise for LLM consumption and TUI display
+    const patch = createPatchFn(path.basename(filePath), before, after, "original", "modified", {
+      context: 3,
+    });
     const lines = patch.split("\n");
     const startIdx = lines.findIndex((l) => l.startsWith("---"));
     return (startIdx > 0 ? lines.slice(startIdx) : lines).join("\n");
   }
 
-  // fallback: naive line-by-line diff (no shortest-edit-distance)
   const beforeLines = before.split("\n");
   const afterLines = after.split("\n");
 
@@ -252,11 +308,7 @@ export function simpleDiff(
   let i = 0;
   let j = 0;
   while (i < beforeLines.length || j < afterLines.length) {
-    if (
-      i < beforeLines.length &&
-      j < afterLines.length &&
-      beforeLines[i] === afterLines[j]
-    ) {
+    if (i < beforeLines.length && j < afterLines.length && beforeLines[i] === afterLines[j]) {
       lines.push(` ${beforeLines[i]}`);
       i++;
       j++;
@@ -274,5 +326,3 @@ export function simpleDiff(
 
   return lines.join("\n");
 }
-
-// inline tests

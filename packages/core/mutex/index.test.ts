@@ -1,143 +1,118 @@
-// Extracted from index.ts — review imports
-import { describe, expect, it, test } from "bun:test";
-import * as path from "node:path";
-import { withFileLock } from "./index";
-import { withFileLock } from "./index";
+import { describe, expect, it } from "bun:test";
+import { Effect, Ref } from "effect";
+import { Mutex } from "./index";
 
-describe("withFileLock", () => {
-    it("executes function and returns result", async () => {
-      const result = await withFileLock("/tmp/test.txt", async () => {
-        return "success";
-      });
-      expect(result).toBe("success");
-    });
+const runWithMutex = <A, E>(effect: Effect.Effect<A, E, Mutex>): Promise<A> =>
+  Effect.runPromise(Effect.provide(effect, Mutex.layer));
 
-    it("propagates errors from the function", async () => {
-      try {
-        await withFileLock("/tmp/error.txt", async () => {
-          throw new Error("test error");
-        });
-        expect(true).toBe(false); // should not reach
-      } catch (e) {
-        expect((e as Error).message).toBe("test error");
-      }
-    });
-
-    it("serializes concurrent calls for the same path", async () => {
-      const order: string[] = [];
-      const path = "/tmp/same-path.txt";
-
-      const makeOp = (id: string, delayMs: number) =>
-        withFileLock(path, async () => {
-          order.push(`${id}-start`);
-          await new Promise((r) => setTimeout(r, delayMs));
-          order.push(`${id}-end`);
-          return id;
-        });
-
-      // start all operations concurrently
-      const results = await Promise.all([
-        makeOp("a", 50),
-        makeOp("b", 30),
-        makeOp("c", 10),
-      ]);
-
-      expect(results).toEqual(["a", "b", "c"]);
-
-      // verify serialization: each op must complete before next starts
-      // pattern: a-start, a-end, b-start, b-end, c-start, c-end
-      expect(order).toEqual([
-        "a-start",
-        "a-end",
-        "b-start",
-        "b-end",
-        "c-start",
-        "c-end",
-      ]);
-    });
-
-    it("allows parallel execution for different paths", async () => {
-      const order: string[] = [];
-
-      const makeOp = (path: string, id: string, delayMs: number) =>
-        withFileLock(path, async () => {
-          order.push(`${id}-start`);
-          await new Promise((r) => setTimeout(r, delayMs));
-          order.push(`${id}-end`);
-          return id;
-        });
-
-      const start = Date.now();
-      const results = await Promise.all([
-        makeOp("/tmp/path-a.txt", "a", 50),
-        makeOp("/tmp/path-b.txt", "b", 50),
-        makeOp("/tmp/path-c.txt", "c", 50),
-      ]);
-      const elapsed = Date.now() - start;
-
-      expect(results).toEqual(["a", "b", "c"]);
-
-      // all should complete in ~50ms (parallel), not ~150ms (serial)
-      expect(elapsed).toBeLessThan(120);
-
-      // all starts should come before all ends (parallel execution)
-      const starts = order.filter((o) => o.endsWith("-start"));
-      const ends = order.filter((o) => o.endsWith("-end"));
-      expect(starts).toHaveLength(3);
-      expect(ends).toHaveLength(3);
-    });
-
-    it("handles same path resolved differently", async () => {
-      // relative and absolute paths should resolve to same lock
-      const order: string[] = [];
-      const absolute = "/tmp/same-file.txt";
-      // these might resolve to different keys depending on cwd,
-      // but let's test that resolve() is being used
-      const results = await Promise.all([
-        withFileLock(absolute, async () => {
-          order.push("abs-start");
-          await new Promise((r) => setTimeout(r, 20));
-          order.push("abs-end");
-          return "abs";
-        }),
-      ]);
-
-      expect(results).toEqual(["abs"]);
-    });
-
-    it("releases lock after error", async () => {
-      const path = "/tmp/error-release.txt";
-
-      // first call throws
-      try {
-        await withFileLock(path, async () => {
-          throw new Error("first fails");
-        });
-        expect(true).toBe(false); // should not reach
-      } catch (e) {
-        expect((e as Error).message).toBe("first fails");
-      }
-
-      // second call should succeed (lock was released)
-      const result = await withFileLock(path, async () => {
-        return "second succeeds";
-      });
-
-      expect(result).toBe("second succeeds");
-    });
-
-    it("handles rapid sequential calls on same path", async () => {
-      const path = "/tmp/rapid.txt";
-      let counter = 0;
-
-      const results = await Promise.all([
-        withFileLock(path, async () => ++counter),
-        withFileLock(path, async () => ++counter),
-        withFileLock(path, async () => ++counter),
-      ]);
-
-      // each call should increment counter exactly once
-      expect(results).toEqual([1, 2, 3]);
-      expect(counter).toBe(3);
-    });
+describe("Mutex service", () => {
+  it("executes effect and returns result", async () => {
+    const result = await runWithMutex(
+      Effect.gen(function* () {
+        const mutex = yield* Mutex;
+        return yield* mutex.withLock("/tmp/effect-test.txt", Effect.succeed("hello"));
+      }),
+    );
+    expect(result).toBe("hello");
   });
+
+  it("serializes concurrent effects for the same path", async () => {
+    const result = await runWithMutex(
+      Effect.gen(function* () {
+        const mutex = yield* Mutex;
+        const order: string[] = [];
+
+        const makeOp = (id: string, delayMs: number) =>
+          mutex.withLock(
+            "/tmp/effect-serial.txt",
+            Effect.gen(function* () {
+              order.push(`${id}-start`);
+              yield* Effect.sleep(`${delayMs} millis`);
+              order.push(`${id}-end`);
+              return id;
+            }),
+          );
+
+        const results = yield* Effect.all([makeOp("a", 50), makeOp("b", 30), makeOp("c", 10)], {
+          concurrency: "unbounded",
+        });
+
+        return { results, order };
+      }),
+    );
+
+    expect(result.results).toEqual(["a", "b", "c"]);
+    expect(result.order).toEqual(["a-start", "a-end", "b-start", "b-end", "c-start", "c-end"]);
+  });
+
+  it("allows parallel execution for different paths", async () => {
+    const result = await runWithMutex(
+      Effect.gen(function* () {
+        const mutex = yield* Mutex;
+        const order: string[] = [];
+
+        const makeOp = (path: string, id: string, delayMs: number) =>
+          mutex.withLock(
+            path,
+            Effect.gen(function* () {
+              order.push(`${id}-start`);
+              yield* Effect.sleep(`${delayMs} millis`);
+              order.push(`${id}-end`);
+              return id;
+            }),
+          );
+
+        const results = yield* Effect.all(
+          [
+            makeOp("/tmp/a.txt", "a", 50),
+            makeOp("/tmp/b.txt", "b", 50),
+            makeOp("/tmp/c.txt", "c", 50),
+          ],
+          { concurrency: "unbounded" },
+        );
+
+        return { results, order };
+      }),
+    );
+
+    expect(result.results).toEqual(["a", "b", "c"]);
+    const starts = result.order.filter((o) => o.endsWith("-start"));
+    expect(starts).toHaveLength(3);
+    expect(result.order.slice(0, 3).every((o) => o.endsWith("-start"))).toBe(true);
+  });
+
+  it("releases lock after error", async () => {
+    const result = await runWithMutex(
+      Effect.gen(function* () {
+        const mutex = yield* Mutex;
+        const path = "/tmp/effect-error.txt";
+
+        const failed = yield* mutex.withLock(path, Effect.fail("boom")).pipe(Effect.result);
+
+        const ok = yield* mutex.withLock(path, Effect.succeed("recovered"));
+        return { failed, ok };
+      }),
+    );
+
+    expect(result.failed._tag).toBe("Failure");
+    expect(result.ok).toBe("recovered");
+  });
+
+  it("layerTest records lock acquisitions without blocking", async () => {
+    const logRef = Ref.makeUnsafe<Array<string>>([]);
+    const testLayer = Mutex.layerTest(logRef);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const mutex = yield* Mutex;
+        yield* mutex.withLock("/a.txt", Effect.succeed("one"));
+        yield* mutex.withLock("/b.txt", Effect.succeed("two"));
+        return yield* Ref.get(logRef);
+      }).pipe(Effect.provide(testLayer)),
+    );
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toContain("a.txt");
+    expect(result[1]).toContain("b.txt");
+  });
+});

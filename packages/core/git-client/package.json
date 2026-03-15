@@ -1,5 +1,5 @@
 {
-  "name": "@cvr/pi-permissions",
+  "name": "@cvr/pi-git-client",
   "version": "0.0.0",
   "private": true,
   "main": "index.ts",
