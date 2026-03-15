@@ -104,15 +104,11 @@ const sessionMentionCache = createCache<string, MentionableSession[]>();
 /** tool argument keys that usually contain file paths */
 const PATH_KEYS = ["path", "filePath", "file_path"];
 
-export function isTextContent(
-  part: ContentPart,
-): part is { type: "text"; text: string } {
+export function isTextContent(part: ContentPart): part is { type: "text"; text: string } {
   return part.type === "text" && typeof part.text === "string";
 }
 
-export function extractFilePaths(
-  args: Record<string, unknown> | undefined,
-): string[] {
+export function extractFilePaths(args: Record<string, unknown> | undefined): string[] {
   if (!args) return [];
   const paths: string[] = [];
 
@@ -163,10 +159,7 @@ export function parseSessionFile(filePath: string): ParsedSessionFile {
       const entry = JSON.parse(line);
       if (entry.type === "session") {
         header = entry as SessionHeader;
-      } else if (
-        entry.type === "session_info" &&
-        typeof entry.name === "string"
-      ) {
+      } else if (entry.type === "session_info" && typeof entry.name === "string") {
         sessionName = entry.name;
       }
 
@@ -278,9 +271,7 @@ export function enumerateBranches(
             textChunks.push(part.text);
           }
           if (part.type === "toolCall" && part.arguments) {
-            for (const filePath of extractFilePaths(
-              part.arguments as Record<string, unknown>,
-            )) {
+            for (const filePath of extractFilePaths(part.arguments as Record<string, unknown>)) {
               files.add(filePath);
             }
           }
@@ -313,10 +304,7 @@ export function enumerateBranches(
   return branches;
 }
 
-function matchesMentionableText(
-  session: MentionableSession,
-  query: string,
-): boolean {
+function matchesMentionableText(session: MentionableSession, query: string): boolean {
   const lower = query.toLowerCase();
   return (
     session.sessionId.toLowerCase().includes(lower) ||
@@ -326,9 +314,7 @@ function matchesMentionableText(
   );
 }
 
-export function summarizeMentionableSession(
-  parsed: ParsedSessionFile,
-): MentionableSession | null {
+export function summarizeMentionableSession(parsed: ParsedSessionFile): MentionableSession | null {
   if (!parsed.header) return null;
 
   const branches = enumerateBranches(
@@ -340,8 +326,7 @@ export function summarizeMentionableSession(
 
   if (branches.length === 0) return null;
 
-  const firstWithUserMessage =
-    branches.find((branch) => branch.firstUserMessage) ?? branches[0];
+  const firstWithUserMessage = branches.find((branch) => branch.firstUserMessage) ?? branches[0];
   if (!firstWithUserMessage) return null;
 
   const searchableText = branches
@@ -376,8 +361,7 @@ export function summarizeMentionableSession(
     branchCount: branches.length,
     parentSessionPath: parsed.header.parentSession,
     isHandoffCandidate:
-      typeof parsed.header.parentSession === "string" &&
-      firstUserMessage.length > 0,
+      typeof parsed.header.parentSession === "string" && firstUserMessage.length > 0,
   };
 }
 
@@ -389,9 +373,7 @@ export function getSessionMentionsIndex(
   sessionsDir: string = DEFAULT_MENTION_SESSIONS_DIR,
 ): MentionableSession[] {
   if (!fs.existsSync(sessionsDir)) return [];
-  return getOrSet(sessionMentionCache, sessionsDir, () =>
-    listMentionableSessions(sessionsDir),
-  );
+  return getOrSet(sessionMentionCache, sessionsDir, () => listMentionableSessions(sessionsDir));
 }
 
 export function listMentionableSessions(
@@ -413,9 +395,7 @@ export function searchMentionableSessions(
 
   if (query.workspace) {
     const workspace = query.workspace.toLowerCase();
-    filtered = filtered.filter((session) =>
-      session.workspace.toLowerCase().includes(workspace),
-    );
+    filtered = filtered.filter((session) => session.workspace.toLowerCase().includes(workspace));
   }
 
   if (query.kind === "handoff") {
@@ -423,9 +403,7 @@ export function searchMentionableSessions(
   }
 
   if (query.text) {
-    filtered = filtered.filter((session) =>
-      matchesMentionableText(session, query.text!),
-    );
+    filtered = filtered.filter((session) => matchesMentionableText(session, query.text!));
   }
 
   filtered = [...filtered].sort(
@@ -455,12 +433,9 @@ export function resolveMentionableSession(
   );
 
   if (candidates.length === 0) return { status: "not_found" };
-  if (candidates.length === 1)
-    return { status: "resolved", session: candidates[0]! };
+  if (candidates.length === 1) return { status: "resolved", session: candidates[0]! };
 
-  const exact = candidates.find(
-    (session) => session.sessionId.toLowerCase() === normalized,
-  );
+  const exact = candidates.find((session) => session.sessionId.toLowerCase() === normalized);
   if (exact) return { status: "resolved", session: exact };
 
   return { status: "ambiguous", sessions: candidates };

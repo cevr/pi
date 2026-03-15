@@ -38,17 +38,13 @@ function summarizeResolvedMention(
   );
 }
 
-export function renderResolvedMentionsText(
-  mentions: ResolvedMention[],
-): string {
+export function renderResolvedMentionsText(mentions: ResolvedMention[]): string {
   const resolved = mentions.filter((mention) => mention.status === "resolved");
   if (resolved.length === 0) return "";
   return `resolved mention context:\n${resolved.map(summarizeResolvedMention).join("\n")}`;
 }
 
-export function renderResolvedMentionsBlock(
-  mentions: ResolvedMention[],
-): string {
+export function renderResolvedMentionsBlock(mentions: ResolvedMention[]): string {
   const text = renderResolvedMentionsText(mentions);
   if (!text) return "";
   return `<!-- pi-mentions\n${text}\n-->`;

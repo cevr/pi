@@ -15,10 +15,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import {
@@ -69,14 +66,10 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isStringArray(value: unknown): value is string[] {
-  return (
-    Array.isArray(value) && value.every((item) => typeof item === "string")
-  );
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-function isOracleConfig(
-  value: Record<string, unknown>,
-): value is OracleExtConfig {
+function isOracleConfig(value: Record<string, unknown>): value is OracleExtConfig {
   return (
     isNonEmptyString(value.model) &&
     isStringArray(value.extensionTools) &&
@@ -132,8 +125,7 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
       }),
       context: Type.Optional(
         Type.String({
-          description:
-            "Optional context about the current situation or background information.",
+          description: "Optional context about the current situation or background information.",
         }),
       ),
       files: Type.Optional(
@@ -157,9 +149,7 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
       if (p.context) parts.push(`\nContext: ${p.context}`);
       if (p.files && p.files.length > 0) {
         for (const filePath of p.files) {
-          const resolved = path.isAbsolute(filePath)
-            ? filePath
-            : path.resolve(ctx.cwd, filePath);
+          const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(ctx.cwd, filePath);
           try {
             const content = fs.readFileSync(resolved, "utf-8");
             parts.push(`\nFile: ${filePath}\n\`\`\`\n${content}\n\`\`\``);
@@ -215,17 +205,11 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
       singleResult.errorMessage = result.errorMessage;
 
       const isError =
-        result.exitCode !== 0 ||
-        result.stopReason === "error" ||
-        result.stopReason === "aborted";
+        result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
       const output = getFinalOutput(result.messages) || "(no output)";
 
       if (isError) {
-        return subAgentResult(
-          result.errorMessage || result.stderr || output,
-          singleResult,
-          true,
-        );
+        return subAgentResult(result.errorMessage || result.stderr || output, singleResult, true);
       }
 
       return subAgentResult(output, singleResult);
@@ -237,8 +221,7 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
           ? `${args.task.slice(0, 80)}...`
           : args.task
         : "...";
-      let text =
-        theme.fg("toolTitle", theme.bold("oracle ")) + theme.fg("dim", preview);
+      let text = theme.fg("toolTitle", theme.bold("oracle ")) + theme.fg("dim", preview);
       if (args.files?.length) {
         text += theme.fg(
           "muted",
@@ -252,11 +235,7 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
       const details = result.details as SingleResult | undefined;
       if (!details) {
         const text = result.content[0];
-        return new Text(
-          text?.type === "text" ? text.text : "(no output)",
-          0,
-          0,
-        );
+        return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
       }
       const container = new Container();
       renderAgentTree(details, container, expanded, theme, {

@@ -59,9 +59,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isSystemPromptConfig(
-  value: Record<string, unknown>,
-): value is SystemPromptExtConfig {
+function isSystemPromptConfig(value: Record<string, unknown>): value is SystemPromptExtConfig {
   return (
     isNonEmptyString(value.identity) &&
     isNonEmptyString(value.harness) &&
@@ -72,14 +70,11 @@ function isSystemPromptConfig(
   );
 }
 
-export const SYSTEM_PROMPT_CONFIG_SCHEMA: ExtensionConfigSchema<SystemPromptExtConfig> =
-  {
-    validate: isSystemPromptConfig,
-  };
+export const SYSTEM_PROMPT_CONFIG_SCHEMA: ExtensionConfigSchema<SystemPromptExtConfig> = {
+  validate: isSystemPromptConfig,
+};
 
-export function createSystemPromptExtension(
-  deps: SystemPromptExtensionDeps = DEFAULT_DEPS,
-) {
+export function createSystemPromptExtension(deps: SystemPromptExtensionDeps = DEFAULT_DEPS) {
   return function systemPromptExtension(pi: ExtensionAPI): void {
     const { enabled, config: cfg } = deps.getEnabledExtensionConfig(
       "@cvr/pi-system-prompt",
@@ -91,12 +86,8 @@ export function createSystemPromptExtension(
     const body = deps.resolvePrompt(cfg.promptString, cfg.promptFile);
     if (!body) return;
 
-    const harnessDocsFile =
-      cfg.harnessDocsPromptFile || `prompt.harness-docs.${cfg.harness}.md`;
-    const harnessDocs = deps.resolvePrompt(
-      cfg.harnessDocsPromptString,
-      harnessDocsFile,
-    );
+    const harnessDocsFile = cfg.harnessDocsPromptFile || `prompt.harness-docs.${cfg.harness}.md`;
+    const harnessDocs = deps.resolvePrompt(cfg.harnessDocsPromptString, harnessDocsFile);
 
     pi.on("before_agent_start", async (event, ctx) => {
       const interpolated = interpolatePromptVars(body, ctx.cwd, {
@@ -115,7 +106,6 @@ export function createSystemPromptExtension(
   };
 }
 
-const systemPromptExtension: (pi: ExtensionAPI) => void =
-  createSystemPromptExtension();
+const systemPromptExtension: (pi: ExtensionAPI) => void = createSystemPromptExtension();
 
 export default systemPromptExtension;

@@ -9,21 +9,13 @@
 
 import * as fs from "node:fs";
 import * as os from "node:os";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { listDirectory, resolveWithVariants } from "@cvr/pi-fs";
 import { NORMAL_LIMITS, type ReadLimits } from "@cvr/pi-read";
-import {
-  boxRendererWindowed,
-  textSection,
-  osc8Link,
-  type Excerpt,
-} from "@cvr/pi-box-format";
+import { boxRendererWindowed, textSection, osc8Link, type Excerpt } from "@cvr/pi-box-format";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
   { focus: "head" as const, context: 3 },
@@ -40,8 +32,7 @@ export function createLsTool(limits: ReadLimits): ToolDefinition {
     parameters: Type.Object({
       path: Type.Optional(
         Type.String({
-          description:
-            "The absolute path to the directory to list. Defaults to cwd.",
+          description: "The absolute path to the directory to list. Defaults to cwd.",
         }),
       ),
     }),
@@ -49,27 +40,14 @@ export function createLsTool(limits: ReadLimits): ToolDefinition {
     renderCall(args: any, theme: any) {
       const dirPath = args.path || ".";
       const home = os.homedir();
-      const shortened = dirPath.startsWith(home)
-        ? `~${dirPath.slice(home.length)}`
-        : dirPath;
-      const linked = dirPath.startsWith("/")
-        ? osc8Link(`file://${dirPath}`, shortened)
-        : shortened;
-      return new Text(
-        theme.fg("toolTitle", theme.bold("ls ")) + theme.fg("dim", linked),
-        0,
-        0,
-      );
+      const shortened = dirPath.startsWith(home) ? `~${dirPath.slice(home.length)}` : dirPath;
+      const linked = dirPath.startsWith("/") ? osc8Link(`file://${dirPath}`, shortened) : shortened;
+      return new Text(theme.fg("toolTitle", theme.bold("ls ")) + theme.fg("dim", linked), 0, 0);
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
       return boxRendererWindowed(
         () => [textSection(undefined, content.text)],
         {
@@ -87,9 +65,7 @@ export function createLsTool(limits: ReadLimits): ToolDefinition {
 
       if (!fs.existsSync(resolved)) {
         return {
-          content: [
-            { type: "text" as const, text: `directory not found: ${resolved}` },
-          ],
+          content: [{ type: "text" as const, text: `directory not found: ${resolved}` }],
           isError: true,
         } as any;
       }

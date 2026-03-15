@@ -1,8 +1,4 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  Theme,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import {
   type Component,
   CURSOR_MARKER,
@@ -91,10 +87,7 @@ export class StackPalette implements Component, Focusable {
     }
 
     if (matchesKey(data, Key.down) || matchesKey(data, Key.ctrl("n"))) {
-      this.highlightedIndex = Math.min(
-        this.filtered.length - 1,
-        this.highlightedIndex + 1,
-      );
+      this.highlightedIndex = Math.min(this.filtered.length - 1, this.highlightedIndex + 1);
       this.ensureVisible();
       this.invalidate();
       return;
@@ -109,11 +102,7 @@ export class StackPalette implements Component, Focusable {
       return;
     }
 
-    if (
-      data.length >= 1 &&
-      !data.startsWith("\x1b") &&
-      data.charCodeAt(0) >= 32
-    ) {
+    if (data.length >= 1 && !data.startsWith("\x1b") && data.charCodeAt(0) >= 32) {
       this.searchText += data;
       this.applyFilter();
       this.invalidate();
@@ -152,9 +141,7 @@ export class StackPalette implements Component, Focusable {
         variant: "closed",
         style: chrome,
         innerWidth: innerW,
-        header: showTitle
-          ? { text: headerText!, width: headerWidth }
-          : undefined,
+        header: showTitle ? { text: headerText!, width: headerWidth } : undefined,
       }),
     );
 
@@ -163,11 +150,8 @@ export class StackPalette implements Component, Focusable {
     if (searchable) {
       const prompt = dim(" > ");
       const searchDisplay = th.fg("text", this.searchText);
-      const cursor = this._focused
-        ? CURSOR_MARKER + th.fg("accent", "▏")
-        : dim("▏");
-      const placeholder =
-        this.searchText.length === 0 ? dim("type to search…") : "";
+      const cursor = this._focused ? CURSOR_MARKER + th.fg("accent", "▏") : dim("▏");
+      const placeholder = this.searchText.length === 0 ? dim("type to search…") : "";
       lines.push(row(prompt + searchDisplay + cursor + placeholder));
       lines.push(row(""));
     }
@@ -176,10 +160,7 @@ export class StackPalette implements Component, Focusable {
     if (this.filtered.length === 0) {
       lines.push(row(dim("  no matches")));
     } else {
-      const visibleEnd = Math.min(
-        this.scrollOffset + MAX_VISIBLE,
-        this.filtered.length,
-      );
+      const visibleEnd = Math.min(this.scrollOffset + MAX_VISIBLE, this.filtered.length);
 
       // compute max category badge width for right-aligned badges
       const maxBadgeW = this.filtered.reduce((max, item) => {
@@ -285,8 +266,7 @@ export class StackPalette implements Component, Focusable {
       this.filtered = fuzzyFilter(
         view.items,
         this.searchText,
-        (item) =>
-          `${item.label} ${item.description ?? ""} ${item.category ?? ""}`,
+        (item) => `${item.label} ${item.description ?? ""} ${item.category ?? ""}`,
       );
     }
     this.highlightedIndex = 0;

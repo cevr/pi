@@ -13,10 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import {
@@ -27,11 +24,7 @@ import {
 } from "@cvr/pi-config";
 import { registerMentionSource } from "@cvr/pi-mentions";
 import { createSessionMentionSource } from "./session-mention-source";
-import {
-  type BoxSection,
-  type Excerpt,
-  boxRendererWindowed,
-} from "@cvr/pi-box-format";
+import { type BoxSection, type Excerpt, boxRendererWindowed } from "@cvr/pi-box-format";
 import { Type } from "@sinclair/typebox";
 import {
   enumerateBranches,
@@ -58,9 +51,7 @@ export const CONFIG_DEFAULTS: SearchSessionsExtConfig = {
   rgTimeoutMs: 10000,
 };
 
-function isSearchSessionsConfig(
-  value: Record<string, unknown>,
-): value is SearchSessionsExtConfig {
+function isSearchSessionsConfig(value: Record<string, unknown>): value is SearchSessionsExtConfig {
   return (
     typeof value.maxResults === "number" &&
     Number.isInteger(value.maxResults) &&
@@ -73,10 +64,9 @@ function isSearchSessionsConfig(
   );
 }
 
-export const SEARCH_SESSIONS_CONFIG_SCHEMA: ExtensionConfigSchema<SearchSessionsExtConfig> =
-  {
-    validate: isSearchSessionsConfig,
-  };
+export const SEARCH_SESSIONS_CONFIG_SCHEMA: ExtensionConfigSchema<SearchSessionsExtConfig> = {
+  validate: isSearchSessionsConfig,
+};
 
 export const DEFAULT_EXTENSION_DEPS: SearchSessionsExtensionDeps = {
   getEnabledExtensionConfig,
@@ -116,11 +106,7 @@ function parseDate(dateStr: string): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-function matchesDateRange(
-  branch: BranchResult,
-  after?: string,
-  before?: string,
-): boolean {
+function matchesDateRange(branch: BranchResult, after?: string, before?: string): boolean {
   const branchEnd = new Date(branch.timestampEnd);
   const branchStart = new Date(branch.timestampStart);
 
@@ -143,10 +129,10 @@ function rgFilterFiles(
   timeoutMs: number,
 ): Set<string> | null {
   try {
-    const result = execSync(
-      `rg -l -i ${JSON.stringify(keyword)} ${JSON.stringify(sessionsDir)}`,
-      { stdio: ["ignore", "pipe", "ignore"], timeout: timeoutMs },
-    )
+    const result = execSync(`rg -l -i ${JSON.stringify(keyword)} ${JSON.stringify(sessionsDir)}`, {
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: timeoutMs,
+    })
       .toString()
       .trim();
     if (!result) return new Set();
@@ -163,15 +149,12 @@ function formatBranchResults(branches: BranchResult[]): {
   text: string;
   headerLineIndices: number[];
 } {
-  if (branches.length === 0)
-    return { text: "(no matching sessions found)", headerLineIndices: [] };
+  if (branches.length === 0) return { text: "(no matching sessions found)", headerLineIndices: [] };
 
   const lines: string[] = [];
   const headerLineIndices: number[] = [];
 
-  lines.push(
-    `found ${branches.length} matching branch${branches.length !== 1 ? "es" : ""}:`,
-  );
+  lines.push(`found ${branches.length} matching branch${branches.length !== 1 ? "es" : ""}:`);
   lines.push("");
 
   for (let i = 0; i < branches.length; i++) {
@@ -320,8 +303,7 @@ export function createSearchSessionsTool(
       ),
       file: Type.Optional(
         Type.String({
-          description:
-            "File path (partial match) to find sessions that touched this file.",
+          description: "File path (partial match) to find sessions that touched this file.",
         }),
       ),
       after: Type.Optional(
@@ -332,8 +314,7 @@ export function createSearchSessionsTool(
       ),
       before: Type.Optional(
         Type.String({
-          description:
-            "Only return sessions before this date. ISO date or relative.",
+          description: "Only return sessions before this date. ISO date or relative.",
         }),
       ),
       workspace: Type.Optional(
@@ -344,8 +325,7 @@ export function createSearchSessionsTool(
       ),
       all_workspaces: Type.Optional(
         Type.Boolean({
-          description:
-            "Search across all workspaces instead of just the current one.",
+          description: "Search across all workspaces instead of just the current one.",
         }),
       ),
     }),
@@ -354,9 +334,7 @@ export function createSearchSessionsTool(
       const p = params as SearchSessionsParams;
       if (!fs.existsSync(config.sessionsDir)) {
         return {
-          content: [
-            { type: "text" as const, text: "(no sessions directory found)" },
-          ],
+          content: [{ type: "text" as const, text: "(no sessions directory found)" }],
         } as any;
       }
 
@@ -384,11 +362,7 @@ export function createSearchSessionsTool(
 
       // 2. rg pre-filter if keyword set
       if (p.keyword) {
-        const matches = rgFilterFiles(
-          p.keyword,
-          config.sessionsDir,
-          config.rgTimeoutMs,
-        );
+        const matches = rgFilterFiles(p.keyword, config.sessionsDir, config.rgTimeoutMs);
         if (matches !== null) {
           sessionFiles = sessionFiles.filter((f) => matches.has(f));
         }
@@ -419,19 +393,14 @@ export function createSearchSessionsTool(
       const allBranches: BranchResult[] = [];
 
       // workspace filter: default to current cwd unless all_workspaces is set
-      const workspaceFilter = p.all_workspaces
-        ? undefined
-        : p.workspace || ctx.cwd;
+      const workspaceFilter = p.all_workspaces ? undefined : p.workspace || ctx.cwd;
 
       for (const file of sessionFiles) {
         const { header, entries, sessionName } = parseSessionFile(file);
         if (!header) continue;
 
         // workspace filter
-        if (
-          workspaceFilter &&
-          !header.cwd.toLowerCase().includes(workspaceFilter.toLowerCase())
-        ) {
+        if (workspaceFilter && !header.cwd.toLowerCase().includes(workspaceFilter.toLowerCase())) {
           continue;
         }
 
@@ -449,16 +418,12 @@ export function createSearchSessionsTool(
         filtered = filtered.filter((b) => matchesFile(b, p.file!));
       }
       if (p.after || p.before) {
-        filtered = filtered.filter((b) =>
-          matchesDateRange(b, p.after, p.before),
-        );
+        filtered = filtered.filter((b) => matchesDateRange(b, p.after, p.before));
       }
 
       // 6. sort by most recent leaf timestamp
       filtered.sort(
-        (a, b) =>
-          new Date(b.timestampEnd).getTime() -
-          new Date(a.timestampEnd).getTime(),
+        (a, b) => new Date(b.timestampEnd).getTime() - new Date(a.timestampEnd).getTime(),
       );
 
       // 7. format with head+tail truncation
@@ -469,10 +434,7 @@ export function createSearchSessionsTool(
               ...filtered.slice(-Math.floor(config.maxResults / 2)),
             ]
           : filtered;
-      const truncated =
-        filtered.length > config.maxResults
-          ? filtered.length - shown.length
-          : 0;
+      const truncated = filtered.length > config.maxResults ? filtered.length - shown.length : 0;
 
       const { text: output } = formatBranchResults(shown);
       const resultSections = branchesToSections(shown);
@@ -492,25 +454,18 @@ export function createSearchSessionsTool(
       if (args.workspace) parts.push(`ws:${args.workspace}`);
       const preview = parts.join(" ") || "...";
       return new Text(
-        theme.fg("toolTitle", theme.bold("search_sessions ")) +
-          theme.fg("dim", preview),
+        theme.fg("toolTitle", theme.bold("search_sessions ")) + theme.fg("dim", preview),
         0,
         0,
       );
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const sections: BoxSection[] | undefined = result.details?.resultSections;
-      if (!sections?.length)
-        return new Text(result.content?.[0]?.text ?? "(no output)", 0, 0);
+      if (!sections?.length) return new Text(result.content?.[0]?.text ?? "(no output)", 0, 0);
 
       const truncated: number = result.details?.truncated ?? 0;
-      const notices =
-        truncated > 0 ? [`${truncated} sessions omitted`] : undefined;
+      const notices = truncated > 0 ? [`${truncated} sessions omitted`] : undefined;
 
       return boxRendererWindowed(
         () => sections,
@@ -541,7 +496,6 @@ export function createSearchSessionsExtension(
   };
 }
 
-const searchSessionsExtension: (pi: ExtensionAPI) => void =
-  createSearchSessionsExtension();
+const searchSessionsExtension: (pi: ExtensionAPI) => void = createSearchSessionsExtension();
 
 export default searchSessionsExtension;

@@ -18,10 +18,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import {
   clearConfigCache,
@@ -30,12 +27,7 @@ import {
   type ExtensionConfigSchema,
 } from "@cvr/pi-config";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
-import {
-  boxRendererWindowed,
-  osc8Link,
-  type BoxSection,
-  type Excerpt,
-} from "@cvr/pi-box-format";
+import { boxRendererWindowed, osc8Link, type BoxSection, type Excerpt } from "@cvr/pi-box-format";
 import { Type } from "@sinclair/typebox";
 import type { ToolCostDetails } from "@cvr/pi-tool-cost";
 
@@ -61,9 +53,7 @@ export const DEFAULT_DEPS: WebSearchExtensionDeps = {
   withPromptPatch,
 };
 
-function isWebSearchConfig(
-  value: Record<string, unknown>,
-): value is WebSearchExtConfig {
+function isWebSearchConfig(value: Record<string, unknown>): value is WebSearchExtConfig {
   return (
     typeof value.defaultMaxResults === "number" &&
     Number.isInteger(value.defaultMaxResults) &&
@@ -208,8 +198,7 @@ function formatResults(results: SearchResult[]): {
   text: string;
   headerLineIndices: number[];
 } {
-  if (results.length === 0)
-    return { text: "(no results found)", headerLineIndices: [] };
+  if (results.length === 0) return { text: "(no results found)", headerLineIndices: [] };
 
   const lines: string[] = [];
   const headerLineIndices: number[] = [];
@@ -251,8 +240,7 @@ function resultsToSections(results: SearchResult[]): BoxSection[] {
         for (const l of r.excerpts[j]!.split("\n")) {
           lines.push({ text: l, highlight: false });
         }
-        if (j < r.excerpts.length - 1)
-          lines.push({ text: "", highlight: false });
+        if (j < r.excerpts.length - 1) lines.push({ text: "", highlight: false });
       }
     }
     return {
@@ -268,9 +256,7 @@ interface WebSearchParams {
   max_results?: number;
 }
 
-export function createWebSearchTool(
-  config: WebSearchExtConfig = CONFIG_DEFAULTS,
-): ToolDefinition {
+export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS): ToolDefinition {
   return {
     name: "web_search",
     label: "Web Search",
@@ -370,30 +356,19 @@ export function createWebSearchTool(
 
     renderCall(args: any, theme: any) {
       const objective = args.objective || "...";
-      const short =
-        objective.length > 70 ? `${objective.slice(0, 70)}...` : objective;
-      let text =
-        theme.fg("toolTitle", theme.bold("web_search ")) +
-        theme.fg("dim", short);
+      const short = objective.length > 70 ? `${objective.slice(0, 70)}...` : objective;
+      let text = theme.fg("toolTitle", theme.bold("web_search ")) + theme.fg("dim", short);
       if (args.search_queries?.length) {
         text += theme.fg("muted", ` [${args.search_queries.join(", ")}]`);
       }
       return new Text(text, 0, 0);
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const sections: BoxSection[] | undefined = result.details?.resultSections;
       if (!sections?.length) {
         const text = result.content?.[0];
-        return new Text(
-          text?.type === "text" ? text.text : "(no output)",
-          0,
-          0,
-        );
+        return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
       }
       return boxRendererWindowed(
         () => sections,
@@ -423,7 +398,6 @@ export function createWebSearchExtension(
   };
 }
 
-const webSearchExtension: (pi: ExtensionAPI) => void =
-  createWebSearchExtension();
+const webSearchExtension: (pi: ExtensionAPI) => void = createWebSearchExtension();
 
 export default webSearchExtension;

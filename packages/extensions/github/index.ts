@@ -12,10 +12,7 @@
  *   list_repositories, glob_github, commit_search, diff
  */
 
-import type {
-  ToolDefinition,
-  ExtensionAPI,
-} from "@mariozechner/pi-coding-agent";
+import type { ToolDefinition, ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { Type } from "@sinclair/typebox";
@@ -122,8 +119,7 @@ export function createReadGithubTool(): ToolDefinition {
         Type.Array(Type.Number(), {
           minItems: 2,
           maxItems: 2,
-          description:
-            "Optional [start_line, end_line] to read only specific lines",
+          description: "Optional [start_line, end_line] to read only specific lines",
         }),
       ),
     }),
@@ -135,9 +131,7 @@ export function createReadGithubTool(): ToolDefinition {
         const data = ghApi<any>(`repos/${repoSlug(ref)}/contents/${p.path}`);
 
         if (Array.isArray(data)) {
-          throw new Error(
-            "Path is a directory, not a file. Use list_directory_github instead.",
-          );
+          throw new Error("Path is a directory, not a file. Use list_directory_github instead.");
         }
 
         if (data.type !== "file" || !data.content) {
@@ -153,9 +147,7 @@ export function createReadGithubTool(): ToolDefinition {
           const endIdx = Math.min(lines.length, end);
           content = lines.slice(startIdx, endIdx).join("\n");
           return {
-            content: [
-              { type: "text" as const, text: addLineNumbers(content, start) },
-            ],
+            content: [{ type: "text" as const, text: addLineNumbers(content, start) }],
             details: { header: `${repoSlug(ref)}/${p.path}` },
           };
         }
@@ -176,36 +168,25 @@ export function createReadGithubTool(): ToolDefinition {
 
     renderCall(args: any, theme: any) {
       const path = args.path || "...";
-      const repo = args.repository
-        ? args.repository.replace(/^https?:\/\/github\.com\//, "")
-        : "";
+      const repo = args.repository ? args.repository.replace(/^https?:\/\/github\.com\//, "") : "";
       const display = `${repo}/${path}`;
-      const url = args.repository
-        ? `${args.repository.replace(/\/$/, "")}/blob/HEAD/${path}`
-        : "";
+      const url = args.repository ? `${args.repository.replace(/\/$/, "")}/blob/HEAD/${path}` : "";
       const linked = url ? osc8Link(url, display) : display;
       return new Text(
-        theme.fg("toolTitle", theme.bold("read_github ")) +
-          theme.fg("dim", linked),
+        theme.fg("toolTitle", theme.bold("read_github ")) + theme.fg("dim", linked),
         0,
         0,
       );
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
 
       // parse numbered lines into BoxLine[] with gutters
       const parsed: BoxLine[] = content.text.split("\n").map((line: string) => {
         const m = line.match(/^(\s*\d+): (.*)$/);
-        if (m && m[1] && m[2])
-          return { gutter: m[1].trim(), text: m[2], highlight: true };
+        if (m && m[1] && m[2]) return { gutter: m[1].trim(), text: m[2], highlight: true };
         return { text: line, highlight: true };
       });
 
@@ -244,9 +225,7 @@ export function createSearchGithubTool(): ToolDefinition {
       repository: Type.String({
         description: "Repository URL (e.g., https://github.com/owner/repo)",
       }),
-      path: Type.Optional(
-        Type.String({ description: "Optional path to limit search to" }),
-      ),
+      path: Type.Optional(Type.String({ description: "Optional path to limit search to" })),
       limit: Type.Optional(
         Type.Number({
           description: "Max results (default: 30, max: 100)",
@@ -327,12 +306,8 @@ export function createSearchGithubTool(): ToolDefinition {
 
     renderCall(args: any, theme: any) {
       const pattern = args.pattern || "...";
-      const repo = args.repository
-        ? args.repository.replace(/^https?:\/\/github\.com\//, "")
-        : "";
-      const linkedRepo = args.repository
-        ? osc8Link(args.repository, repo)
-        : repo;
+      const repo = args.repository ? args.repository.replace(/^https?:\/\/github\.com\//, "") : "";
+      const linkedRepo = args.repository ? osc8Link(args.repository, repo) : repo;
       return new Text(
         theme.fg("toolTitle", theme.bold("search_github ")) +
           theme.fg("dim", `/${pattern}/ in ${linkedRepo}`),
@@ -341,14 +316,9 @@ export function createSearchGithubTool(): ToolDefinition {
       );
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
       return boxRendererWindowed(
         () => [textSection(undefined, content.text)],
         {
@@ -396,21 +366,17 @@ export function createListDirectoryGithubTool(): ToolDefinition {
       try {
         const ref = parseRepoUrl(p.repository);
         const limit = p.limit ?? 100;
-        const apiPath =
-          p.path === "" || p.path === "." || p.path === "/" ? "" : p.path;
+        const apiPath = p.path === "" || p.path === "." || p.path === "/" ? "" : p.path;
 
         const data = ghApi<any[]>(`repos/${repoSlug(ref)}/contents/${apiPath}`);
 
         if (!Array.isArray(data)) {
-          throw new Error(
-            "Path is a file, not a directory. Use read_github instead.",
-          );
+          throw new Error("Path is a file, not a directory. Use read_github instead.");
         }
 
         const entries = data.slice(0, limit).map((item: any) => {
           const suffix = item.type === "dir" ? "/" : "";
-          const size =
-            item.type === "file" && item.size ? ` (${item.size} bytes)` : "";
+          const size = item.type === "file" && item.size ? ` (${item.size} bytes)` : "";
           return `${item.name}${suffix}${size}`;
         });
 
@@ -425,30 +391,20 @@ export function createListDirectoryGithubTool(): ToolDefinition {
 
     renderCall(args: any, theme: any) {
       const path = args.path || "/";
-      const repo = args.repository
-        ? args.repository.replace(/^https?:\/\/github\.com\//, "")
-        : "";
+      const repo = args.repository ? args.repository.replace(/^https?:\/\/github\.com\//, "") : "";
       const display = `${repo}/${path}`;
-      const url = args.repository
-        ? `${args.repository.replace(/\/$/, "")}/tree/HEAD/${path}`
-        : "";
+      const url = args.repository ? `${args.repository.replace(/\/$/, "")}/tree/HEAD/${path}` : "";
       const linked = url ? osc8Link(url, display) : display;
       return new Text(
-        theme.fg("toolTitle", theme.bold("list_directory_github ")) +
-          theme.fg("dim", linked),
+        theme.fg("toolTitle", theme.bold("list_directory_github ")) + theme.fg("dim", linked),
         0,
         0,
       );
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
       return boxRendererWindowed(
         () => [textSection(undefined, content.text)],
         {
@@ -477,15 +433,9 @@ export function createListRepositoriesTool(): ToolDefinition {
       "Prioritizes your own repositories, then supplements with public results.",
 
     parameters: Type.Object({
-      pattern: Type.Optional(
-        Type.String({ description: "Pattern to match in repository names" }),
-      ),
-      organization: Type.Optional(
-        Type.String({ description: "Organization name to filter" }),
-      ),
-      language: Type.Optional(
-        Type.String({ description: "Programming language to filter" }),
-      ),
+      pattern: Type.Optional(Type.String({ description: "Pattern to match in repository names" })),
+      organization: Type.Optional(Type.String({ description: "Organization name to filter" })),
+      language: Type.Optional(Type.String({ description: "Programming language to filter" })),
       limit: Type.Optional(
         Type.Number({
           description: "Max results (default: 30, max: 100)",
@@ -524,9 +474,7 @@ export function createListRepositoriesTool(): ToolDefinition {
 
         if (!data.items || data.items.length === 0) {
           return {
-            content: [
-              { type: "text" as const, text: "No repositories found." },
-            ],
+            content: [{ type: "text" as const, text: "No repositories found." }],
             details: { header: queryParts.join(" ") || "repositories" },
           };
         }
@@ -537,11 +485,7 @@ export function createListRepositoriesTool(): ToolDefinition {
         for (const repo of data.items) {
           lines.push(`## ${repo.full_name}`);
           if (repo.description) lines.push(repo.description);
-          const meta = [
-            repo.language,
-            `★ ${repo.stargazers_count}`,
-            `forks: ${repo.forks_count}`,
-          ]
+          const meta = [repo.language, `★ ${repo.stargazers_count}`, `forks: ${repo.forks_count}`]
             .filter(Boolean)
             .join(" · ");
           lines.push(meta);
@@ -560,21 +504,15 @@ export function createListRepositoriesTool(): ToolDefinition {
     renderCall(args: any, theme: any) {
       const query = args.pattern || args.organization || "...";
       return new Text(
-        theme.fg("toolTitle", theme.bold("list_repositories ")) +
-          theme.fg("dim", query),
+        theme.fg("toolTitle", theme.bold("list_repositories ")) + theme.fg("dim", query),
         0,
         0,
       );
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
       return boxRendererWindowed(
         () => [textSection(undefined, content.text)],
         {
@@ -608,12 +546,8 @@ export function createGlobGithubTool(): ToolDefinition {
       repository: Type.String({
         description: "Repository URL (e.g., https://github.com/owner/repo)",
       }),
-      limit: Type.Optional(
-        Type.Number({ description: "Max results (default: 100)" }),
-      ),
-      offset: Type.Optional(
-        Type.Number({ description: "Results to skip (default: 0)" }),
-      ),
+      limit: Type.Optional(Type.Number({ description: "Max results (default: 100)" })),
+      offset: Type.Optional(Type.Number({ description: "Results to skip (default: 0)" })),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
@@ -628,9 +562,7 @@ export function createGlobGithubTool(): ToolDefinition {
         const branch = repoData.default_branch || "main";
 
         // get full tree
-        const tree = ghApi<any>(
-          `repos/${repoSlug(ref)}/git/trees/${branch}?recursive=1`,
-        );
+        const tree = ghApi<any>(`repos/${repoSlug(ref)}/git/trees/${branch}?recursive=1`);
 
         if (!tree.tree) {
           throw new Error("Could not read repository tree.");
@@ -663,12 +595,8 @@ export function createGlobGithubTool(): ToolDefinition {
 
     renderCall(args: any, theme: any) {
       const pattern = args.filePattern || "...";
-      const repo = args.repository
-        ? args.repository.replace(/^https?:\/\/github\.com\//, "")
-        : "";
-      const linkedRepo = args.repository
-        ? osc8Link(args.repository, repo)
-        : repo;
+      const repo = args.repository ? args.repository.replace(/^https?:\/\/github\.com\//, "") : "";
+      const linkedRepo = args.repository ? osc8Link(args.repository, repo) : repo;
       return new Text(
         theme.fg("toolTitle", theme.bold("glob_github ")) +
           theme.fg("dim", `${pattern} in ${linkedRepo}`),
@@ -677,14 +605,9 @@ export function createGlobGithubTool(): ToolDefinition {
       );
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
       return boxRendererWindowed(
         () => [textSection(undefined, content.text)],
         {
@@ -715,22 +638,16 @@ export function createCommitSearchTool(): ToolDefinition {
       repository: Type.String({
         description: "Repository URL (e.g., https://github.com/owner/repo)",
       }),
-      query: Type.Optional(
-        Type.String({ description: "Search query for commit messages" }),
-      ),
-      author: Type.Optional(
-        Type.String({ description: "Filter by author username or email" }),
-      ),
+      query: Type.Optional(Type.String({ description: "Search query for commit messages" })),
+      author: Type.Optional(Type.String({ description: "Filter by author username or email" })),
       since: Type.Optional(
         Type.String({
-          description:
-            'ISO 8601 date for earliest commit (e.g., "2024-01-01T00:00:00Z")',
+          description: 'ISO 8601 date for earliest commit (e.g., "2024-01-01T00:00:00Z")',
         }),
       ),
       until: Type.Optional(
         Type.String({
-          description:
-            'ISO 8601 date for latest commit (e.g., "2024-02-01T00:00:00Z")',
+          description: 'ISO 8601 date for latest commit (e.g., "2024-02-01T00:00:00Z")',
         }),
       ),
       path: Type.Optional(
@@ -784,9 +701,7 @@ export function createCommitSearchTool(): ToolDefinition {
         let filtered = commits;
         if (p.query) {
           const q = p.query.toLowerCase();
-          filtered = commits.filter((c: any) =>
-            c.commit?.message?.toLowerCase().includes(q),
-          );
+          filtered = commits.filter((c: any) => c.commit?.message?.toLowerCase().includes(q));
         }
 
         const lines: string[] = [`Found ${filtered.length} commits:\n`];
@@ -811,9 +726,7 @@ export function createCommitSearchTool(): ToolDefinition {
       const repo = args.repository
         ? args.repository.replace(/^https?:\/\/github\.com\//, "")
         : "...";
-      const linkedRepo = args.repository
-        ? osc8Link(args.repository, repo)
-        : repo;
+      const linkedRepo = args.repository ? osc8Link(args.repository, repo) : repo;
       const query = args.query || args.author || "";
       return new Text(
         theme.fg("toolTitle", theme.bold("commit_search ")) +
@@ -823,14 +736,9 @@ export function createCommitSearchTool(): ToolDefinition {
       );
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
       return boxRendererWindowed(
         () => [textSection(undefined, content.text)],
         {
@@ -859,20 +767,17 @@ export function createDiffTool(): ToolDefinition {
 
     parameters: Type.Object({
       base: Type.String({
-        description:
-          'The base ref to compare from (e.g., "main", "v1.0.0", or commit SHA)',
+        description: 'The base ref to compare from (e.g., "main", "v1.0.0", or commit SHA)',
       }),
       head: Type.String({
-        description:
-          'The head ref to compare to (e.g., "feature-branch", "v2.0.0", or commit SHA)',
+        description: 'The head ref to compare to (e.g., "feature-branch", "v2.0.0", or commit SHA)',
       }),
       repository: Type.String({
         description: "Repository URL (e.g., https://github.com/owner/repo)",
       }),
       includePatches: Type.Optional(
         Type.Boolean({
-          description:
-            "Include unified diff patches per file (token heavy). Default false.",
+          description: "Include unified diff patches per file (token heavy). Default false.",
         }),
       ),
     }),
@@ -909,9 +814,7 @@ export function createDiffTool(): ToolDefinition {
         }
 
         return {
-          content: [
-            { type: "text" as const, text: truncate(lines.join("\n"), 64_000) },
-          ],
+          content: [{ type: "text" as const, text: truncate(lines.join("\n"), 64_000) }],
           details: { header: `${p.base}...${p.head}` },
         };
       } catch (e: any) {
@@ -923,26 +826,18 @@ export function createDiffTool(): ToolDefinition {
       const repo = args.repository
         ? args.repository.replace(/^https?:\/\/github\.com\//, "")
         : "...";
-      const linkedRepo = args.repository
-        ? osc8Link(args.repository, repo)
-        : repo;
+      const linkedRepo = args.repository ? osc8Link(args.repository, repo) : repo;
       const range = `${args.base || "?"}...${args.head || "?"}`;
       return new Text(
-        theme.fg("toolTitle", theme.bold("diff ")) +
-          theme.fg("dim", `${linkedRepo} ${range}`),
+        theme.fg("toolTitle", theme.bold("diff ")) + theme.fg("dim", `${linkedRepo} ${range}`),
         0,
         0,
       );
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
       return boxRendererWindowed(
         () => [textSection(undefined, content.text)],
         {

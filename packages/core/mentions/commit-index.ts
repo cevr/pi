@@ -57,22 +57,15 @@ export function getCommitIndex(cwd: string): CommitIndex | null {
 
   return getOrSet(commitIndexCache, root, () => ({
     root,
-    commits: parseCommitLog(
-      runGit(root, ["log", "--all", "--format=%H%x09%cI%x09%s"]),
-    ),
+    commits: parseCommitLog(runGit(root, ["log", "--all", "--format=%H%x09%cI%x09%s"])),
   }));
 }
 
-export function lookupCommitByPrefix(
-  prefix: string,
-  index: CommitIndex,
-): CommitLookupResult {
+export function lookupCommitByPrefix(prefix: string, index: CommitIndex): CommitLookupResult {
   const normalized = prefix.trim().toLowerCase();
   if (!/^[0-9a-f]+$/.test(normalized)) return { status: "not_found" };
 
-  const matches = index.commits.filter((commit) =>
-    commit.sha.startsWith(normalized),
-  );
+  const matches = index.commits.filter((commit) => commit.sha.startsWith(normalized));
   if (matches.length === 0) return { status: "not_found" };
   if (matches.length === 1) return { status: "resolved", commit: matches[0]! };
   return { status: "ambiguous", matches };

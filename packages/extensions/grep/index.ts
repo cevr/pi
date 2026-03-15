@@ -18,10 +18,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { createInterface } from "node:readline";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { Type } from "@sinclair/typebox";
@@ -160,9 +157,7 @@ interface GrepParams {
   literal?: boolean;
 }
 
-export function createGrepTool(
-  config: GrepExtConfig = CONFIG_DEFAULTS,
-): ToolDefinition {
+export function createGrepTool(config: GrepExtConfig = CONFIG_DEFAULTS): ToolDefinition {
   const maxCollectMatches = config.maxTotalMatches * 2;
 
   return {
@@ -185,8 +180,7 @@ export function createGrepTool(
       }),
       path: Type.Optional(
         Type.String({
-          description:
-            "The file or directory path to search in. Cannot be used with glob.",
+          description: "The file or directory path to search in. Cannot be used with glob.",
         }),
       ),
       glob: Type.Optional(
@@ -202,8 +196,7 @@ export function createGrepTool(
       ),
       literal: Type.Optional(
         Type.Boolean({
-          description:
-            "Whether to treat the pattern as a literal string instead of a regex.",
+          description: "Whether to treat the pattern as a literal string instead of a regex.",
         }),
       ),
     }),
@@ -291,10 +284,7 @@ export function createGrepTool(
 
           const filePath: string | undefined = event.data?.path?.text;
           const lineNumber: number | undefined = event.data?.line_number;
-          const lineText: string = (event.data?.lines?.text ?? "").replace(
-            /\r?\n$/,
-            "",
-          );
+          const lineText: string = (event.data?.lines?.text ?? "").replace(/\r?\n$/, "");
           if (!filePath || typeof lineNumber !== "number") return;
 
           if (event.type === "match") {
@@ -318,9 +308,7 @@ export function createGrepTool(
           rl.close();
           signal?.removeEventListener("abort", onAbort);
           resolve({
-            content: [
-              { type: "text" as const, text: `grep error: ${err.message}` },
-            ],
+            content: [{ type: "text" as const, text: `grep error: ${err.message}` }],
             isError: true,
           } as any);
         });
@@ -397,10 +385,7 @@ export function createGrepTool(
                 }
               }
             }
-            perFileMatchCount.set(
-              filePath,
-              Math.min(matchesInFile, config.maxPerFile),
-            );
+            perFileMatchCount.set(filePath, Math.min(matchesInFile, config.maxPerFile));
 
             // include context lines only if adjacent to an included match
             const includedLines = new Set<number>();
@@ -419,8 +404,7 @@ export function createGrepTool(
             }
 
             const rel = path.relative(searchPath, filePath).replace(/\\/g, "/");
-            const displayPath =
-              rel && !rel.startsWith("..") ? rel : path.basename(filePath);
+            const displayPath = rel && !rel.startsWith("..") ? rel : path.basename(filePath);
 
             const grepFile: GrepFile = {
               path: displayPath,
@@ -439,10 +423,7 @@ export function createGrepTool(
 
               // insert "--" separator for non-contiguous groups within file
               // (gap > 1 means there's a break in line numbers)
-              if (
-                lastOutputLineNum >= 0 &&
-                ev.lineNumber > lastOutputLineNum + 1
-              ) {
+              if (lastOutputLineNum >= 0 && ev.lineNumber > lastOutputLineNum + 1) {
                 outputLines.push("--");
               }
 
@@ -478,13 +459,9 @@ export function createGrepTool(
             // with context lines, the threshold is higher
             const limit = config.maxTotalMatches * 2;
             const { head, tail, truncatedCount } = headTail(outputLines, limit);
-            output = [
-              ...head,
-              "",
-              `... [${truncatedCount} lines truncated] ...`,
-              "",
-              ...tail,
-            ].join("\n");
+            output = [...head, "", `... [${truncatedCount} lines truncated] ...`, "", ...tail].join(
+              "\n",
+            );
             // remap match indices into the truncated output
             const headLen = head.length;
             const gapLen = 3; // blank + marker + blank
@@ -496,18 +473,14 @@ export function createGrepTool(
                 return -1; // truncated
               })
               .filter((i) => i >= 0);
-            notices.push(
-              `${truncatedCount} lines truncated, showing first and last ${limit / 2}`,
-            );
+            notices.push(`${truncatedCount} lines truncated, showing first and last ${limit / 2}`);
           } else {
             output = outputLines.join("\n");
             finalMatchIndices = matchLineIndices;
           }
 
           if (killedDueToLimit) {
-            notices.push(
-              `stopped at ${maxCollectMatches} matches — refine pattern`,
-            );
+            notices.push(`stopped at ${maxCollectMatches} matches — refine pattern`);
           }
 
           const filesAtLimit = Array.from(perFileMatchCount.values()).filter(
@@ -537,11 +510,7 @@ export function createGrepTool(
       });
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const fileGroups: GrepFile[] | undefined = result.details?.fileGroups;
       const notices: string[] = result.details?.notices ?? [];
       const basePath: string | undefined = result.details?.searchPath;

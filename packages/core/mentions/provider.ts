@@ -1,7 +1,4 @@
-import type {
-  AutocompleteItem,
-  AutocompleteProvider,
-} from "@mariozechner/pi-tui";
+import type { AutocompleteItem, AutocompleteProvider } from "@mariozechner/pi-tui";
 import { resolveGitRoot } from "./commit-index";
 import { detectMentionPrefix } from "./parse";
 import {
@@ -62,10 +59,7 @@ export class MentionAwareProvider implements AutocompleteProvider {
     }
 
     return {
-      items: dedupeAutocompleteItems([...special, ...base.items]).slice(
-        0,
-        this.maxItems,
-      ),
+      items: dedupeAutocompleteItems([...special, ...base.items]).slice(0, this.maxItems),
       prefix: prefix.raw,
     };
   }
@@ -82,13 +76,7 @@ export class MentionAwareProvider implements AutocompleteProvider {
     cursorCol: number;
   } {
     if (!this.specialItems.has(item)) {
-      return this.baseProvider.applyCompletion(
-        lines,
-        cursorLine,
-        cursorCol,
-        item,
-        prefix,
-      );
+      return this.baseProvider.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
     }
 
     const line = lines[cursorLine] ?? "";
@@ -117,10 +105,7 @@ export class MentionAwareProvider implements AutocompleteProvider {
       .slice(0, this.maxItems);
   }
 
-  private getValueSuggestions(
-    kind: MentionKind,
-    query: string,
-  ): AutocompleteItem[] {
+  private getValueSuggestions(kind: MentionKind, query: string): AutocompleteItem[] {
     const source = getMentionSource(kind);
     if (!source) return [];
     if (!(source.isEnabled?.(this.getSourceContext()) ?? true)) return [];
@@ -149,9 +134,7 @@ export class MentionAwareProvider implements AutocompleteProvider {
   }
 }
 
-function dedupeAutocompleteItems(
-  items: AutocompleteItem[],
-): AutocompleteItem[] {
+function dedupeAutocompleteItems(items: AutocompleteItem[]): AutocompleteItem[] {
   const seen = new Set<string>();
   return items.filter((item) => {
     const key = `${item.value}\u0000${item.label}`;

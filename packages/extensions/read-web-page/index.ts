@@ -14,10 +14,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { htmlToMarkdown } from "@cvr/pi-html-to-md";
@@ -72,9 +69,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isReadWebPageConfig(
-  value: Record<string, unknown>,
-): value is ReadWebPageExtConfig {
+function isReadWebPageConfig(value: Record<string, unknown>): value is ReadWebPageExtConfig {
   return (
     isNonEmptyString(value.model) &&
     typeof value.promptFile === "string" &&
@@ -82,17 +77,13 @@ function isReadWebPageConfig(
   );
 }
 
-export const READ_WEB_PAGE_CONFIG_SCHEMA: ExtensionConfigSchema<ReadWebPageExtConfig> =
-  {
-    validate: isReadWebPageConfig,
-  };
+export const READ_WEB_PAGE_CONFIG_SCHEMA: ExtensionConfigSchema<ReadWebPageExtConfig> = {
+  validate: isReadWebPageConfig,
+};
 
 export const DEFAULT_PROMPT_SYSTEM = `Analyze web page content and answer questions. Be concise, answer from provided content only. No filler.`;
 
-function fetchUrl(
-  url: string,
-  signal?: AbortSignal,
-): Promise<{ html: string; error?: string }> {
+function fetchUrl(url: string, signal?: AbortSignal): Promise<{ html: string; error?: string }> {
   return new Promise((resolve) => {
     const args = [
       "-sL",
@@ -174,9 +165,7 @@ export interface ReadWebPageConfig {
   model?: string;
 }
 
-export function createReadWebPageTool(
-  config: ReadWebPageConfig = {},
-): ToolDefinition {
+export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefinition {
   return {
     name: "read_web_page",
     label: "Read Web Page",
@@ -206,14 +195,12 @@ export function createReadWebPageTool(
       ),
       start_index: Type.Optional(
         Type.Number({
-          description:
-            "Character offset to start from in the converted content (for pagination).",
+          description: "Character offset to start from in the converted content (for pagination).",
         }),
       ),
       max_length: Type.Optional(
         Type.Number({
-          description:
-            "Maximum number of characters to return (for pagination).",
+          description: "Maximum number of characters to return (for pagination).",
         }),
       ),
       raw: Type.Optional(
@@ -223,8 +210,7 @@ export function createReadWebPageTool(
       ),
       forceRefetch: Type.Optional(
         Type.Boolean({
-          description:
-            "Force a live fetch (no caching). Currently always fetches live.",
+          description: "Force a live fetch (no caching). Currently always fetches live.",
         }),
       ),
     }),
@@ -262,10 +248,7 @@ export function createReadWebPageTool(
 
       // raw mode: skip conversion entirely
       if (p.raw) {
-        const content = headTailChars(
-          `Raw HTML content as requested:\n${html}`,
-          MAX_CHARS,
-        ).text;
+        const content = headTailChars(`Raw HTML content as requested:\n${html}`, MAX_CHARS).text;
         return { content: [{ type: "text" as const, text: content }] } as any;
       }
 
@@ -343,17 +326,11 @@ export function createReadWebPageTool(
         singleResult.errorMessage = result.errorMessage;
 
         const isError =
-          result.exitCode !== 0 ||
-          result.stopReason === "error" ||
-          result.stopReason === "aborted";
+          result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
         const output = getFinalOutput(result.messages) || "(no output)";
 
         if (isError) {
-          return subAgentResult(
-            result.errorMessage || result.stderr || output,
-            singleResult,
-            true,
-          );
+          return subAgentResult(result.errorMessage || result.stderr || output, singleResult, true);
         }
 
         return subAgentResult(output, singleResult);
@@ -365,12 +342,8 @@ export function createReadWebPageTool(
     renderCall(args: any, theme: any) {
       const url = args.url || "...";
       const displayUrl = url.length > 60 ? `${url.slice(0, 60)}...` : url;
-      const linkedUrl = url.startsWith("http")
-        ? osc8Link(url, displayUrl)
-        : displayUrl;
-      let text =
-        theme.fg("toolTitle", theme.bold("read_web_page ")) +
-        theme.fg("dim", linkedUrl);
+      const linkedUrl = url.startsWith("http") ? osc8Link(url, displayUrl) : displayUrl;
+      let text = theme.fg("toolTitle", theme.bold("read_web_page ")) + theme.fg("dim", linkedUrl);
       const label = args.prompt || args.objective;
       if (label) {
         const short = label.length > 40 ? `${label.slice(0, 40)}...` : label;
@@ -383,11 +356,7 @@ export function createReadWebPageTool(
       const details = result.details as SingleResult | undefined;
       if (!details) {
         const text = result.content[0];
-        return new Text(
-          text?.type === "text" ? text.text : "(no output)",
-          0,
-          0,
-        );
+        return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
       }
       const container = new Container();
       renderAgentTree(details, container, expanded, theme, {
@@ -421,7 +390,6 @@ export function createReadWebPageExtension(
   };
 }
 
-const readWebPageExtension: (pi: ExtensionAPI) => void =
-  createReadWebPageExtension();
+const readWebPageExtension: (pi: ExtensionAPI) => void = createReadWebPageExtension();
 
 export default readWebPageExtension;

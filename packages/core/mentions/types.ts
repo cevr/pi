@@ -62,9 +62,7 @@ export type ResolvedMention =
   | ResolvedSessionMentionResult
   | UnresolvedMentionResult;
 
-export function toResolvedSessionMention(
-  session: MentionableSession,
-): ResolvedSessionMention {
+export function toResolvedSessionMention(session: MentionableSession): ResolvedSessionMention {
   return {
     sessionId: session.sessionId,
     sessionName: session.sessionName,

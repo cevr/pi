@@ -11,10 +11,7 @@ function getTokenRegex(): RegExp | null {
   const familyPattern = listMentionKinds().map(escapeRegex).join("|");
   if (familyPattern.length === 0) return null;
 
-  return new RegExp(
-    String.raw`(?<![\w/])@(${familyPattern})/([A-Za-z0-9][A-Za-z0-9._-]*)`,
-    "g",
-  );
+  return new RegExp(String.raw`(?<![\w/])@(${familyPattern})/([A-Za-z0-9][A-Za-z0-9._-]*)`, "g");
 }
 
 export function parseMentions(text: string): MentionToken[] {
@@ -29,8 +26,7 @@ export function parseMentions(text: string): MentionToken[] {
     const value = match[2];
     const start = match.index ?? -1;
 
-    if (!kind || !isMentionKind(kind) || value === undefined || start < 0)
-      continue;
+    if (!kind || !isMentionKind(kind) || value === undefined || start < 0) continue;
 
     mentions.push({
       kind,

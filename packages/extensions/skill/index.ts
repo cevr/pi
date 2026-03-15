@@ -20,18 +20,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
-import {
-  boxRendererWindowed,
-  textSection,
-  type Excerpt,
-} from "@cvr/pi-box-format";
+import { boxRendererWindowed, textSection, type Excerpt } from "@cvr/pi-box-format";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
   { focus: "head" as const, context: 3 },
@@ -230,8 +223,7 @@ export function createSkillTool(): ToolDefinition {
 
     parameters: Type.Object({
       name: Type.String({
-        description:
-          "The name of the skill to load (must match one of the available skills).",
+        description: "The name of the skill to load (must match one of the available skills).",
       }),
       arguments: Type.Optional(
         Type.String({
@@ -257,10 +249,7 @@ export function createSkillTool(): ToolDefinition {
 
       if (!skill) {
         const available = listAvailableSkills(ctx.cwd);
-        const list =
-          available.length > 0
-            ? `\n\navailable skills: ${available.join(", ")}`
-            : "";
+        const list = available.length > 0 ? `\n\navailable skills: ${available.join(", ")}` : "";
         return {
           content: [
             {
@@ -316,14 +305,9 @@ export function createSkillTool(): ToolDefinition {
       } as any;
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
       if (content.text.startsWith("<loaded_skill")) {
         return boxRendererWindowed(
           () => [textSection(undefined, "skill loaded", true)],

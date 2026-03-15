@@ -17,10 +17,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import {
@@ -97,14 +94,10 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isStringArray(value: unknown): value is string[] {
-  return (
-    Array.isArray(value) && value.every((item) => typeof item === "string")
-  );
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-function isLibrarianConfig(
-  value: Record<string, unknown>,
-): value is LibrarianExtConfig {
+function isLibrarianConfig(value: Record<string, unknown>): value is LibrarianExtConfig {
   return (
     isNonEmptyString(value.model) &&
     isStringArray(value.extensionTools) &&
@@ -131,9 +124,7 @@ interface LibrarianParams {
   context?: string;
 }
 
-export function createLibrarianTool(
-  config: LibrarianConfig = {},
-): ToolDefinition {
+export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinition {
   return {
     name: "librarian",
     label: "Librarian",
@@ -262,17 +253,11 @@ export function createLibrarianTool(
       singleResult.errorMessage = result.errorMessage;
 
       const isError =
-        result.exitCode !== 0 ||
-        result.stopReason === "error" ||
-        result.stopReason === "aborted";
+        result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
       const output = getFinalOutput(result.messages) || "(no output)";
 
       if (isError) {
-        return subAgentResult(
-          result.errorMessage || result.stderr || output,
-          singleResult,
-          true,
-        );
+        return subAgentResult(result.errorMessage || result.stderr || output, singleResult, true);
       }
 
       return subAgentResult(output, singleResult);
@@ -285,8 +270,7 @@ export function createLibrarianTool(
           : args.query
         : "...";
       return new Text(
-        theme.fg("toolTitle", theme.bold("librarian ")) +
-          theme.fg("dim", preview),
+        theme.fg("toolTitle", theme.bold("librarian ")) + theme.fg("dim", preview),
         0,
         0,
       );
@@ -296,11 +280,7 @@ export function createLibrarianTool(
       const details = result.details as SingleResult | undefined;
       if (!details) {
         const text = result.content[0];
-        return new Text(
-          text?.type === "text" ? text.text : "(no output)",
-          0,
-          0,
-        );
+        return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
       }
       const container = new Container();
       renderAgentTree(details, container, expanded, theme, {
@@ -336,7 +316,6 @@ export function createLibrarianExtension(
   };
 }
 
-const librarianExtension: (pi: ExtensionAPI) => void =
-  createLibrarianExtension();
+const librarianExtension: (pi: ExtensionAPI) => void = createLibrarianExtension();
 
 export default librarianExtension;

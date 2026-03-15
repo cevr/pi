@@ -17,10 +17,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import {
@@ -72,15 +69,11 @@ export const DEFAULT_DEPS: TaskExtensionDeps = {
 };
 
 function isStringArray(value: unknown): value is string[] {
-  return (
-    Array.isArray(value) && value.every((item) => typeof item === "string")
-  );
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
 function isTaskConfig(value: Record<string, unknown>): value is TaskExtConfig {
-  return (
-    isStringArray(value.builtinTools) && isStringArray(value.extensionTools)
-  );
+  return isStringArray(value.builtinTools) && isStringArray(value.extensionTools);
 }
 
 export const TASK_CONFIG_SCHEMA: ExtensionConfigSchema<TaskExtConfig> = {
@@ -129,8 +122,7 @@ export function createTaskTool(config: TaskConfig = {}): ToolDefinition {
           "The task for the agent to perform. Be specific and include any relevant context.",
       }),
       description: Type.String({
-        description:
-          "A very short description of the task that can be displayed to the user.",
+        description: "A very short description of the task that can be displayed to the user.",
       }),
     }),
 
@@ -186,17 +178,11 @@ export function createTaskTool(config: TaskConfig = {}): ToolDefinition {
       singleResult.errorMessage = result.errorMessage;
 
       const isError =
-        result.exitCode !== 0 ||
-        result.stopReason === "error" ||
-        result.stopReason === "aborted";
+        result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
       const output = getFinalOutput(result.messages) || "(no output)";
 
       if (isError) {
-        return subAgentResult(
-          result.errorMessage || result.stderr || output,
-          singleResult,
-          true,
-        );
+        return subAgentResult(result.errorMessage || result.stderr || output, singleResult, true);
       }
 
       return subAgentResult(output, singleResult);
@@ -205,22 +191,14 @@ export function createTaskTool(config: TaskConfig = {}): ToolDefinition {
     renderCall(args: any, theme: any) {
       const desc = args.description || "...";
       const preview = desc.length > 80 ? `${desc.slice(0, 80)}...` : desc;
-      return new Text(
-        theme.fg("toolTitle", theme.bold("Task ")) + theme.fg("dim", preview),
-        0,
-        0,
-      );
+      return new Text(theme.fg("toolTitle", theme.bold("Task ")) + theme.fg("dim", preview), 0, 0);
     },
 
     renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) {
       const details = result.details as SingleResult | undefined;
       if (!details) {
         const text = result.content[0];
-        return new Text(
-          text?.type === "text" ? text.text : "(no output)",
-          0,
-          0,
-        );
+        return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
       }
       const container = new Container();
       renderAgentTree(details, container, expanded, theme, {

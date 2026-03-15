@@ -49,10 +49,7 @@ export function windowItems<T>(
     } else if (focus === "tail") {
       return [Math.max(0, total - context), total - 1];
     } else {
-      return [
-        Math.max(0, focus - context),
-        Math.min(total - 1, focus + context),
-      ];
+      return [Math.max(0, focus - context), Math.min(total - 1, focus + context)];
     }
   });
 
@@ -105,12 +102,7 @@ export interface ShowResult {
  * text-specific windowing: expands text to visual lines via pi-tui Text,
  * then applies excerpt windowing.
  */
-export function show(
-  text: string,
-  excerpts: Excerpt[],
-  width: number,
-  paddingX = 0,
-): ShowResult {
+export function show(text: string, excerpts: Excerpt[], width: number, paddingX = 0): ShowResult {
   if (!text) {
     return { visualLines: [], skippedRanges: [] };
   }

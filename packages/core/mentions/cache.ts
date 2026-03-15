@@ -20,11 +20,7 @@ export function createCache<K, V>(): CacheStore<K, V> {
   };
 }
 
-export function getOrSet<K, V>(
-  cache: CacheStore<K, V>,
-  key: K,
-  load: () => V,
-): V {
+export function getOrSet<K, V>(cache: CacheStore<K, V>, key: K, load: () => V): V {
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
   return cache.set(key, load());

@@ -8,10 +8,7 @@ import { detectMentionPrefix, parseMentions } from "./parse";
 import { MentionAwareProvider } from "./provider";
 import { resolveMentions } from "./resolve";
 import { toResolvedSessionMention } from "./types";
-import {
-  renderResolvedMentionsBlock,
-  renderResolvedMentionsText,
-} from "./render";
+import { renderResolvedMentionsBlock, renderResolvedMentionsText } from "./render";
 import {
   clearCommitIndexCache,
   getCommitIndex,
@@ -23,18 +20,12 @@ import {
   resolveMentionableSession,
   type MentionableSession,
 } from "./session-index";
-import {
-  getMentionSource,
-  registerMentionSource,
-  type MentionSource,
-} from "./sources";
+import { getMentionSource, registerMentionSource, type MentionSource } from "./sources";
 
 describe("parseMentions", () => {
   it("parses canonical mention tokens", () => {
     expect(
-      parseMentions(
-        "use @commit/abc1234 then check @session/123e4567-e89b and @handoff/run-42",
-      ),
+      parseMentions("use @commit/abc1234 then check @session/123e4567-e89b and @handoff/run-42"),
     ).toEqual([
       {
         kind: "commit",
@@ -266,12 +257,8 @@ describe("mention autocomplete", () => {
 
 describe("resolveMentions", () => {
   it("resolves session and handoff mentions from a provided session index", async () => {
-    const unregisterSession = registerMentionSource(
-      createTestSessionMentionSource("session"),
-    );
-    const unregisterHandoff = registerMentionSource(
-      createTestSessionMentionSource("handoff"),
-    );
+    const unregisterSession = registerMentionSource(createTestSessionMentionSource("session"));
+    const unregisterHandoff = registerMentionSource(createTestSessionMentionSource("handoff"));
 
     try {
       await expect(
@@ -377,9 +364,7 @@ const MENTIONABLE_SESSIONS: MentionableSession[] = [
   },
 ];
 
-function createTestSessionMentionSource(
-  kind: "session" | "handoff",
-): MentionSource {
+function createTestSessionMentionSource(kind: "session" | "handoff"): MentionSource {
   return {
     kind,
     description: kind,
@@ -388,25 +373,17 @@ function createTestSessionMentionSource(
         .filter((session) => kind !== "handoff" || session.isHandoffCandidate)
         .filter(
           (session) =>
-            query.length === 0 ||
-            session.sessionId.toLowerCase().startsWith(query.toLowerCase()),
+            query.length === 0 || session.sessionId.toLowerCase().startsWith(query.toLowerCase()),
         )
         .slice(0, 8)
         .map((session) => ({
           value: `@${kind}/${session.sessionId}`,
           label: `@${kind}/${session.sessionId}`,
-          description:
-            session.sessionName ||
-            session.firstUserMessage ||
-            session.workspace,
+          description: session.sessionName || session.firstUserMessage || session.workspace,
         }));
     },
     resolve(token, context) {
-      const result = resolveMentionableSession(
-        context.sessions ?? [],
-        token.value,
-        kind,
-      );
+      const result = resolveMentionableSession(context.sessions ?? [], token.value, kind);
 
       if (result.status === "resolved") {
         return {
@@ -420,10 +397,7 @@ function createTestSessionMentionSource(
       return {
         token,
         status: "unresolved",
-        reason:
-          result.status === "ambiguous"
-            ? `${kind}_prefix_ambiguous`
-            : `${kind}_not_found`,
+        reason: result.status === "ambiguous" ? `${kind}_prefix_ambiguous` : `${kind}_not_found`,
       };
     },
   };
@@ -439,12 +413,7 @@ function createRepo(): string {
   return dir;
 }
 
-function commitFile(
-  repo: string,
-  name: string,
-  contents: string,
-  message: string,
-): string {
+function commitFile(repo: string, name: string, contents: string, message: string): string {
   writeFileSync(join(repo, name), contents);
   execFileSync("git", ["add", name], { cwd: repo });
   const env = {
@@ -462,16 +431,13 @@ function commitFile(
 afterEach(() => {
   clearCommitIndexCache();
   clearSessionMentionCache();
-  for (const repo of repos.splice(0))
-    rmSync(repo, { recursive: true, force: true });
+  for (const repo of repos.splice(0)) rmSync(repo, { recursive: true, force: true });
 });
 
 describe("parseCommitLog", () => {
   it("parses git log output deterministically", () => {
     expect(
-      parseCommitLog(
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\t2026-03-06T16:00:00.000Z\tfirst\n",
-      ),
+      parseCommitLog("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\t2026-03-06T16:00:00.000Z\tfirst\n"),
     ).toEqual([
       {
         sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

@@ -46,12 +46,7 @@ export function getFinalOutput(messages: Message[]): string {
     const msg = messages[i];
     if (msg && msg.role === "assistant") {
       for (const part of msg.content) {
-        if (
-          typeof part === "object" &&
-          part !== null &&
-          "type" in part &&
-          part.type === "text"
-        ) {
+        if (typeof part === "object" && part !== null && "type" in part && part.type === "text") {
           return (part as { type: "text"; text: string }).text;
         }
       }
@@ -133,8 +128,7 @@ export function formatUsageStats(
   model?: string,
 ): string {
   const parts: string[] = [];
-  if (usage.turns)
-    parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
+  if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
   if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
   if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
   if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
@@ -155,10 +149,7 @@ function toolLabel(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-function toolArgSummary(
-  toolName: string,
-  args: Record<string, unknown>,
-): string {
+function toolArgSummary(toolName: string, args: Record<string, unknown>): string {
   switch (toolName) {
     case "bash": {
       const command = (args.cmd ?? args.command ?? "...") as string;
@@ -243,31 +234,22 @@ export function renderAgentTree(
   const CONT = fg("muted", "│   ");
   const mdTheme = getMarkdownTheme();
 
-  const isError =
-    r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+  const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
   const icon =
-    r.exitCode === -1
-      ? fg("warning", "⋯")
-      : isError
-        ? fg("error", "✕")
-        : fg("success", "✓");
+    r.exitCode === -1 ? fg("warning", "⋯") : isError ? fg("error", "✕") : fg("success", "✓");
 
   if (opts.header === "statusOnly") {
     let header = icon;
-    if (isError && r.stopReason)
-      header += ` ${fg("error", `[${r.stopReason}]`)}`;
+    if (isError && r.stopReason) header += ` ${fg("error", `[${r.stopReason}]`)}`;
     container.addChild(new Text(header, 0, 0));
   } else {
     let header = `${icon} ${fg("toolTitle", theme.bold(opts.label ?? r.agent))}`;
-    if (isError && r.stopReason)
-      header += ` ${fg("error", `[${r.stopReason}]`)}`;
+    if (isError && r.stopReason) header += ` ${fg("error", `[${r.stopReason}]`)}`;
     container.addChild(new Text(header, 0, 0));
   }
 
   if (isError && r.errorMessage) {
-    container.addChild(
-      new Text(MID + fg("error", `Error: ${r.errorMessage}`), 0, 0),
-    );
+    container.addChild(new Text(MID + fg("error", `Error: ${r.errorMessage}`), 0, 0));
   }
 
   const displayItems = getDisplayItems(r.messages);
@@ -284,20 +266,15 @@ export function renderAgentTree(
 
   if (showExpanded) children.push({ kind: "text", content: r.task });
 
-  const visibleTools = showExpanded
-    ? toolCalls
-    : toolCalls.slice(-COLLAPSED_ITEM_COUNT);
-  const skippedTools = showExpanded
-    ? 0
-    : toolCalls.length - visibleTools.length;
+  const visibleTools = showExpanded ? toolCalls : toolCalls.slice(-COLLAPSED_ITEM_COUNT);
+  const skippedTools = showExpanded ? 0 : toolCalls.length - visibleTools.length;
   if (skippedTools > 0)
     children.push({
       kind: "text",
       content: `... ${skippedTools} earlier calls`,
     });
   for (const tc of visibleTools) children.push({ kind: "tool", item: tc });
-  if (finalOutput)
-    children.push({ kind: "summary", output: finalOutput.trim() });
+  if (finalOutput) children.push({ kind: "summary", output: finalOutput.trim() });
 
   if (children.length === 0) {
     container.addChild(new Text(END + fg("muted", "(no output)"), 0, 0));
@@ -308,13 +285,9 @@ export function renderAgentTree(
       const connector = isLast ? END : MID;
 
       if (child.kind === "text") {
-        container.addChild(
-          new Text(connector + fg("dim", child.content), 0, 0),
-        );
+        container.addChild(new Text(connector + fg("dim", child.content), 0, 0));
       } else if (child.kind === "tool") {
-        container.addChild(
-          new TruncatedText(connector + renderToolLine(child.item, fg), 0, 0),
-        );
+        container.addChild(new TruncatedText(connector + renderToolLine(child.item, fg), 0, 0));
       } else if (child.kind === "summary") {
         container.addChild(new Text(connector + fg("muted", "Summary:"), 0, 0));
         const indent = isLast ? "    " : CONT;

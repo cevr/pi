@@ -12,22 +12,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { Type } from "@sinclair/typebox";
 import { saveChange, simpleDiff } from "@cvr/pi-file-tracker";
 import { withFileLock } from "@cvr/pi-mutex";
 import { resolveToAbsolute } from "@cvr/pi-fs";
-import {
-  boxRendererWindowed,
-  textSection,
-  osc8Link,
-  type Excerpt,
-} from "@cvr/pi-box-format";
+import { boxRendererWindowed, textSection, osc8Link, type Excerpt } from "@cvr/pi-box-format";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
   { focus: "head" as const, context: 3 },
@@ -64,27 +56,16 @@ export function createCreateFileTool(): ToolDefinition {
     renderCall(args: any, theme: any) {
       const filePath = args.path || "...";
       const home = os.homedir();
-      const shortened = filePath.startsWith(home)
-        ? `~${filePath.slice(home.length)}`
-        : filePath;
+      const shortened = filePath.startsWith(home) ? `~${filePath.slice(home.length)}` : filePath;
       const linked = filePath.startsWith("/")
         ? osc8Link(`file://${filePath}`, shortened)
         : shortened;
-      return new Text(
-        theme.fg("toolTitle", theme.bold("Write ")) + theme.fg("dim", linked),
-        0,
-        0,
-      );
+      return new Text(theme.fg("toolTitle", theme.bold("Write ")) + theme.fg("dim", linked), 0, 0);
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
       return boxRendererWindowed(
         () => [textSection(undefined, content.text)],
         {
@@ -103,9 +84,7 @@ export function createCreateFileTool(): ToolDefinition {
       return withFileLock(resolved, async () => {
         // capture before-state for undo tracking
         const isNewFile = !fs.existsSync(resolved);
-        const beforeContent = isNewFile
-          ? ""
-          : fs.readFileSync(resolved, "utf-8");
+        const beforeContent = isNewFile ? "" : fs.readFileSync(resolved, "utf-8");
 
         // mkdirp
         const dir = path.dirname(resolved);

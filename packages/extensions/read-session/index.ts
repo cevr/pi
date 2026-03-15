@@ -13,10 +13,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { walkDirSync } from "@cvr/pi-fs";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
@@ -62,9 +59,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isReadSessionConfig(
-  value: Record<string, unknown>,
-): value is ReadSessionExtConfig {
+function isReadSessionConfig(value: Record<string, unknown>): value is ReadSessionExtConfig {
   return (
     isNonEmptyString(value.model) &&
     isNonEmptyString(value.sessionsDir) &&
@@ -74,10 +69,9 @@ function isReadSessionConfig(
   );
 }
 
-export const READ_SESSION_CONFIG_SCHEMA: ExtensionConfigSchema<ReadSessionExtConfig> =
-  {
-    validate: isReadSessionConfig,
-  };
+export const READ_SESSION_CONFIG_SCHEMA: ExtensionConfigSchema<ReadSessionExtConfig> = {
+  validate: isReadSessionConfig,
+};
 
 const DEFAULT_SYSTEM_PROMPT = `You are analyzing a pi coding agent session transcript. Extract information relevant to the user's goal. Be specific — cite file paths, decisions made, code patterns discussed. If a specific branch is marked as the target, focus on that branch but use other branches for context about what was tried and abandoned.`;
 
@@ -122,18 +116,13 @@ interface ReadSessionParams {
   leaf_id?: string;
 }
 
-export function findSessionFile(
-  sessionId: string,
-  sessionsDir: string,
-): string | null {
+export function findSessionFile(sessionId: string, sessionsDir: string): string | null {
   if (!fs.existsSync(sessionsDir)) return null;
 
   // fast path: check filename contains session id
   const byFilename = walkDirSync(sessionsDir, {
     stopWhen: (entry) =>
-      entry.isFile() &&
-      entry.name.endsWith(".jsonl") &&
-      entry.name.includes(sessionId),
+      entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(sessionId),
   })[0];
   if (byFilename) return byFilename;
 
@@ -143,9 +132,7 @@ export function findSessionFile(
       stopWhen: (entry, absolutePath) => {
         if (!entry.isFile() || !entry.name.endsWith(".jsonl")) return false;
         try {
-          const firstLine = fs
-            .readFileSync(absolutePath, "utf-8")
-            .split("\n")[0];
+          const firstLine = fs.readFileSync(absolutePath, "utf-8").split("\n")[0];
           if (!firstLine) return false;
           const header = JSON.parse(firstLine);
           return header.type === "session" && header.id === sessionId;
@@ -261,9 +248,7 @@ function renderSessionTree(
           if (part.type === "text" && part.text) {
             textParts.push(part.text);
           } else if (part.type === "toolCall") {
-            const args = part.arguments
-              ? JSON.stringify(part.arguments).slice(0, 200)
-              : "";
+            const args = part.arguments ? JSON.stringify(part.arguments).slice(0, 200) : "";
             toolCalls.push(`${part.name}(${args})`);
           }
           // skip thinking blocks — they're internal
@@ -286,13 +271,9 @@ function renderSessionTree(
             .join("\n") || "";
         // truncate tool results to avoid overwhelming the context
         const truncated =
-          textContent.length > 500
-            ? `${textContent.slice(0, 500)}... (truncated)`
-            : textContent;
+          textContent.length > 500 ? `${textContent.slice(0, 500)}... (truncated)` : textContent;
         if (truncated) {
-          parts.push(
-            `### ${toolName} result${msg.isError ? " (ERROR)" : ""}${marker}`,
-          );
+          parts.push(`### ${toolName} result${msg.isError ? " (ERROR)" : ""}${marker}`);
           parts.push(truncated);
           parts.push("");
         }
@@ -331,9 +312,7 @@ function renderSessionTree(
 
 // --- tool ---
 
-export function createReadSessionTool(
-  config: ReadSessionConfig,
-): ToolDefinition {
+export function createReadSessionTool(config: ReadSessionConfig): ToolDefinition {
   return {
     name: "read_session",
     label: "Read Session",
@@ -356,8 +335,7 @@ export function createReadSessionTool(
         description: "The session ID to read (from search_sessions results).",
       }),
       goal: Type.String({
-        description:
-          "What information you're looking for. Be specific about what to extract.",
+        description: "What information you're looking for. Be specific about what to extract.",
       }),
       leaf_id: Type.Optional(
         Type.String({
@@ -385,11 +363,7 @@ export function createReadSessionTool(
       }
 
       // render session tree
-      const { markdown } = renderSessionTree(
-        sessionFile,
-        p.leaf_id,
-        config.maxChars,
-      );
+      const { markdown } = renderSessionTree(sessionFile, p.leaf_id, config.maxChars);
 
       if (!markdown.trim()) {
         return {
@@ -435,8 +409,7 @@ export function createReadSessionTool(
               content: [
                 {
                   type: "text",
-                  text:
-                    getFinalOutput(partial.messages) || "(reading session...)",
+                  text: getFinalOutput(partial.messages) || "(reading session...)",
                 },
               ],
               details: singleResult,
@@ -453,17 +426,11 @@ export function createReadSessionTool(
       singleResult.errorMessage = result.errorMessage;
 
       const isError =
-        result.exitCode !== 0 ||
-        result.stopReason === "error" ||
-        result.stopReason === "aborted";
+        result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
       const output = getFinalOutput(result.messages) || "(no output)";
 
       if (isError) {
-        return subAgentResult(
-          result.errorMessage || result.stderr || output,
-          singleResult,
-          true,
-        );
+        return subAgentResult(result.errorMessage || result.stderr || output, singleResult, true);
       }
 
       return subAgentResult(output, singleResult);
@@ -475,14 +442,9 @@ export function createReadSessionTool(
           ? `${args.goal.slice(0, 60)}...`
           : args.goal
         : "...";
-      let text =
-        theme.fg("toolTitle", theme.bold("read_session ")) +
-        theme.fg("dim", goal);
+      let text = theme.fg("toolTitle", theme.bold("read_session ")) + theme.fg("dim", goal);
       if (args.session_id) {
-        const shortId =
-          args.session_id.length > 8
-            ? args.session_id.slice(0, 8)
-            : args.session_id;
+        const shortId = args.session_id.length > 8 ? args.session_id.slice(0, 8) : args.session_id;
         text += theme.fg("muted", ` (${shortId}...)`);
       }
       return new Text(text, 0, 0);
@@ -492,11 +454,7 @@ export function createReadSessionTool(
       const details = result.details as SingleResult | undefined;
       if (!details) {
         const text = result.content[0];
-        return new Text(
-          text?.type === "text" ? text.text : "(no output)",
-          0,
-          0,
-        );
+        return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
       }
       const container = new Container();
       renderAgentTree(details, container, expanded, theme, {
@@ -531,7 +489,6 @@ export function createReadSessionExtension(
   };
 }
 
-const readSessionExtension: (pi: ExtensionAPI) => void =
-  createReadSessionExtension();
+const readSessionExtension: (pi: ExtensionAPI) => void = createReadSessionExtension();
 
 export default readSessionExtension;

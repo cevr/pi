@@ -51,16 +51,10 @@ function sortByPriority(children: InlineSegment[]): InlineSegment[] {
   return [...children].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
 }
 
-function joinGroup(
-  children: InlineSegment[],
-  width: number,
-  gap: string,
-): string {
+function joinGroup(children: InlineSegment[], width: number, gap: string): string {
   if (children.length === 0) return "";
   const ordered = sortByPriority(children);
-  const parts = ordered
-    .map((child) => child.renderInline(width))
-    .filter((part) => part.length > 0);
+  const parts = ordered.map((child) => child.renderInline(width)).filter((part) => part.length > 0);
   return parts.join(gap);
 }
 
@@ -69,11 +63,7 @@ function clampToWidth(text: string, maxWidth: number): string {
   return truncateToWidth(text, maxWidth);
 }
 
-function layoutLine(
-  children: InlineSegment[],
-  width: number,
-  gap: string,
-): string {
+function layoutLine(children: InlineSegment[], width: number, gap: string): string {
   if (width <= 0) return "";
 
   const grouped: Record<Align, InlineSegment[]> = {
@@ -129,8 +119,7 @@ function layoutLine(
   const padLeft = Math.floor(paddingForCenter / 2);
   const padRight = paddingForCenter - padLeft;
 
-  const line =
-    left + " ".repeat(padLeft) + center + " ".repeat(padRight) + right;
+  const line = left + " ".repeat(padLeft) + center + " ".repeat(padRight) + right;
   return truncateToWidth(line, width);
 }
 
@@ -160,9 +149,7 @@ export class HorizontalLineWidget {
     ) {
       return this.cachedLines;
     }
-    const lines = [
-      layoutLine(this.getChildren(), width, this.options.gap ?? "  "),
-    ];
+    const lines = [layoutLine(this.getChildren(), width, this.options.gap ?? "  ")];
     this.cachedWidth = width;
     this.cachedLines = lines;
     this.cachedVersion = version;

@@ -10,10 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import {
@@ -26,12 +23,7 @@ import { Type } from "@sinclair/typebox";
 import { saveChange, simpleDiff } from "@cvr/pi-file-tracker";
 import { withFileLock } from "@cvr/pi-mutex";
 import { resolveWithVariants } from "@cvr/pi-fs";
-import {
-  boxRendererWindowed,
-  textSection,
-  osc8Link,
-  type Excerpt,
-} from "@cvr/pi-box-format";
+import { boxRendererWindowed, textSection, osc8Link, type Excerpt } from "@cvr/pi-box-format";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
   { focus: "head" as const, context: 3 },
@@ -72,14 +64,10 @@ const FORMATTERS: Formatter[] = [
 ];
 
 function isFormatterName(value: unknown): value is string {
-  return (
-    value === "auto" || FORMATTERS.some((formatter) => formatter.name === value)
-  );
+  return value === "auto" || FORMATTERS.some((formatter) => formatter.name === value);
 }
 
-function isFormatFileConfig(
-  value: Record<string, unknown>,
-): value is FormatFileExtConfig {
+function isFormatFileConfig(value: Record<string, unknown>): value is FormatFileExtConfig {
   return (
     isFormatterName(value.preferredFormatter) &&
     typeof value.formatterLookupTimeoutMs === "number" &&
@@ -95,9 +83,7 @@ export const FORMAT_FILE_CONFIG_SCHEMA: ExtensionConfigSchema<FormatFileExtConfi
 function findFormatter(preferred: string, timeoutMs: number): Formatter | null {
   const ordered =
     preferred !== "auto"
-      ? [...FORMATTERS].sort((a, b) =>
-          a.name === preferred ? -1 : b.name === preferred ? 1 : 0,
-        )
+      ? [...FORMATTERS].sort((a, b) => (a.name === preferred ? -1 : b.name === preferred ? 1 : 0))
       : FORMATTERS;
   for (const fmt of ordered) {
     const result = spawnSync("which", [fmt.name], {
@@ -126,27 +112,16 @@ export function createFormatFileTool(
     renderCall(args: any, theme: any) {
       const filePath = args.path || "...";
       const home = os.homedir();
-      const shortened = filePath.startsWith(home)
-        ? `~${filePath.slice(home.length)}`
-        : filePath;
+      const shortened = filePath.startsWith(home) ? `~${filePath.slice(home.length)}` : filePath;
       const linked = filePath.startsWith("/")
         ? osc8Link(`file://${filePath}`, shortened)
         : shortened;
-      return new Text(
-        theme.fg("toolTitle", theme.bold("Format ")) + theme.fg("dim", linked),
-        0,
-        0,
-      );
+      return new Text(theme.fg("toolTitle", theme.bold("Format ")) + theme.fg("dim", linked), 0, 0);
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
       return boxRendererWindowed(
         () => [textSection(undefined, content.text)],
         {
@@ -164,17 +139,12 @@ export function createFormatFileTool(
 
       if (!fs.existsSync(resolved)) {
         return {
-          content: [
-            { type: "text" as const, text: `file not found: ${resolved}` },
-          ],
+          content: [{ type: "text" as const, text: `file not found: ${resolved}` }],
           isError: true,
         } as any;
       }
 
-      const formatter = findFormatter(
-        config.preferredFormatter,
-        config.formatterLookupTimeoutMs,
-      );
+      const formatter = findFormatter(config.preferredFormatter, config.formatterLookupTimeoutMs);
       if (!formatter) {
         return {
           content: [
@@ -198,9 +168,7 @@ export function createFormatFileTool(
 
         if (result.status !== 0) {
           const err =
-            result.stderr?.trim() ||
-            result.stdout?.trim() ||
-            `exit code ${result.status}`;
+            result.stderr?.trim() || result.stdout?.trim() || `exit code ${result.status}`;
           return {
             content: [
               {
@@ -267,7 +235,6 @@ export function createFormatFileExtension(
   };
 }
 
-const formatFileExtension: (pi: ExtensionAPI) => void =
-  createFormatFileExtension();
+const formatFileExtension: (pi: ExtensionAPI) => void = createFormatFileExtension();
 
 export default formatFileExtension;

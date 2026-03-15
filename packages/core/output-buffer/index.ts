@@ -45,8 +45,7 @@ export function headTail<T>(
 export function formatHeadTail<T>(
   items: T[],
   maxItems: number = 100,
-  truncatedMsg: (count: number) => string = (n) =>
-    `... [${n} lines truncated] ...`,
+  truncatedMsg: (count: number) => string = (n) => `... [${n} lines truncated] ...`,
 ): string {
   const { head, tail, truncatedCount } = headTail(items, maxItems);
 
@@ -54,13 +53,7 @@ export function formatHeadTail<T>(
     return head.map(String).join("\n");
   }
 
-  const parts = [
-    ...head.map(String),
-    "",
-    truncatedMsg(truncatedCount),
-    "",
-    ...tail.map(String),
-  ];
+  const parts = [...head.map(String), "", truncatedMsg(truncatedCount), "", ...tail.map(String)];
 
   return parts.join("\n");
 }
@@ -167,13 +160,7 @@ export class OutputBuffer {
 
     // truncation: head + marker + tail
     const truncated = allLines - this.head.length - this.tail.length;
-    const parts = [
-      ...this.head,
-      "",
-      `... [${truncated} lines truncated] ...`,
-      "",
-      ...this.tail,
-    ];
+    const parts = [...this.head, "", `... [${truncated} lines truncated] ...`, "", ...this.tail];
 
     return { text: parts.join("\n"), truncatedLines: truncated };
   }
@@ -199,10 +186,7 @@ export class OutputBuffer {
 
     // overlap case: compute how many lines head and tail share
     // by position, not by value matching
-    const overlapLen = Math.max(
-      0,
-      this.head.length + this.tail.length - totalLines,
-    );
+    const overlapLen = Math.max(0, this.head.length + this.tail.length - totalLines);
 
     if (overlapLen === 0) {
       // no overlap — concatenate directly

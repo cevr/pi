@@ -20,16 +20,9 @@ import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
-import {
-  boxRendererWindowed,
-  type BoxSection,
-  type Excerpt,
-} from "@cvr/pi-box-format";
+import { boxRendererWindowed, type BoxSection, type Excerpt } from "@cvr/pi-box-format";
 import { getText } from "@cvr/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { withFileLock } from "@cvr/pi-mutex";
@@ -119,9 +112,7 @@ function getShell(): { shell: string; args: string[] } {
  * of rejecting it.
  */
 function splitCdCommand(cmd: string): { cwd: string; command: string } | null {
-  const match = cmd.match(
-    /^\s*cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|;)\s*(.+)$/s,
-  );
+  const match = cmd.match(/^\s*cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|;)\s*(.+)$/s);
   if (!match) return null;
   const dir = match[1] ?? match[2] ?? match[3] ?? "";
   const command = match[4];
@@ -259,10 +250,7 @@ function isGitCommand(cmd: string): boolean {
 function injectGitTrailers(cmd: string, sessionId: string): string {
   if (!/\bgit\s+commit\b/.test(cmd)) return cmd;
   if (/--trailer/.test(cmd)) return cmd;
-  return cmd.replace(
-    /\bgit\s+commit\b/,
-    `git commit --trailer "Session-Id: ${sessionId}"`,
-  );
+  return cmd.replace(/\bgit\s+commit\b/, `git commit --trailer "Session-Id: ${sessionId}"`);
 }
 
 // --- process management ---
@@ -389,17 +377,13 @@ export function createBashTool(
       const Text = getText();
       const cmd = args.cmd || args.command || "...";
       const timeout = args.timeout;
-      const timeoutSuffix = timeout
-        ? theme.fg("muted", ` (timeout ${timeout}s)`)
-        : "";
+      const timeoutSuffix = timeout ? theme.fg("muted", ` (timeout ${timeout}s)`) : "";
       // show first line only for multiline commands
       const lines = cmd.split("\n");
       const firstLine = lines[0];
       const multiSuffix = lines.length > 1 ? theme.fg("muted", " …") : "";
       return new Text(
-        theme.fg("toolTitle", theme.bold(`$ ${firstLine}`)) +
-          multiSuffix +
-          timeoutSuffix,
+        theme.fg("toolTitle", theme.bold(`$ ${firstLine}`)) + multiSuffix + timeoutSuffix,
         0,
         0,
       );
@@ -428,8 +412,7 @@ export function createBashTool(
         }
       }
 
-      if (!text || text === "(no output)")
-        return new Text(theme.fg("dim", "(no output)"), 0, 0);
+      if (!text || text === "(no output)") return new Text(theme.fg("dim", "(no output)"), 0, 0);
 
       const lines = text.split("\n");
 
@@ -480,11 +463,7 @@ export function createBashTool(
         throw new Error(`working directory does not exist: ${effectiveCwd}`);
       }
 
-      const verdict = evaluatePermission(
-        "Bash",
-        { cmd: command },
-        loadPermissions(),
-      );
+      const verdict = evaluatePermission("Bash", { cmd: command }, loadPermissions());
       if (verdict.action === "reject") {
         const msg = verdict.message
           ? `command rejected: ${verdict.message}`
@@ -594,9 +573,7 @@ async function runForegroundCommand(
       const { text: outputText } = output.format();
 
       if (aborted) {
-        const text = outputText
-          ? `${outputText}\n\ncommand aborted`
-          : "command aborted";
+        const text = outputText ? `${outputText}\n\ncommand aborted` : "command aborted";
         reject(new Error(text));
         return;
       }

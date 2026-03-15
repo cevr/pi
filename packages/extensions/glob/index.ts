@@ -16,19 +16,12 @@ import * as os from "node:os";
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import { createInterface } from "node:readline";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { Type } from "@sinclair/typebox";
 import { formatHeadTail } from "@cvr/pi-output-buffer";
-import {
-  boxRendererWindowed,
-  textSection,
-  type Excerpt,
-} from "@cvr/pi-box-format";
+import { boxRendererWindowed, textSection, type Excerpt } from "@cvr/pi-box-format";
 import {
   clearConfigCache,
   getEnabledExtensionConfig,
@@ -77,9 +70,7 @@ interface GlobParams {
   offset?: number;
 }
 
-export function createGlobTool(
-  config: GlobExtConfig = CONFIG_DEFAULTS,
-): ToolDefinition {
+export function createGlobTool(config: GlobExtConfig = CONFIG_DEFAULTS): ToolDefinition {
   return {
     name: "find",
     label: "Find Files",
@@ -95,8 +86,7 @@ export function createGlobTool(
 
     parameters: Type.Object({
       filePattern: Type.String({
-        description:
-          'Glob pattern like "**/*.js" or "src/**/*.ts" to match files.',
+        description: 'Glob pattern like "**/*.js" or "src/**/*.ts" to match files.',
       }),
       limit: Type.Optional(
         Type.Number({
@@ -112,21 +102,12 @@ export function createGlobTool(
 
     renderCall(args: any, theme: any) {
       const pattern = args.filePattern || "...";
-      return new Text(
-        theme.fg("toolTitle", theme.bold("Find ")) + theme.fg("dim", pattern),
-        0,
-        0,
-      );
+      return new Text(theme.fg("toolTitle", theme.bold("Find ")) + theme.fg("dim", pattern), 0, 0);
     },
 
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
+    renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const content = result.content?.[0];
-      if (!content || content.type !== "text")
-        return new Text("(no output)", 0, 0);
+      if (!content || content.type !== "text") return new Text("(no output)", 0, 0);
       return boxRendererWindowed(
         () => [textSection(undefined, content.text)],
         {
@@ -190,9 +171,7 @@ export function createGlobTool(
           rl.close();
           signal?.removeEventListener("abort", onAbort);
           resolve({
-            content: [
-              { type: "text" as const, text: `find error: ${err.message}` },
-            ],
+            content: [{ type: "text" as const, text: `find error: ${err.message}` }],
             isError: true,
           } as any);
         });
@@ -247,8 +226,7 @@ export function createGlobTool(
             output = formatHeadTail(
               allPaths,
               limit,
-              (n) =>
-                `... [${n} more results, use a more specific pattern to narrow] ...`,
+              (n) => `... [${n} more results, use a more specific pattern to narrow] ...`,
             );
             output += `\n\n(${total} total results)`;
           } else {

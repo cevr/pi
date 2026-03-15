@@ -23,9 +23,7 @@ export function boxTop(args: {
 }): string {
   const { variant, style, innerWidth = 0, header } = args;
   if (variant === "open") {
-    return header
-      ? style.dim("╭─[") + header.text + style.dim("]")
-      : style.dim("╭─");
+    return header ? style.dim("╭─[") + header.text + style.dim("]") : style.dim("╭─");
   }
   if (!header) return style.dim("╭" + "─".repeat(innerWidth) + "╮");
   const right = Math.max(0, innerWidth - 1 - header.width);
@@ -38,9 +36,7 @@ export function boxRow(args: {
   inner: string;
 }): string {
   const { variant, style, inner } = args;
-  return variant === "closed"
-    ? style.dim("│") + inner + style.dim("│")
-    : style.dim("│ ") + inner;
+  return variant === "closed" ? style.dim("│") + inner + style.dim("│") : style.dim("│ ") + inner;
 }
 
 /**
@@ -66,9 +62,7 @@ export function boxBorderLR(args: {
   const fill = innerWidth - 2 - leftW - rightW;
   if (fill < 0) {
     // overflow — plain dashed line
-    return style.dim(
-      corner.left + "─".repeat(Math.max(0, innerWidth)) + corner.right,
-    );
+    return style.dim(corner.left + "─".repeat(Math.max(0, innerWidth)) + corner.right);
   }
 
   return (
@@ -91,9 +85,5 @@ export function boxBottom(args: {
   if (!footer) return style.dim("╰" + "─".repeat(innerWidth) + "╯");
   const left = Math.max(0, Math.floor((innerWidth - footer.width) / 2));
   const right = Math.max(0, innerWidth - left - footer.width);
-  return (
-    style.dim("╰" + "─".repeat(left)) +
-    footer.text +
-    style.dim("─".repeat(right) + "╯")
-  );
+  return style.dim("╰" + "─".repeat(left)) + footer.text + style.dim("─".repeat(right) + "╯");
 }

@@ -17,9 +17,7 @@ export const CUSTOM_TYPE = "mentions:resolved";
 type MentionProviderFactory = EditorAutocompleteContributor["enhance"];
 
 interface MentionAdapterDeps {
-  registerAutocompleteContributor(
-    contributor: EditorAutocompleteContributor,
-  ): void;
+  registerAutocompleteContributor(contributor: EditorAutocompleteContributor): void;
   createMentionProvider: MentionProviderFactory;
   resolveMentions: typeof resolveMentions;
   renderResolvedMentionsText: typeof renderResolvedMentionsText;
@@ -66,9 +64,7 @@ export function createMentionsExtension(deps: MentionAdapterDeps) {
 
       const mentions = await deps.resolveMentions(event.text, { cwd: ctx.cwd });
       const resolved = mentions.filter(
-        (
-          mention,
-        ): mention is Extract<ResolvedMention, { status: "resolved" }> =>
+        (mention): mention is Extract<ResolvedMention, { status: "resolved" }> =>
           mention.status === "resolved",
       );
 
@@ -77,9 +73,7 @@ export function createMentionsExtension(deps: MentionAdapterDeps) {
     });
 
     pi.on("context", async (event) => {
-      const messages = event.messages.filter(
-        (message: any) => message.customType !== CUSTOM_TYPE,
-      );
+      const messages = event.messages.filter((message: any) => message.customType !== CUSTOM_TYPE);
 
       if (!activeMentionContext) return { messages };
 
@@ -115,7 +109,6 @@ export function createMentionsExtension(deps: MentionAdapterDeps) {
   };
 }
 
-export const mentionsExtension: (pi: ExtensionAPI) => void =
-  createMentionsExtension(DEFAULT_DEPS);
+export const mentionsExtension: (pi: ExtensionAPI) => void = createMentionsExtension(DEFAULT_DEPS);
 
 export default mentionsExtension;

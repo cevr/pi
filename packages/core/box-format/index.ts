@@ -50,11 +50,7 @@ export function visibleWidth(text: string): number {
   return w;
 }
 
-export function truncateToWidth(
-  text: string,
-  maxWidth: number,
-  ellipsis = "…",
-): string {
+export function truncateToWidth(text: string, maxWidth: number, ellipsis = "…"): string {
   if (visibleWidth(text) <= maxWidth) return text;
 
   const ellipsisLen = ellipsis.length;
@@ -139,9 +135,7 @@ function expandBlock(block: BoxBlock, contentWidth: number): VisualBoxLine[] {
   const result: VisualBoxLine[] = [];
   for (const line of block.lines) {
     const visualLines =
-      contentWidth > 0
-        ? new Text(line.text, 0, 0).render(contentWidth)
-        : [line.text];
+      contentWidth > 0 ? new Text(line.text, 0, 0).render(contentWidth) : [line.text];
 
     for (let i = 0; i < visualLines.length; i++) {
       const visualLine = visualLines[i];
@@ -206,8 +200,7 @@ export function formatBoxesWindowed(
   const shown = sections.slice(0, maxSections);
   const out: string[] = [];
 
-  const safeWidth =
-    width != null ? Math.max(1, width - WIDTH_SAFETY_MARGIN) : undefined;
+  const safeWidth = width != null ? Math.max(1, width - WIDTH_SAFETY_MARGIN) : undefined;
   const clamp = (line: string): string =>
     safeWidth != null ? truncateToWidth(line, safeWidth, "…") : line;
 
@@ -218,9 +211,7 @@ export function formatBoxesWindowed(
     if (!section) continue;
 
     // compute gutter width from all lines (before any windowing)
-    const allGutters = section.blocks.flatMap((b) =>
-      b.lines.map((l) => l.gutter ?? ""),
-    );
+    const allGutters = section.blocks.flatMap((b) => b.lines.map((l) => l.gutter ?? ""));
     const gw = Math.max(0, ...allGutters.map((g) => g.length));
     const pad = " ".repeat(gw);
 
@@ -321,11 +312,7 @@ export function formatBoxesWindowed(
  * convenience: wrap a single text block in a box section with no gutter.
  * all lines get highlight=true (base color) by default.
  */
-export function textSection(
-  header: string | undefined,
-  text: string,
-  dim = false,
-): BoxSection {
+export function textSection(header: string | undefined, text: string, dim = false): BoxSection {
   return {
     ...(header != null && { header }),
     blocks: [
@@ -355,11 +342,7 @@ export function boxRendererWindowed(
 
   return {
     render(width: number): string[] {
-      if (
-        cachedLines !== undefined &&
-        cachedExpanded === expanded &&
-        cachedWidth === width
-      ) {
+      if (cachedLines !== undefined && cachedExpanded === expanded && cachedWidth === width) {
         return cachedLines;
       }
       const sections = buildSections();
@@ -403,8 +386,7 @@ export function renderCallLine(
   theme: any,
 ): { render(width: number): string[]; invalidate(): void } {
   const line =
-    theme.fg("toolTitle", theme.bold(label)) +
-    (context ? " " + theme.fg("dim", context) : "");
+    theme.fg("toolTitle", theme.bold(label)) + (context ? " " + theme.fg("dim", context) : "");
   return {
     render(_width: number): string[] {
       return [line];

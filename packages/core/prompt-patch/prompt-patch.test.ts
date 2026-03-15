@@ -12,7 +12,6 @@ import { Type } from "@sinclair/typebox";
  * run: bun test user/pi/extensions/tools/index.test.ts
  */
 
-
 // Minimal valid tool for testing withPromptPatch
 function makeTool(overrides: Partial<ToolDefinition> = {}): ToolDefinition {
   return {
@@ -30,8 +29,7 @@ function makeTool(overrides: Partial<ToolDefinition> = {}): ToolDefinition {
 describe("withPromptPatch", () => {
   it("extracts first paragraph as promptSnippet", () => {
     const tool = makeTool({
-      description:
-        "This is the first paragraph.\n\nThis is the second paragraph.",
+      description: "This is the first paragraph.\n\nThis is the second paragraph.",
     });
 
     const patched = withPromptPatch(tool);
@@ -100,8 +98,7 @@ describe("withPromptPatch", () => {
 
   it("trims snippet whitespace", () => {
     const tool = makeTool({
-      description:
-        "  \n  Snippet with whitespace  \n\n\n  \nSecond paragraph  ",
+      description: "  \n  Snippet with whitespace  \n\n\n  \nSecond paragraph  ",
     });
 
     const patched = withPromptPatch(tool);
@@ -111,17 +108,13 @@ describe("withPromptPatch", () => {
 
   it("handles multiline bullets", () => {
     const tool = makeTool({
-      description:
-        "Description.\n\n- First bullet\n  with continuation\n- Second bullet\n\nEnd.",
+      description: "Description.\n\n- First bullet\n  with continuation\n- Second bullet\n\nEnd.",
     });
 
     const patched = withPromptPatch(tool);
 
     // Note: continuation lines don't start with "- ", so they're not captured
-    expect(patched.promptGuidelines).toEqual([
-      "- First bullet",
-      "- Second bullet",
-    ]);
+    expect(patched.promptGuidelines).toEqual(["- First bullet", "- Second bullet"]);
   });
 
   it("does not mutate original tool", () => {

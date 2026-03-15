@@ -20,11 +20,7 @@ function tui() {
 }
 
 /** lazy Text constructor — call getText() to get the Text class, then instantiate */
-export function getText(): new (
-  text: string,
-  paddingX: number,
-  paddingY: number,
-) => any {
+export function getText(): new (text: string, paddingX: number, paddingY: number) => any {
   return tui().Text;
 }
 

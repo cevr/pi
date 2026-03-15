@@ -14,10 +14,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { Text } from "@mariozechner/pi-tui";
 import {
@@ -138,10 +135,7 @@ function readFileContent(
 
   // determine the range to show
   const start = Math.max(1, readRange?.[0] ?? 1);
-  const end = Math.min(
-    totalLines,
-    readRange?.[1] ?? start + limits.maxLines - 1,
-  );
+  const end = Math.min(totalLines, readRange?.[1] ?? start + limits.maxLines - 1);
   const _requestedLines = end - start + 1;
 
   // number lines and truncate long lines
@@ -162,10 +156,7 @@ function readFileContent(
   }
 
   // if numbered output fits in byte limit, return as-is
-  const totalBytes = numbered.reduce(
-    (sum, l) => sum + Buffer.byteLength(l, "utf-8") + 1,
-    0,
-  );
+  const totalBytes = numbered.reduce((sum, l) => sum + Buffer.byteLength(l, "utf-8") + 1, 0);
   if (totalBytes <= limits.maxFileBytes) {
     return {
       text: numbered.join("\n"),
@@ -179,8 +170,7 @@ function readFileContent(
   const formatted = formatHeadTail(
     numbered,
     limits.maxLines,
-    (n) =>
-      `... [${n} lines truncated, ${limits.maxFileBytes / 1024}KB limit reached] ...`,
+    (n) => `... [${n} lines truncated, ${limits.maxFileBytes / 1024}KB limit reached] ...`,
   );
 
   return {
@@ -210,8 +200,7 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
 
     parameters: Type.Object({
       path: Type.String({
-        description:
-          "The absolute path to the file or directory (MUST be absolute, not relative).",
+        description: "The absolute path to the file or directory (MUST be absolute, not relative).",
       }),
       read_range: Type.Optional(
         Type.Array(Type.Number(), {
@@ -225,22 +214,14 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
     renderCall(args: any, theme: any) {
       const filePath = args.path || "...";
       const home = os.homedir();
-      const shortened = filePath.startsWith(home)
-        ? `~${filePath.slice(home.length)}`
-        : filePath;
+      const shortened = filePath.startsWith(home) ? `~${filePath.slice(home.length)}` : filePath;
       const readRange = args.read_range;
       let context = shortened;
       if (Array.isArray(readRange) && readRange.length === 2) {
         context += `:${readRange[0]}-${readRange[1]}`;
       }
-      const linked = filePath.startsWith("/")
-        ? osc8Link(`file://${filePath}`, context)
-        : context;
-      return new Text(
-        theme.fg("toolTitle", theme.bold("Read ")) + theme.fg("dim", linked),
-        0,
-        0,
-      );
+      const linked = filePath.startsWith("/") ? osc8Link(`file://${filePath}`, context) : context;
+      return new Text(theme.fg("toolTitle", theme.bold("Read ")) + theme.fg("dim", linked), 0, 0);
     },
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -261,9 +242,7 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
 
       if (!fs.existsSync(resolved)) {
         return {
-          content: [
-            { type: "text" as const, text: `file not found: ${resolved}` },
-          ],
+          content: [{ type: "text" as const, text: `file not found: ${resolved}` }],
           isError: true,
         } as any;
       }
@@ -354,8 +333,7 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
       // parse numbered lines (e.g., "  42: content") into BoxLine[]
       const parsed: BoxLine[] = rawLines.map((line) => {
         const m = line.match(/^(\s*\d+): (.*)$/);
-        if (m && m[1] && m[2])
-          return { gutter: m[1].trim(), text: m[2], highlight: true };
+        if (m && m[1] && m[2]) return { gutter: m[1].trim(), text: m[2], highlight: true };
         return { text: line, highlight: true };
       });
 

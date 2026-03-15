@@ -6,11 +6,7 @@ import {
   type CommitIndex,
 } from "./commit-index";
 import type { MentionableSession } from "./session-index";
-import {
-  type MentionKind,
-  type MentionToken,
-  type ResolvedMention,
-} from "./types";
+import { type MentionKind, type MentionToken, type ResolvedMention } from "./types";
 
 const mentionKindDescriptions = new Map<MentionKind, string>([
   ["commit", "git commit"],
@@ -30,10 +26,7 @@ export interface MentionSource {
   kind: MentionKind;
   description: string;
   isEnabled?(context: MentionSourceContext): boolean;
-  getSuggestions(
-    query: string,
-    context: MentionSourceContext,
-  ): AutocompleteItem[];
+  getSuggestions(query: string, context: MentionSourceContext): AutocompleteItem[];
   resolve(
     token: MentionToken,
     context: MentionSourceContext,
@@ -65,10 +58,7 @@ export function createCommitMentionSource(): MentionSource {
       if (!index) return [];
 
       return index.commits
-        .filter(
-          (commit) =>
-            query.length === 0 || commit.sha.startsWith(query.toLowerCase()),
-        )
+        .filter((commit) => query.length === 0 || commit.sha.startsWith(query.toLowerCase()))
         .slice(0, 8)
         .map((commit) => ({
           value: `@commit/${commit.shortSha}`,
@@ -99,10 +89,7 @@ export function createCommitMentionSource(): MentionSource {
       return {
         token,
         status: "unresolved",
-        reason:
-          result.status === "ambiguous"
-            ? "commit_prefix_ambiguous"
-            : "commit_not_found",
+        reason: result.status === "ambiguous" ? "commit_prefix_ambiguous" : "commit_not_found",
       };
     },
   };
@@ -139,18 +126,12 @@ export function registerMentionSource(source: MentionSource): () => void {
   };
 }
 
-export function listEnabledMentionKinds(
-  context: MentionSourceContext,
-): MentionKind[] {
+export function listEnabledMentionKinds(context: MentionSourceContext): MentionKind[] {
   return listMentionSources()
     .filter((source) => source.isEnabled?.(context) ?? true)
     .map((source) => source.kind);
 }
 
 export function getMentionKindDescription(kind: MentionKind): string {
-  return (
-    getMentionSource(kind)?.description ??
-    mentionKindDescriptions.get(kind) ??
-    kind
-  );
+  return getMentionSource(kind)?.description ?? mentionKindDescriptions.get(kind) ?? kind;
 }

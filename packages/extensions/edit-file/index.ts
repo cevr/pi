@@ -18,10 +18,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import {
@@ -68,11 +65,7 @@ function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string {
  * a real newline. this function converts those back.
  */
 function unescapeStr(s: string): string {
-  return s
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t")
-    .replace(/\\r/g, "\r")
-    .replace(/\\\\/g, "\\");
+  return s.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r").replace(/\\\\/g, "\\");
 }
 
 // --- fuzzy matching ---
@@ -110,11 +103,7 @@ interface MatchStrategy {
  * returns the content variant + effective search/replace strings so the
  * caller can apply the replacement in the correct text space.
  */
-function findMatchStrategy(
-  content: string,
-  oldStr: string,
-  newStr: string,
-): MatchStrategy | null {
+function findMatchStrategy(content: string, oldStr: string, newStr: string): MatchStrategy | null {
   // tier 1: exact
   let idx = content.indexOf(oldStr);
   if (idx !== -1) {
@@ -290,19 +279,13 @@ function computeDiffStats(sections: BoxSection[]): DiffStats {
         if (line.text.startsWith("-")) {
           // count consecutive - lines
           let delCount = 0;
-          while (
-            i < block.lines.length &&
-            block.lines[i]?.text.startsWith("-")
-          ) {
+          while (i < block.lines.length && block.lines[i]?.text.startsWith("-")) {
             delCount++;
             i++;
           }
           // count consecutive + lines immediately after
           let addCount = 0;
-          while (
-            i < block.lines.length &&
-            block.lines[i]?.text.startsWith("+")
-          ) {
+          while (i < block.lines.length && block.lines[i]?.text.startsWith("+")) {
             addCount++;
             i++;
           }
@@ -327,8 +310,7 @@ function formatStats(stats: DiffStats, theme: any): string {
   const parts: string[] = [];
   if (stats.added > 0) parts.push(theme.fg("toolDiffAdded", `+${stats.added}`));
   if (stats.modified > 0) parts.push(theme.fg("warning", `~${stats.modified}`));
-  if (stats.removed > 0)
-    parts.push(theme.fg("toolDiffRemoved", `-${stats.removed}`));
+  if (stats.removed > 0) parts.push(theme.fg("toolDiffRemoved", `-${stats.removed}`));
   return parts.length > 0 ? parts.join(" ") : theme.fg("dim", "no changes");
 }
 
@@ -380,17 +362,11 @@ export function createEditFileTool(): ToolDefinition {
     renderCall(args: any, theme: any) {
       const filePath = args.path || "...";
       const home = os.homedir();
-      const shortened = filePath.startsWith(home)
-        ? `~${filePath.slice(home.length)}`
-        : filePath;
+      const shortened = filePath.startsWith(home) ? `~${filePath.slice(home.length)}` : filePath;
       const linked = filePath.startsWith("/")
         ? osc8Link(`file://${filePath}`, shortened)
         : shortened;
-      return new Text(
-        theme.fg("toolTitle", theme.bold("Edit ")) + theme.fg("dim", linked),
-        0,
-        0,
-      );
+      return new Text(theme.fg("toolTitle", theme.bold("Edit ")) + theme.fg("dim", linked), 0, 0);
     },
 
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
@@ -399,9 +375,7 @@ export function createEditFileTool(): ToolDefinition {
 
       if (!fs.existsSync(resolved)) {
         return {
-          content: [
-            { type: "text" as const, text: `file not found: ${resolved}` },
-          ],
+          content: [{ type: "text" as const, text: `file not found: ${resolved}` }],
           isError: true,
         } as any;
       }
@@ -465,10 +439,7 @@ export function createEditFileTool(): ToolDefinition {
           } as any;
         }
 
-        const occurrences = countOccurrences(
-          strategy.content,
-          strategy.searchStr,
-        );
+        const occurrences = countOccurrences(strategy.content, strategy.searchStr);
         const replaceAll = p.replace_all ?? false;
 
         if (!replaceAll && occurrences > 1) {
@@ -486,9 +457,7 @@ export function createEditFileTool(): ToolDefinition {
         // perform replacement in the matched content space
         let newContent: string;
         if (replaceAll) {
-          newContent = strategy.content
-            .split(strategy.searchStr)
-            .join(strategy.replaceStr);
+          newContent = strategy.content.split(strategy.searchStr).join(strategy.replaceStr);
         } else {
           newContent =
             strategy.content.substring(0, strategy.index) +
@@ -508,8 +477,7 @@ export function createEditFileTool(): ToolDefinition {
           } as any;
         }
 
-        const finalContent =
-          bom + restoreLineEndings(newContent, originalEnding);
+        const finalContent = bom + restoreLineEndings(newContent, originalEnding);
         fs.writeFileSync(resolved, finalContent, "utf-8");
 
         // track change for undo_edit
@@ -531,9 +499,7 @@ export function createEditFileTool(): ToolDefinition {
           content: [{ type: "text" as const, text }],
           details: {
             filePath: resolved,
-            ...(replaceAll && occurrences > 1
-              ? { replaceCount: occurrences }
-              : {}),
+            ...(replaceAll && occurrences > 1 ? { replaceCount: occurrences } : {}),
           },
         } as any;
       });
@@ -558,9 +524,7 @@ export function createEditFileTool(): ToolDefinition {
       const statsText = formatStats(stats, theme);
       const replaceCount: number | undefined = result.details?.replaceCount;
       const replaceNote =
-        replaceCount && replaceCount > 1
-          ? theme.fg("dim", ` (${replaceCount} replacements)`)
-          : "";
+        replaceCount && replaceCount > 1 ? theme.fg("dim", ` (${replaceCount} replacements)`) : "";
 
       /** 25 visual lines per hunk: head 12 + tail 13 */
       const HUNK_EXCERPTS: Excerpt[] = [
@@ -575,12 +539,9 @@ export function createEditFileTool(): ToolDefinition {
 
           // collapsed: last hunk only; expanded: all hunks
           const displaySections = sections.map((s) => {
-            const blocks =
-              !expanded && s.blocks.length > 1 ? s.blocks.slice(-1) : s.blocks;
+            const blocks = !expanded && s.blocks.length > 1 ? s.blocks.slice(-1) : s.blocks;
 
-            const header = filePath
-              ? osc8Link(`file://${filePath}`, s.header ?? "")
-              : s.header;
+            const header = filePath ? osc8Link(`file://${filePath}`, s.header ?? "") : s.header;
 
             return { ...s, header, blocks };
           });

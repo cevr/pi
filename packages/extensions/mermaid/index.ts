@@ -13,16 +13,9 @@
  * context hook filters mermaid custom messages from the LLM context window
  * to avoid wasting tokens on rendered diagram metadata.
  */
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Box, truncateToWidth } from "@mariozechner/pi-tui";
-import {
-  extractMermaidBlocks,
-  captureContextSlice,
-  extractText,
-} from "./extract";
+import { extractMermaidBlocks, captureContextSlice, extractText } from "./extract";
 import { createCache, pickBestPreset, hashCode } from "./render";
 import type { RenderCache } from "./render";
 import { openMermaidViewer } from "./viewer";
@@ -51,67 +44,50 @@ export default function mermaidInlineExtension(pi: ExtensionAPI): void {
    * this makes rendering self-contained — survives reload, resume, etc.
    * the in-memory store is only needed for the viewer's diagram list.
    */
-  pi.registerMessageRenderer(
-    CUSTOM_TYPE,
-    (message, { expanded: _expanded }, theme) => {
-      const entry = message.details as DiagramEntry | undefined;
+  pi.registerMessageRenderer(CUSTOM_TYPE, (message, { expanded: _expanded }, theme) => {
+    const entry = message.details as DiagramEntry | undefined;
 
-      const component = {
-        /** width is already inner width — Box(1,1) subtracts padding before calling render */
-        render(width: number): string[] {
-          if (!entry?.block?.code) {
-            return [
-              truncateToWidth(theme.fg("dim", "diagram not found"), width),
-            ];
+    const component = {
+      /** width is already inner width — Box(1,1) subtracts padding before calling render */
+      render(width: number): string[] {
+        if (!entry?.block?.code) {
+          return [truncateToWidth(theme.fg("dim", "diagram not found"), width)];
+        }
+
+        try {
+          const { preset, rendered, overflowed } = pickBestPreset(cache, entry.block.code, width);
+
+          const lines: string[] = [];
+
+          let label = theme.fg("customMessageLabel", theme.bold("mermaid"));
+          if (overflowed) label += " " + theme.fg("dim", `[${preset.key}]`);
+          lines.push(label);
+
+          for (const line of rendered.lines) {
+            lines.push(line);
           }
 
-          try {
-            const { preset, rendered, overflowed } = pickBestPreset(
-              cache,
-              entry.block.code,
+          if (overflowed) {
+            lines.push(theme.fg("dim", "diagram wider than terminal — ctrl+shift+m to view full"));
+          }
+
+          return lines.map((l) => truncateToWidth(l, width));
+        } catch (err) {
+          return [
+            truncateToWidth(
+              theme.fg("dim", `render error: ${err instanceof Error ? err.message : String(err)}`),
               width,
-            );
+            ),
+          ];
+        }
+      },
+      invalidate() {},
+    };
 
-            const lines: string[] = [];
-
-            let label = theme.fg("customMessageLabel", theme.bold("mermaid"));
-            if (overflowed) label += " " + theme.fg("dim", `[${preset.key}]`);
-            lines.push(label);
-
-            for (const line of rendered.lines) {
-              lines.push(line);
-            }
-
-            if (overflowed) {
-              lines.push(
-                theme.fg(
-                  "dim",
-                  "diagram wider than terminal — ctrl+shift+m to view full",
-                ),
-              );
-            }
-
-            return lines.map((l) => truncateToWidth(l, width));
-          } catch (err) {
-            return [
-              truncateToWidth(
-                theme.fg(
-                  "dim",
-                  `render error: ${err instanceof Error ? err.message : String(err)}`,
-                ),
-                width,
-              ),
-            ];
-          }
-        },
-        invalidate() {},
-      };
-
-      const box = new Box(1, 1, (t: string) => theme.bg("customMessageBg", t));
-      box.addChild(component);
-      return box;
-    },
-  );
+    const box = new Box(1, 1, (t: string) => theme.bg("customMessageBg", t));
+    box.addChild(component);
+    return box;
+  });
 
   pi.on("message_end", async (event, _ctx) => {
     const msg = event.message;

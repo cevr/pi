@@ -17,10 +17,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import {
@@ -57,15 +54,7 @@ type CodeReviewExtensionDeps = {
 export const CONFIG_DEFAULTS: CodeReviewExtConfig = {
   model: "openrouter/google/gemini-3.1-pro-preview",
   builtinTools: ["read", "grep", "find", "ls", "bash"],
-  extensionTools: [
-    "read",
-    "grep",
-    "find",
-    "ls",
-    "bash",
-    "web_search",
-    "read_web_page",
-  ],
+  extensionTools: ["read", "grep", "find", "ls", "bash", "web_search", "read_web_page"],
   promptFile: "",
   promptString: "",
   reportPromptFile: "",
@@ -90,14 +79,10 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isStringArray(value: unknown): value is string[] {
-  return (
-    Array.isArray(value) && value.every((item) => typeof item === "string")
-  );
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-function isCodeReviewConfig(
-  value: Record<string, unknown>,
-): value is CodeReviewExtConfig {
+function isCodeReviewConfig(value: Record<string, unknown>): value is CodeReviewExtConfig {
   return (
     isNonEmptyString(value.model) &&
     isStringArray(value.builtinTools) &&
@@ -168,9 +153,7 @@ function formatReviewSummary(comments: ReviewComment[]): string {
   }
 
   const severityOrder = ["critical", "high", "medium", "low"];
-  const parts = severityOrder
-    .filter((s) => bySeverity[s])
-    .map((s) => `${bySeverity[s]} ${s}`);
+  const parts = severityOrder.filter((s) => bySeverity[s]).map((s) => `${bySeverity[s]} ${s}`);
 
   return `${comments.length} comment${comments.length !== 1 ? "s" : ""}: ${parts.join(", ")}`;
 }
@@ -183,9 +166,7 @@ interface CodeReviewParams {
   instructions?: string;
 }
 
-export function createCodeReviewTool(
-  config: CodeReviewConfig = {},
-): ToolDefinition {
+export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinition {
   return {
     name: "code_review",
     label: "Code Review",
@@ -288,17 +269,11 @@ export function createCodeReviewTool(
       singleResult.errorMessage = result.errorMessage;
 
       const isError =
-        result.exitCode !== 0 ||
-        result.stopReason === "error" ||
-        result.stopReason === "aborted";
+        result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
       const output = getFinalOutput(result.messages) || "(no output)";
 
       if (isError) {
-        return subAgentResult(
-          result.errorMessage || result.stderr || output,
-          singleResult,
-          true,
-        );
+        return subAgentResult(result.errorMessage || result.stderr || output, singleResult, true);
       }
 
       return subAgentResult(output, singleResult);
@@ -307,9 +282,7 @@ export function createCodeReviewTool(
     renderCall(args: any, theme: any) {
       const desc = args.diff_description || "...";
       const preview = desc.length > 70 ? `${desc.slice(0, 70)}...` : desc;
-      let text =
-        theme.fg("toolTitle", theme.bold("code_review ")) +
-        theme.fg("dim", preview);
+      let text = theme.fg("toolTitle", theme.bold("code_review ")) + theme.fg("dim", preview);
       if (args.files?.length) {
         text += theme.fg(
           "muted",
@@ -323,11 +296,7 @@ export function createCodeReviewTool(
       const details = result.details as SingleResult | undefined;
       if (!details) {
         const text = result.content[0];
-        return new Text(
-          text?.type === "text" ? text.text : "(no output)",
-          0,
-          0,
-        );
+        return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
       }
 
       const container = new Container();
@@ -364,10 +333,7 @@ export function createCodeReviewExtension(
       deps.withPromptPatch(
         createCodeReviewTool({
           systemPrompt: deps.resolvePrompt(cfg.promptString, cfg.promptFile),
-          reportFormat: deps.resolvePrompt(
-            cfg.reportPromptString,
-            cfg.reportPromptFile,
-          ),
+          reportFormat: deps.resolvePrompt(cfg.reportPromptString, cfg.reportPromptFile),
           model: cfg.model,
           builtinTools: cfg.builtinTools,
           extensionTools: cfg.extensionTools,
@@ -377,7 +343,6 @@ export function createCodeReviewExtension(
   };
 }
 
-const codeReviewExtension: (pi: ExtensionAPI) => void =
-  createCodeReviewExtension();
+const codeReviewExtension: (pi: ExtensionAPI) => void = createCodeReviewExtension();
 
 export default codeReviewExtension;

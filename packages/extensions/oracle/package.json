@@ -10,9 +10,9 @@
     "@cvr/pi-glob": "workspace:*",
     "@cvr/pi-grep": "workspace:*",
     "@cvr/pi-ls": "workspace:*",
-    "@cvr/pi-spawn": "workspace:*",
     "@cvr/pi-prompt-patch": "workspace:*",
     "@cvr/pi-read": "workspace:*",
+    "@cvr/pi-spawn": "workspace:*",
     "@cvr/pi-sub-agent-render": "workspace:*",
     "@sinclair/typebox": "^0.34.0"
   },

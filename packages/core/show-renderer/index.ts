@@ -24,10 +24,7 @@ export interface ShowRenderer {
   invalidate: () => void;
 }
 
-export function makeShowRenderer(
-  text: string,
-  excerpts: Excerpt[],
-): ShowRenderer {
+export function makeShowRenderer(text: string, excerpts: Excerpt[]): ShowRenderer {
   let cachedWidth: number | undefined;
   let cachedLines: string[] | undefined;
   return {

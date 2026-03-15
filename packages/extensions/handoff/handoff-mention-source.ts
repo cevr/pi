@@ -9,8 +9,7 @@ import {
 
 function getSessions(context: MentionSourceContext) {
   return (
-    context.sessions ??
-    getSessionMentionsIndex(context.sessionsDir ?? DEFAULT_MENTION_SESSIONS_DIR)
+    context.sessions ?? getSessionMentionsIndex(context.sessionsDir ?? DEFAULT_MENTION_SESSIONS_DIR)
   );
 }
 
@@ -23,25 +22,17 @@ export function createHandoffMentionSource(): MentionSource {
         .filter((session) => session.isHandoffCandidate)
         .filter(
           (session) =>
-            query.length === 0 ||
-            session.sessionId.toLowerCase().startsWith(query.toLowerCase()),
+            query.length === 0 || session.sessionId.toLowerCase().startsWith(query.toLowerCase()),
         )
         .slice(0, 8)
         .map((session) => ({
           value: `@handoff/${session.sessionId}`,
           label: `@handoff/${session.sessionId}`,
-          description:
-            session.sessionName ||
-            session.firstUserMessage ||
-            session.workspace,
+          description: session.sessionName || session.firstUserMessage || session.workspace,
         }));
     },
     resolve(token, context) {
-      const result = resolveMentionableSession(
-        getSessions(context),
-        token.value,
-        "handoff",
-      );
+      const result = resolveMentionableSession(getSessions(context), token.value, "handoff");
 
       if (result.status === "resolved") {
         return {
@@ -55,10 +46,7 @@ export function createHandoffMentionSource(): MentionSource {
       return {
         token,
         status: "unresolved",
-        reason:
-          result.status === "ambiguous"
-            ? "handoff_prefix_ambiguous"
-            : "handoff_not_found",
+        reason: result.status === "ambiguous" ? "handoff_prefix_ambiguous" : "handoff_not_found",
       };
     },
   };

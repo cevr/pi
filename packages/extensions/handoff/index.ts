@@ -67,9 +67,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isHandoffConfig(
-  value: Record<string, unknown>,
-): value is HandoffExtConfig {
+function isHandoffConfig(value: Record<string, unknown>): value is HandoffExtConfig {
   const threshold = value.threshold;
   if (typeof threshold !== "number" || threshold <= 0 || threshold > 1) {
     return false;
@@ -118,18 +116,16 @@ function extractToolCallArgs(response: {
 }): HandoffExtraction | null {
   const toolCall = response.content.find(
     (c): c is ToolCall =>
-      c.type === "toolCall" &&
-      "name" in c &&
-      c.name === "create_handoff_context",
+      c.type === "toolCall" && "name" in c && c.name === "create_handoff_context",
   );
   if (!toolCall) return null;
   const args = toolCall.arguments as Record<string, unknown>;
   return {
     relevantInformation: (args.relevantInformation as string) ?? "",
-    relevantFiles: (Array.isArray(args.relevantFiles)
-      ? args.relevantFiles
-      : []
-    ).slice(0, MAX_RELEVANT_FILES) as string[],
+    relevantFiles: (Array.isArray(args.relevantFiles) ? args.relevantFiles : []).slice(
+      0,
+      MAX_RELEVANT_FILES,
+    ) as string[],
   };
 }
 
@@ -173,23 +169,18 @@ export const DEFAULT_DEPS: HandoffExtensionDeps = {
 };
 
 function getParentDescription(parentPath: string, maxWidth: number): string {
-  const budget =
-    maxWidth - PROVENANCE_PREFIX.length - PROVENANCE_ELLIPSIS.length;
+  const budget = maxWidth - PROVENANCE_PREFIX.length - PROVENANCE_ELLIPSIS.length;
   try {
     const session = SessionManager.open(parentPath);
 
     const name = session.getSessionName();
     if (name)
-      return name.length > budget
-        ? name.slice(0, Math.max(0, budget)) + PROVENANCE_ELLIPSIS
-        : name;
+      return name.length > budget ? name.slice(0, Math.max(0, budget)) + PROVENANCE_ELLIPSIS : name;
 
     const branch = session.getBranch();
     const firstUser = branch.find(
       (e): e is SessionEntry & { type: "message" } =>
-        e.type === "message" &&
-        "content" in e.message &&
-        e.message.role === "user",
+        e.type === "message" && "content" in e.message && e.message.role === "user",
     );
     if (firstUser) {
       const content = (firstUser.message as { content: unknown }).content;
@@ -218,10 +209,7 @@ function showProvenance(ctx: ExtensionContext, parentPath: string): void {
     render(width: number): string[] {
       const desc = getParentDescription(parentPath, width);
       const arrow = theme.fg("dim", "↳ ");
-      const text = truncateToWidth(
-        `${PROVENANCE_PREFIX.slice(2)}${desc}`,
-        width,
-      );
+      const text = truncateToWidth(`${PROVENANCE_PREFIX.slice(2)}${desc}`, width);
       const content = arrow + text;
       const contentWidth = visibleWidth(content);
       const pad = Math.max(0, width - contentWidth);
@@ -248,25 +236,18 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
 
     const HANDOFF_TOOL: Tool = {
       name: "create_handoff_context",
-      description:
-        handoffSections["tool-description"] || "Extract context for handoff",
+      description: handoffSections["tool-description"] || "Extract context for handoff",
       parameters: Type.Object({
         relevantInformation: Type.String({
-          description:
-            handoffSections["field-relevant-information"] ||
-            "Extract relevant context",
+          description: handoffSections["field-relevant-information"] || "Extract relevant context",
         }),
         relevantFiles: Type.Array(Type.String(), {
-          description:
-            handoffSections["field-relevant-files"] || "Relevant file paths",
+          description: handoffSections["field-relevant-files"] || "Relevant file paths",
         }),
       }),
     };
 
-    function buildExtractionPrompt(
-      conversationText: string,
-      goal: string,
-    ): string {
+    function buildExtractionPrompt(conversationText: string, goal: string): string {
       const body = handoffSections["extraction-prompt"] ?? "";
       return `${conversationText}\n\n${body}\n${goal}\n\nUse the create_handoff_context tool to extract relevant information and files.`;
     }
@@ -281,9 +262,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
       modelRegistry: { find(p: string, id: string): Model<Api> | undefined };
       model: Model<Api> | undefined;
     }): Model<Api> | undefined {
-      return (
-        ctx.modelRegistry.find(cfg.model.provider, cfg.model.id) ?? ctx.model
-      );
+      return ctx.modelRegistry.find(cfg.model.provider, cfg.model.id) ?? ctx.model;
     }
 
     async function generateHandoffPrompt(
@@ -294,10 +273,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
     ): Promise<string | null> {
       const branch = ctx.sessionManager.getBranch();
       const messages = branch
-        .filter(
-          (e: any): e is SessionEntry & { type: "message" } =>
-            e.type === "message",
-        )
+        .filter((e: any): e is SessionEntry & { type: "message" } => e.type === "message")
         .map((e: any) => e.message);
 
       if (messages.length === 0) return null;
@@ -309,9 +285,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
       const apiKey = await ctx.modelRegistry.getApiKey(handoffModel);
       const userMessage: Message = {
         role: "user",
-        content: [
-          { type: "text", text: buildExtractionPrompt(conversationText, goal) },
-        ],
+        content: [{ type: "text", text: buildExtractionPrompt(conversationText, goal) }],
         timestamp: Date.now(),
       };
 
@@ -387,10 +361,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
 
         if (!prompt) {
           generating = false;
-          ctx.ui.notify(
-            "handoff generation failed: no extraction result",
-            "error",
-          );
+          ctx.ui.notify("handoff generation failed: no extraction result", "error");
           return;
         }
 
@@ -399,10 +370,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
         generating = false;
 
         ctx.ui.setEditorText("/handoff");
-        ctx.ui.setStatus(
-          "handoff",
-          `handoff ready (${Math.round(usage.percent)}%)`,
-        );
+        ctx.ui.setStatus("handoff", `handoff ready (${Math.round(usage.percent)}%)`);
         pi.events.emit("editor:set-label", {
           key: "handoff",
           text: `handoff ready (${Math.round(usage.percent)}%)`,
@@ -421,8 +389,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
 
     // --- /handoff command: create new session + send prompt ---
     pi.registerCommand("handoff", {
-      description:
-        "Transfer context to a new focused session (replaces compaction)",
+      description: "Transfer context to a new focused session (replaces compaction)",
       handler: async (args, ctx) => {
         const goal = args.trim();
 
@@ -436,25 +403,23 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
 
           parentSessionFile = ctx.sessionManager.getSessionFile();
 
-          const result = await ctx.ui.custom<string | null>(
-            (tui, theme, _kb, done) => {
-              const loader = new BorderedLoader(
-                tui,
-                theme,
-                `generating handoff prompt (${handoffModel.name})...`,
-              );
-              loader.onAbort = () => done(null);
+          const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+            const loader = new BorderedLoader(
+              tui,
+              theme,
+              `generating handoff prompt (${handoffModel.name})...`,
+            );
+            loader.onAbort = () => done(null);
 
-              generateHandoffPrompt(ctx, handoffModel, goal, loader.signal)
-                .then(done)
-                .catch((err) => {
-                  console.error("handoff generation failed:", err);
-                  done(null);
-                });
+            generateHandoffPrompt(ctx, handoffModel, goal, loader.signal)
+              .then(done)
+              .catch((err) => {
+                console.error("handoff generation failed:", err);
+                done(null);
+              });
 
-              return loader;
-            },
-          );
+            return loader;
+          });
 
           if (!result) {
             ctx.ui.notify("cancelled", "info");
@@ -465,10 +430,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
         }
 
         if (!storedHandoffPrompt) {
-          ctx.ui.notify(
-            "no handoff prompt available. usage: /handoff <goal>",
-            "error",
-          );
+          ctx.ui.notify("no handoff prompt available. usage: /handoff <goal>", "error");
           return;
         }
 
@@ -511,8 +473,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
       label: "Handoff",
       description:
         "Hand off to a new session. Generates a handoff prompt from the current conversation and stages /handoff in the editor. The user presses Enter to review the prompt, then confirms to switch sessions.",
-      promptSnippet:
-        "Hand off to a new session with a generated context transfer prompt",
+      promptSnippet: "Hand off to a new session with a generated context transfer prompt",
       promptGuidelines: [
         "Use this when context is getting crowded or the user asks to continue in a fresh session.",
         "Set goal to a specific next task, not a vague continuation.",
@@ -540,9 +501,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
           _signal ?? undefined,
         );
         if (!prompt) {
-          throw new Error(
-            "handoff generation failed: could not extract context",
-          );
+          throw new Error("handoff generation failed: could not extract context");
         }
 
         storedHandoffPrompt = prompt;

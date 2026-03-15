@@ -11,21 +11,9 @@
  * from the left edge, right labels from the right edge.
  */
 
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  SessionEntry,
-} from "@mariozechner/pi-coding-agent";
-import {
-  CustomEditor,
-  Theme,
-  estimateTokens,
-} from "@mariozechner/pi-coding-agent";
-import type {
-  TUI,
-  EditorTheme,
-  AutocompleteProvider,
-} from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner/pi-coding-agent";
+import { CustomEditor, Theme, estimateTokens } from "@mariozechner/pi-coding-agent";
+import type { TUI, EditorTheme, AutocompleteProvider } from "@mariozechner/pi-tui";
 import { visibleWidth } from "@mariozechner/pi-tui";
 import { boxBorderLR, boxRow } from "@cvr/pi-box-chrome";
 import {
@@ -66,10 +54,7 @@ class LabeledEditor extends CustomEditor {
   private labels: Map<string, Label> = new Map();
   private appTheme: Theme;
   private baseAutocompleteProvider: AutocompleteProvider | null = null;
-  private borderCache: Record<
-    "top" | "bottom",
-    { key: string; line: string } | null
-  > = {
+  private borderCache: Record<"top" | "bottom", { key: string; line: string } | null> = {
     top: null,
     bottom: null,
   };
@@ -121,10 +106,7 @@ class LabeledEditor extends CustomEditor {
     this.refreshAutocompleteProvider();
   }
 
-  private getLabelsFor(
-    position: "top" | "bottom",
-    align: "left" | "right",
-  ): string {
+  private getLabelsFor(position: "top" | "bottom", align: "left" | "right"): string {
     const matching = [...this.labels.values()].filter(
       (l) => l.position === position && l.align === align,
     );
@@ -167,9 +149,7 @@ class LabeledEditor extends CustomEditor {
       corner,
       style: chrome,
       innerWidth,
-      left: leftText
-        ? { text: leftText, width: visibleWidth(leftText) }
-        : undefined,
+      left: leftText ? { text: leftText, width: visibleWidth(leftText) } : undefined,
       right: rightCombined
         ? { text: rightCombined, width: visibleWidth(rightCombined) }
         : undefined,
@@ -216,25 +196,16 @@ class LabeledEditor extends CustomEditor {
     const chrome = { dim: (s: string) => this.dim(s) };
 
     // top border — replace line 0
-    result.push(
-      this.buildBorderLine(width, { left: "╭", right: "╮" }, "top", lines[0]!),
-    );
+    result.push(this.buildBorderLine(width, { left: "╭", right: "╮" }, "top", lines[0]!));
 
     // content lines — wrap with dim │ side rails
     for (let i = 1; i < bottomIdx; i++) {
-      result.push(
-        boxRow({ variant: "closed", style: chrome, inner: lines[i]! }),
-      );
+      result.push(boxRow({ variant: "closed", style: chrome, inner: lines[i]! }));
     }
 
     // bottom border
     result.push(
-      this.buildBorderLine(
-        width,
-        { left: "╰", right: "╯" },
-        "bottom",
-        lines[bottomIdx]!,
-      ),
+      this.buildBorderLine(width, { left: "╰", right: "╯" }, "bottom", lines[bottomIdx]!),
     );
 
     // autocomplete lines (if any) — pass through, offset to align with inner content
@@ -257,10 +228,7 @@ function shortenPath(cwd: string): string {
   return cwd;
 }
 
-export function formatModelDisplay(
-  provider: string | undefined,
-  modelId: string,
-): string {
+export function formatModelDisplay(provider: string | undefined, modelId: string): string {
   const providerDisplay = provider ? `(${provider})` : "";
   return `${providerDisplay} ${modelId}`.trim();
 }
@@ -338,16 +306,12 @@ function updateStatsLabels(
 
   // use provider-reported usage if available and meaningful, otherwise estimate from entries
   if (usage?.percent != null && usage.tokens != null && usage.tokens > 0) {
-    topLeftParts.push(
-      `${Math.round(usage.percent)}% of ${formatTokens(usage.contextWindow)}`,
-    );
+    topLeftParts.push(`${Math.round(usage.percent)}% of ${formatTokens(usage.contextWindow)}`);
   } else if (model?.contextWindow) {
     // fallback: estimate tokens from session entries
     const estimatedTokens = estimateContextFromEntries(branch);
     const percent = (estimatedTokens / model.contextWindow) * 100;
-    topLeftParts.push(
-      `~${Math.round(percent)}% of ${formatTokens(model.contextWindow)}`,
-    );
+    topLeftParts.push(`~${Math.round(percent)}% of ${formatTokens(model.contextWindow)}`);
   }
 
   if (cost > 0) {
@@ -442,12 +406,7 @@ function formatElapsed(ms: number): string {
  */
 function describeToolCall(toolName: string, args: any): string {
   // common pi tools have a `path` or `pattern` arg — show it if short
-  const hint =
-    args?.path ??
-    args?.pattern ??
-    args?.query ??
-    args?.filePattern ??
-    args?.cmd;
+  const hint = args?.path ?? args?.pattern ?? args?.query ?? args?.filePattern ?? args?.cmd;
   if (typeof hint === "string") {
     // just the basename or first 24 chars
     const short = hint.includes("/")
@@ -527,13 +486,7 @@ function editorExtension(pi: ExtensionAPI): void {
     // replace editor with labeled box-drawing version
     ctx.ui.setEditorComponent(
       (tui: TUI, editorTheme: EditorTheme, keybindings: KeybindingsManager) => {
-        editor = new LabeledEditor(
-          tui,
-          editorTheme,
-          keybindings,
-          ctx.ui.theme,
-          ctx.cwd,
-        );
+        editor = new LabeledEditor(tui, editorTheme, keybindings, ctx.ui.theme, ctx.cwd);
         return editor;
       },
     );
@@ -653,10 +606,7 @@ function editorExtension(pi: ExtensionAPI): void {
 
   pi.on("tool_execution_start", async (event, _ctx) => {
     activity.phase = "tool";
-    activity.activeTools.set(
-      event.toolCallId,
-      describeToolCall(event.toolName, event.args),
-    );
+    activity.activeTools.set(event.toolCallId, describeToolCall(event.toolName, event.args));
     syncActivitySegment();
   });
 
@@ -688,12 +638,7 @@ function editorExtension(pi: ExtensionAPI): void {
   pi.events.on("editor:set-label", (data: unknown) => {
     const payload = data as SetLabelPayload;
     if (!payload.key || !payload.text) return;
-    editor?.setLabel(
-      payload.key,
-      payload.text,
-      payload.position ?? "top",
-      payload.align ?? "left",
-    );
+    editor?.setLabel(payload.key, payload.text, payload.position ?? "top", payload.align ?? "left");
   });
 
   pi.events.on("editor:remove-label", (data: unknown) => {

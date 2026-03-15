@@ -5,12 +5,8 @@
   "compaction": {
     "enabled": false
   },
-  "extensions": [
-    "~/Developer/personal/dotfiles/pi/packages/extensions"
-  ],
-  "skills": [
-    "~/Developer/personal/dotfiles/pi/skills"
-  ],
+  "extensions": ["~/Developer/personal/dotfiles/pi/packages/extensions"],
+  "skills": ["~/Developer/personal/dotfiles/pi/skills"],
   "quietStartup": true,
   "hideThinkingBlock": true,
   "showHardwareCursor": true,

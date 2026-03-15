@@ -37,9 +37,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isSessionNameConfig(
-  value: Record<string, unknown>,
-): value is SessionNameExtConfig {
+function isSessionNameConfig(value: Record<string, unknown>): value is SessionNameExtConfig {
   const renameInterval = value.renameInterval;
   if (
     typeof renameInterval !== "number" ||
@@ -61,10 +59,9 @@ function isSessionNameConfig(
   );
 }
 
-export const SESSION_NAME_CONFIG_SCHEMA: ExtensionConfigSchema<SessionNameExtConfig> =
-  {
-    validate: isSessionNameConfig,
-  };
+export const SESSION_NAME_CONFIG_SCHEMA: ExtensionConfigSchema<SessionNameExtConfig> = {
+  validate: isSessionNameConfig,
+};
 
 export function sessionNameExtension(pi: ExtensionAPI): void {
   const { enabled, config: cfg } = getEnabledExtensionConfig(
@@ -84,13 +81,11 @@ export function sessionNameExtension(pi: ExtensionAPI): void {
     messageCount++;
 
     const isFirst = messageCount === 1;
-    const isInterval =
-      messageCount > 1 && (messageCount - 1) % cfg.renameInterval === 0;
+    const isInterval = messageCount > 1 && (messageCount - 1) % cfg.renameInterval === 0;
     if (!isFirst && !isInterval) return;
     if (pending) return;
 
-    const model =
-      ctx.modelRegistry.find(cfg.model.provider, cfg.model.id) ?? ctx.model;
+    const model = ctx.modelRegistry.find(cfg.model.provider, cfg.model.id) ?? ctx.model;
     if (!model) return;
 
     pending = true;
@@ -135,11 +130,7 @@ async function generateName(
     timestamp: Date.now(),
   };
 
-  const response = await piAi.complete(
-    model,
-    { messages: [message] },
-    { apiKey, maxTokens: 20 },
-  );
+  const response = await piAi.complete(model, { messages: [message] }, { apiKey, maxTokens: 20 });
   if (response.stopReason === "aborted") return null;
 
   const title = response.content
