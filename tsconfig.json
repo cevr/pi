@@ -116,6 +116,7 @@
       "@cvr/pi-task": ["./packages/extensions/task/index.ts"],
       "@cvr/pi-tool-harness": ["./packages/extensions/tool-harness/index.ts"],
       "@cvr/pi-undo-edit": ["./packages/extensions/undo-edit/index.ts"],
+      "@cvr/pi-state-machine": ["./packages/core/pi-state-machine/index.ts"],
       "@cvr/pi-web-search": ["./packages/extensions/web-search/index.ts"]
     }
   }
