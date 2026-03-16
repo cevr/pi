@@ -17,10 +17,10 @@ import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
-import { piSpawn, resolvePrompt, zeroUsage } from "@cvr/pi-spawn";
+import { PiSpawnService, resolvePrompt, zeroUsage } from "@cvr/pi-spawn";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { ProcessRunner } from "@cvr/pi-process-runner";
-import { Effect, ManagedRuntime } from "effect";
+import { Effect, Layer, ManagedRuntime } from "effect";
 import {
   getFinalOutput,
   renderAgentTree,
@@ -66,7 +66,7 @@ export const CONFIG_DEFAULTS: LibrarianExtConfig = {
  */
 export async function repoFetch(
   spec: string,
-  runtime: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
+  runtime: ManagedRuntime.ManagedRuntime<ProcessRunner | PiSpawnService, never>,
   signal?: AbortSignal,
 ): Promise<string | null> {
   try {
@@ -131,7 +131,7 @@ interface LibrarianParams {
 
 export function createLibrarianTool(
   config: LibrarianConfig = {},
-  runtime?: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
+  runtime?: ManagedRuntime.ManagedRuntime<ProcessRunner | PiSpawnService, never>,
 ): ToolDefinition {
   return {
     name: "librarian",
@@ -224,51 +224,62 @@ export function createLibrarianTool(
         usage: zeroUsage(),
       };
 
-      const result = await piSpawn({
-        cwd: localRepoPath ?? ctx.cwd,
-        task: fullTask,
-        model: config.model ?? CONFIG_DEFAULTS.model,
-        builtinTools,
-        extensionTools,
-        systemPromptBody: config.systemPrompt,
-        signal,
-        sessionId,
-        onUpdate: (partial) => {
-          singleResult.messages = partial.messages;
-          singleResult.usage = partial.usage;
-          singleResult.model = partial.model;
-          singleResult.stopReason = partial.stopReason;
-          singleResult.errorMessage = partial.errorMessage;
-          if (onUpdate) {
-            onUpdate({
-              content: [
-                {
-                  type: "text",
-                  text: getFinalOutput(partial.messages) || "(exploring...)",
-                },
-              ],
-              details: singleResult,
-            } as any);
+      return runtime.runPromise(
+        Effect.gen(function* () {
+          const svc = yield* PiSpawnService;
+          const result = yield* svc.spawn({
+            cwd: localRepoPath ?? ctx.cwd,
+            task: fullTask,
+            model: config.model ?? CONFIG_DEFAULTS.model,
+            builtinTools,
+            extensionTools,
+            systemPromptBody: config.systemPrompt,
+            signal,
+            sessionId,
+            onUpdate: (partial) => {
+              singleResult.messages = partial.messages;
+              singleResult.usage = partial.usage;
+              singleResult.model = partial.model;
+              singleResult.stopReason = partial.stopReason;
+              singleResult.errorMessage = partial.errorMessage;
+              if (onUpdate) {
+                onUpdate({
+                  content: [
+                    {
+                      type: "text",
+                      text: getFinalOutput(partial.messages) || "(exploring...)",
+                    },
+                  ],
+                  details: singleResult,
+                } as any);
+              }
+            },
+          });
+
+          singleResult.exitCode = result.exitCode;
+          singleResult.messages = result.messages;
+          singleResult.usage = result.usage;
+          singleResult.model = result.model;
+          singleResult.stopReason = result.stopReason;
+          singleResult.errorMessage = result.errorMessage;
+
+          const isError =
+            result.exitCode !== 0 ||
+            result.stopReason === "error" ||
+            result.stopReason === "aborted";
+          const output = getFinalOutput(result.messages) || "(no output)";
+
+          if (isError) {
+            return subAgentResult(
+              result.errorMessage || result.stderr || output,
+              singleResult,
+              true,
+            );
           }
-        },
-      });
 
-      singleResult.exitCode = result.exitCode;
-      singleResult.messages = result.messages;
-      singleResult.usage = result.usage;
-      singleResult.model = result.model;
-      singleResult.stopReason = result.stopReason;
-      singleResult.errorMessage = result.errorMessage;
-
-      const isError =
-        result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-      const output = getFinalOutput(result.messages) || "(no output)";
-
-      if (isError) {
-        return subAgentResult(result.errorMessage || result.stderr || output, singleResult, true);
-      }
-
-      return subAgentResult(output, singleResult);
+          return subAgentResult(output, singleResult);
+        }),
+      );
     },
 
     renderCall(args: any, theme: any) {
@@ -311,7 +322,7 @@ export function createLibrarianExtension(
     );
     if (!enabled) return;
 
-    const runtime = ManagedRuntime.make(ProcessRunner.layer);
+    const runtime = ManagedRuntime.make(Layer.mergeAll(ProcessRunner.layer, PiSpawnService.layer));
 
     pi.registerTool(
       deps.withPromptPatch(
