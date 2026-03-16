@@ -9,6 +9,7 @@
  * ({cwd}, {roots}, {date}, etc.) in system prompts.
  */
 
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -16,6 +17,7 @@ import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
 import { resolveGlobalSettingsPath } from "@cvr/pi-config";
 import { interpolatePromptVars } from "@cvr/pi-interpolate";
+import { killTreeWithEscalation } from "@cvr/pi-process-runner";
 import { Effect, Layer, Schema, ServiceMap } from "effect";
 
 // --- types ---
@@ -124,6 +126,78 @@ export function readAgentPrompt(filename: string): string {
   }
 }
 
+// --- NDJSON event processing ---
+
+/** process a single NDJSON line from pi stdout, mutating result in place. */
+export function processNdjsonLine(
+  line: string,
+  result: PiSpawnResult,
+  config: Pick<PiSpawnConfig, "followUp" | "onUpdate">,
+  rpcState: { endTurnCount: number },
+  killProc: () => void,
+): void {
+  if (!line.trim()) return;
+  let event: Record<string, unknown>;
+  try {
+    event = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+
+  // skip RPC protocol responses (acks for prompt/follow_up/abort commands)
+  if (event.type === "response") return;
+
+  if (event.type === "message_end" && event.message) {
+    const msg = event.message as Message;
+    result.messages.push(msg);
+
+    if (msg.role === "assistant") {
+      result.usage.turns++;
+      const usage = (msg as Record<string, unknown>).usage as Record<string, unknown> | undefined;
+      if (usage) {
+        result.usage.input += Number(usage.input) || 0;
+        result.usage.output += Number(usage.output) || 0;
+        result.usage.cacheRead += Number(usage.cacheRead) || 0;
+        result.usage.cacheWrite += Number(usage.cacheWrite) || 0;
+        result.usage.cost += Number((usage.cost as Record<string, unknown>)?.total) || 0;
+        result.usage.contextTokens = Number(usage.totalTokens) || 0;
+      }
+      if (!result.model && (msg as Record<string, unknown>).model) {
+        result.model = (msg as Record<string, unknown>).model as string;
+      }
+      if ((msg as Record<string, unknown>).stopReason) {
+        result.stopReason = (msg as Record<string, unknown>).stopReason as string;
+      }
+      if ((msg as Record<string, unknown>).errorMessage) {
+        result.errorMessage = (msg as Record<string, unknown>).errorMessage as string;
+      }
+
+      const stopReason = (msg as Record<string, unknown>).stopReason as string | undefined;
+      const isTurnEnd = stopReason === "end_turn" || stopReason === "stop";
+      const useRpc = !!config.followUp;
+      const expectedTurns = config.followUp ? 2 : 1;
+
+      if (useRpc && isTurnEnd) {
+        rpcState.endTurnCount++;
+        if (rpcState.endTurnCount >= expectedTurns) {
+          killProc();
+        }
+      }
+
+      if (useRpc && (stopReason === "error" || stopReason === "aborted")) {
+        killProc();
+      }
+    }
+
+    if (config.onUpdate) config.onUpdate({ ...result });
+  }
+
+  if (event.type === "tool_result_end" && event.message) {
+    result.messages.push(event.message as Message);
+    if (config.onUpdate) config.onUpdate({ ...result });
+  }
+}
+
 // --- spawn ---
 
 export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
@@ -181,12 +255,7 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
     }
 
     let wasAborted = false;
-    const debugEnabled = !!process.env.PI_SPAWN_DEBUG;
-    const debug = (label: string, data?: Record<string, unknown>) => {
-      if (!debugEnabled) return;
-      const suffix = data ? ` ${JSON.stringify(data)}` : "";
-      process.stderr.write(`[pi-spawn] ${label}${suffix}\n`);
-    };
+    const rpcState = { endTurnCount: 0 };
 
     const exitCode = await new Promise<number>((resolve) => {
       const proc = spawn("pi", args, {
@@ -194,22 +263,24 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
         shell: false,
         stdio: [useRpc ? "pipe" : "ignore", "pipe", "pipe"],
         env: spawnEnv,
+        detached: true, // own process group for tree kill
       });
 
-      // RPC state: track end_turns to know when to kill
-      let endTurnCount = 0;
+      let escalationCleanup: (() => void) | undefined;
+      let killed = false;
+
+      const killProc = () => {
+        if (killed) return;
+        killed = true;
+        escalationCleanup = killTreeWithEscalation(proc);
+      };
 
       // send initial prompt via RPC stdin, then immediately queue follow_up.
-      // follow_up is queued (not delivered) until the agent is idle, so the
-      // agent loop's getFollowUpMessages() will find it after exploration.
-      // sending it eagerly avoids a race where the loop exits before a
-      // late follow_up arrives through the cross-process stdin/stdout round-trip.
       if (useRpc && proc.stdin) {
         const promptCmd = JSON.stringify({
           type: "prompt",
           message: `Task: ${config.task}`,
         });
-        debug("send_prompt");
         proc.stdin.write(promptCmd + "\n");
 
         if (config.followUp) {
@@ -217,92 +288,19 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
             type: "follow_up",
             message: config.followUp,
           });
-          debug("send_follow_up");
           proc.stdin.write(followUpCmd + "\n");
         }
       }
 
       let buffer = "";
 
-      const processLine = (line: string) => {
-        if (!line.trim()) return;
-        let event: any;
-        try {
-          event = JSON.parse(line);
-        } catch {
-          return;
-        }
-
-        // skip RPC protocol responses (acks for prompt/follow_up/abort commands)
-        if (event.type === "response") return;
-
-        if (event.type === "message_end" && event.message) {
-          const msg = event.message as Message;
-          result.messages.push(msg);
-
-          if (msg.role === "assistant") {
-            result.usage.turns++;
-            const usage = (msg as any).usage;
-            if (usage) {
-              result.usage.input += usage.input || 0;
-              result.usage.output += usage.output || 0;
-              result.usage.cacheRead += usage.cacheRead || 0;
-              result.usage.cacheWrite += usage.cacheWrite || 0;
-              result.usage.cost += usage.cost?.total || 0;
-              result.usage.contextTokens = usage.totalTokens || 0;
-            }
-            if (!result.model && (msg as any).model) result.model = (msg as any).model;
-            if ((msg as any).stopReason) result.stopReason = (msg as any).stopReason;
-            if ((msg as any).errorMessage) result.errorMessage = (msg as any).errorMessage;
-
-            const stopReason = (msg as any).stopReason as string | undefined;
-            const isTurnEnd = stopReason === "end_turn" || stopReason === "stop";
-            const expectedTurns = config.followUp ? 2 : 1;
-            debug("turn_end", {
-              stopReason,
-              isTurnEnd,
-              endTurnCount,
-              expectedTurns,
-            });
-
-            // RPC kill logic: terminate after expected number of end_turns.
-            // follow_up was already queued eagerly at startup, so we just
-            // count turns and kill when done.
-            if (useRpc && isTurnEnd) {
-              endTurnCount++;
-              if (endTurnCount >= expectedTurns) {
-                debug("kill_after_turn", { endTurnCount });
-                proc.kill("SIGTERM");
-                setTimeout(() => {
-                  if (!proc.killed) proc.kill("SIGKILL");
-                }, 5000);
-              }
-            }
-
-            // RPC: if agent errors, terminate immediately
-            if (useRpc && (stopReason === "error" || stopReason === "aborted")) {
-              debug("kill_after_error", { stopReason });
-              proc.kill("SIGTERM");
-              setTimeout(() => {
-                if (!proc.killed) proc.kill("SIGKILL");
-              }, 5000);
-            }
-          }
-
-          if (config.onUpdate) config.onUpdate({ ...result });
-        }
-
-        if (event.type === "tool_result_end" && event.message) {
-          result.messages.push(event.message as Message);
-          if (config.onUpdate) config.onUpdate({ ...result });
-        }
-      };
-
       proc.stdout!.on("data", (data: Buffer) => {
         buffer += data.toString();
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
-        for (const line of lines) processLine(line);
+        for (const line of lines) {
+          processNdjsonLine(line, result, config, rpcState, killProc);
+        }
       });
 
       proc.stderr!.on("data", (data: Buffer) => {
@@ -310,22 +308,25 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
       });
 
       proc.on("close", (code) => {
-        if (buffer.trim()) processLine(buffer);
+        if (buffer.trim()) {
+          processNdjsonLine(buffer, result, config, rpcState, killProc);
+        }
+        escalationCleanup?.();
         resolve(code ?? 0);
       });
 
-      proc.on("error", () => resolve(1));
+      proc.on("error", () => {
+        escalationCleanup?.();
+        resolve(1);
+      });
 
       if (config.signal) {
-        const killProc = () => {
+        const onAbort = () => {
           wasAborted = true;
-          proc.kill("SIGTERM");
-          setTimeout(() => {
-            if (!proc.killed) proc.kill("SIGKILL");
-          }, 5000);
+          killProc();
         };
-        if (config.signal.aborted) killProc();
-        else config.signal.addEventListener("abort", killProc, { once: true });
+        if (config.signal.aborted) onAbort();
+        else config.signal.addEventListener("abort", onAbort, { once: true });
       }
     });
 
@@ -375,7 +376,6 @@ export class PiSpawnService extends ServiceMap.Service<
   PiSpawnService,
   {
     readonly spawn: (config: PiSpawnConfig) => Effect.Effect<PiSpawnResult, SpawnError>;
-    readonly resolvePrompt: (promptString: string, promptFile: string) => Effect.Effect<string>;
   }
 >()("@cvr/pi-spawn/index/PiSpawnService") {
   static layer = Layer.succeed(PiSpawnService, {
@@ -387,9 +387,6 @@ export class PiSpawnService extends ServiceMap.Service<
             message: err instanceof Error ? err.message : String(err),
           }),
       }),
-
-    resolvePrompt: (promptString: string, promptFile: string) =>
-      Effect.sync(() => resolvePrompt(promptString, promptFile)),
   });
 
   static layerTest = (results?: Map<string, PiSpawnResult>) =>
@@ -403,7 +400,5 @@ export class PiSpawnService extends ServiceMap.Service<
             usage: zeroUsage(),
           },
         ),
-
-      resolvePrompt: (_promptString: string, _promptFile: string) => Effect.succeed("test prompt"),
     });
 }

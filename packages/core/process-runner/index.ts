@@ -62,7 +62,7 @@ export interface SpawnRecord {
 // ---------------------------------------------------------------------------
 
 /** Kill a child process and its entire process group. SIGTERM then SIGKILL after 3s. */
-function killTree(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+export function killTree(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
   const pid = child.pid;
   if (pid == null) return;
   try {
@@ -79,7 +79,7 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void
 }
 
 /** SIGTERM the tree, then SIGKILL after 3s. Returns cleanup fn for the escalation timer. */
-function killTreeWithEscalation(child: ChildProcess): () => void {
+export function killTreeWithEscalation(child: ChildProcess): () => void {
   killTree(child, "SIGTERM");
   const escalation = setTimeout(() => killTree(child, "SIGKILL"), 3000);
   escalation.unref();
