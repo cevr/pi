@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "isolatedDeclarations": true,
+    "declaration": true
+  },
+  "include": [
+    "packages/core/*/index.ts",
+    "packages/extensions/*/index.ts",
+    "src/**/*.ts"
+  ]
+}
