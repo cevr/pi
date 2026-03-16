@@ -42,11 +42,6 @@ export class PermissionDenied extends Schema.TaggedErrorClass<PermissionDenied>(
   },
 ) {}
 
-export class PermissionsLoadError extends Schema.TaggedErrorClass<PermissionsLoadError>()(
-  "PermissionsLoadError",
-  { message: Schema.String },
-) {}
-
 // ---------------------------------------------------------------------------
 // pure evaluation (shared by Effect and legacy paths)
 // ---------------------------------------------------------------------------
@@ -83,40 +78,42 @@ export function evaluatePermission(
 export class Permissions extends ServiceMap.Service<
   Permissions,
   {
-    readonly loadRules: () => Effect.Effect<PermissionRule[], PermissionsLoadError>;
+    readonly loadRules: () => Effect.Effect<PermissionRule[]>;
     readonly evaluate: (
       toolName: string,
       params: { cmd?: string },
-    ) => Effect.Effect<PermissionVerdict, PermissionsLoadError>;
+    ) => Effect.Effect<PermissionVerdict>;
   }
 >()("@cvr/pi-permissions/index/Permissions") {
   static layer = (permissionsPath?: string) =>
     Layer.succeed(Permissions, {
       loadRules: () =>
-        Effect.try({
-          try: () => {
+        Effect.sync(() => {
+          try {
             const p =
               permissionsPath ?? nodePath.join(os.homedir(), ".pi", "agent", "permissions.json");
             const raw = fs.readFileSync(p, "utf-8");
             const parsed = JSON.parse(raw);
             if (!Array.isArray(parsed)) return [];
             return parsed as PermissionRule[];
-          },
-          catch: () => [] as PermissionRule[],
-        }) as Effect.Effect<PermissionRule[], PermissionsLoadError>,
+          } catch {
+            return [];
+          }
+        }),
 
       evaluate: (toolName: string, params: { cmd?: string }) =>
-        Effect.try({
-          try: () => {
+        Effect.sync(() => {
+          try {
             const p =
               permissionsPath ?? nodePath.join(os.homedir(), ".pi", "agent", "permissions.json");
             const raw = fs.readFileSync(p, "utf-8");
             const parsed = JSON.parse(raw);
             const rules: PermissionRule[] = Array.isArray(parsed) ? parsed : [];
             return evaluatePermission(toolName, params, rules);
-          },
-          catch: () => evaluatePermission(toolName, params, []),
-        }) as Effect.Effect<PermissionVerdict, PermissionsLoadError>,
+          } catch {
+            return evaluatePermission(toolName, params, []);
+          }
+        }),
     });
 
   static layerTest = (rules: PermissionRule[]) =>
