@@ -170,10 +170,12 @@ class LabeledEditor extends CustomEditor {
     for (let i = lines.length - 1; i >= 1; i--) {
       const line = lines[i];
       if (!line) continue;
+      /* oxlint-disable no-control-regex -- intentional ANSI escape stripping */
       const stripped = line
         .replace(/\x1b\[[0-9;]*[mGKHJ]/g, "")
         .replace(/\x1b_[^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
         .replace(/\x1b\]8;;[^\x07]*\x07/g, "");
+      /* oxlint-enable no-control-regex */
       if (stripped.length > 0 && stripped[0] === HORIZONTAL) {
         return i;
       }

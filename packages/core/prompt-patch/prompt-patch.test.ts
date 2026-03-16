@@ -1,4 +1,4 @@
-import { describe, it, expect, test } from "bun:test";
+import { describe, it, expect } from "bun:test";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
@@ -148,7 +148,6 @@ describe("withPromptPatch", () => {
     const patched = withPromptPatch(tool);
 
     expect(patched.name).toBe("test_tool");
-    // eslint-disable-next-line typescript-eslint(unbound-method)
     expect(patched.execute).toBe(tool.execute);
   });
 });

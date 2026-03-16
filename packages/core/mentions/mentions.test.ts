@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AutocompleteProvider } from "@mariozechner/pi-tui";
-import { afterEach, describe, expect, it, test } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { detectMentionPrefix, parseMentions } from "./parse";
 import { MentionAwareProvider } from "./provider";
 import { resolveMentions } from "./resolve";

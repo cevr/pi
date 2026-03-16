@@ -1,5 +1,5 @@
 // Extracted from index.ts — review imports
-import { describe, expect, it, test, afterEach, mock, spyOn } from "bun:test";
+import { describe, expect, it, afterEach, mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -7,10 +7,8 @@ import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
 import {
   createSearchSessionsExtension,
   CONFIG_DEFAULTS,
-  CUSTOM_TYPE,
   DEFAULT_EXTENSION_DEPS,
   SEARCH_SESSIONS_CONFIG_SCHEMA,
-  DEFAULT_DEPS,
 } from "./index";
 
 const tmpdir = os.tmpdir();

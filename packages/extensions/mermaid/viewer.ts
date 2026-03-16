@@ -226,6 +226,7 @@ class MermaidViewer {
  * or emoji. acceptable tradeoff — beautiful-mermaid doesn't emit those.
  */
 function sliceAnsiByColumns(line: string, startCol: number, maxCols: number): string {
+  // oxlint-disable-next-line no-control-regex -- intentional ANSI escape matching
   const ESC_RE = /\x1b\[[0-9;]*[A-Za-z]/;
   let col = 0;
   let out = "";

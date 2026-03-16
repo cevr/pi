@@ -11,9 +11,6 @@
  *   /handoff check other places that need this fix
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import {
   complete,
   type Api,
@@ -36,12 +33,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import {
-  clearConfigCache,
-  getEnabledExtensionConfig,
-  setGlobalSettingsPath,
-  type ExtensionConfigSchema,
-} from "@cvr/pi-config";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 import { registerMentionSource } from "@cvr/pi-mentions";
 import { resolvePrompt } from "@cvr/pi-spawn";
 import { createHandoffMentionSource } from "./handoff-mention-source";

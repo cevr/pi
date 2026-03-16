@@ -14,18 +14,10 @@
  * the task prompt itself contains all necessary context and instructions.
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import {
-  clearConfigCache,
-  getEnabledExtensionConfig,
-  setGlobalSettingsPath,
-  type ExtensionConfigSchema,
-} from "@cvr/pi-config";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { piSpawn, zeroUsage } from "@cvr/pi-spawn";
 import {

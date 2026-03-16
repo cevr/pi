@@ -67,7 +67,7 @@ function convertTestBlock(testBlock: string, sourceFile: string): string {
   const usesIt = /\bit\b/.test(converted);
   const usesTest = /\btest\b/.test(converted);
   const usesVi = /\bvi\b/.test(converted);
-  const usesBefore = /\b(beforeEach|beforeAll|afterEach|afterAll)\b/.test(converted);
+  const _usesBefore = /\b(beforeEach|beforeAll|afterEach|afterAll)\b/.test(converted);
 
   const bunTestImports: string[] = [];
   if (usesDescribe) bunTestImports.push("describe");
@@ -103,9 +103,9 @@ function convertTestBlock(testBlock: string, sourceFile: string): string {
   converted = converted.replace(/\bvi\.mock\b/g, "mock.module");
 
   // Figure out relative import for the source module
-  const dir = path.dirname(sourceFile);
+  const _dir = path.dirname(sourceFile);
   const basename = path.basename(sourceFile, ".ts");
-  const relImport = `./${basename}`;
+  const _relImport = `./${basename}`;
 
   // Add a TODO for manual review
   const header = `// Extracted from ${path.basename(sourceFile)} — review imports\n`;

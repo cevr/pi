@@ -16,12 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vm from "node:vm";
 import { Effect, Layer, Schema, ServiceMap } from "effect";
-import {
-  getGlobalConfig,
-  resolveConfigDir,
-  setGlobalSettingsPath,
-  clearConfigCache,
-} from "@cvr/pi-config";
+import { getGlobalConfig, resolveConfigDir } from "@cvr/pi-config";
 
 // ── types ──────────────────────────────────────────────────────────────
 

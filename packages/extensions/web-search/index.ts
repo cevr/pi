@@ -14,17 +14,9 @@
  *   pricing: https://docs.parallel.ai/pricing (Search API section)
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import {
-  clearConfigCache,
-  getEnabledExtensionConfig,
-  setGlobalSettingsPath,
-  type ExtensionConfigSchema,
-} from "@cvr/pi-config";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { boxRendererWindowed, osc8Link, type BoxSection, type Excerpt } from "@cvr/pi-box-format";
 import { ProcessRunner } from "@cvr/pi-process-runner";

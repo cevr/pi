@@ -14,17 +14,9 @@
  * appropriate harness docs file (prompt.harness-docs.<harness>.md).
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { interpolatePromptVars } from "@cvr/pi-interpolate";
-import {
-  clearConfigCache,
-  getEnabledExtensionConfig,
-  setGlobalSettingsPath,
-  type ExtensionConfigSchema,
-} from "@cvr/pi-config";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 import { resolvePrompt } from "@cvr/pi-spawn";
 
 type SystemPromptExtConfig = {

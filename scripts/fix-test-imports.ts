@@ -111,7 +111,7 @@ const NODE_MODULES: Record<string, string> = {
 
 function findMissingNodeImports(testContent: string, existingImports: Set<string>): string[] {
   const missing: string[] = [];
-  for (const [name, mod] of Object.entries(NODE_MODULES)) {
+  for (const [name, _mod] of Object.entries(NODE_MODULES)) {
     if (!existingImports.has(name) && new RegExp(`\\b${name}\\.`).test(testContent)) {
       missing.push(name);
     }
@@ -159,7 +159,6 @@ function fixTestFile(testFile: string): { fixed: boolean; added: string[] } {
   }
 
   // Insert after the first comment line or at the top
-  const headerEnd = content.indexOf("\n") + 1;
   const existingImportEnd = content.lastIndexOf("import ");
   if (existingImportEnd > 0) {
     // Find end of last import line

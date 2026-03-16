@@ -1,16 +1,10 @@
 // Extracted from index.ts — review imports
-import { describe, expect, it, test, afterEach, mock, spyOn } from "bun:test";
+import { describe, expect, it, afterEach, mock, spyOn } from "bun:test";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-  createSystemPromptExtension,
-  CONFIG_DEFAULTS,
-  DEFAULT_DEPS,
-  DEFAULT_EXTENSION_DEPS,
-  DEFAULT_PROMPT_SYSTEM,
-} from "./index";
+import { createSystemPromptExtension, CONFIG_DEFAULTS, DEFAULT_DEPS } from "./index";
 
 const tmpdir = os.tmpdir();
 

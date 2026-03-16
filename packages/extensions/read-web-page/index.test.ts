@@ -1,5 +1,5 @@
 // Extracted from index.ts — review imports
-import { describe, expect, it, test, afterEach, mock, spyOn } from "bun:test";
+import { describe, expect, it, afterEach, mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -11,7 +11,6 @@ import {
   DEFAULT_PROMPT_SYSTEM,
   READ_WEB_PAGE_CONFIG_SCHEMA,
 } from "./index";
-import { resolvePrompt } from "@cvr/pi-spawn";
 
 const tmpdir = os.tmpdir();
 

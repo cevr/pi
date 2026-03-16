@@ -1,7 +1,6 @@
 // Extracted from index.ts — review imports
-import { describe, expect, it, beforeEach, mock, spyOn } from "bun:test";
-import { createMentionsExtension, CUSTOM_TYPE, DEFAULT_DEPS } from "./index";
-import { registerMentionSource } from "@cvr/pi-mentions";
+import { describe, expect, it, beforeEach, mock } from "bun:test";
+import { createMentionsExtension, CUSTOM_TYPE } from "./index";
 
 type RegisteredHandler = (...args: any[]) => any;
 

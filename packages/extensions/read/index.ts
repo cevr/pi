@@ -26,12 +26,7 @@ import {
 } from "@cvr/pi-box-format";
 import { Type } from "@sinclair/typebox";
 import { formatHeadTail } from "@cvr/pi-output-buffer";
-import {
-  clearConfigCache,
-  getEnabledExtensionConfig,
-  setGlobalSettingsPath,
-  type ExtensionConfigSchema,
-} from "@cvr/pi-config";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 import { isSecretFile, listDirectory, resolveWithVariants } from "@cvr/pi-fs";
 export {
   expandPath,

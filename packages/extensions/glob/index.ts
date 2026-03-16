@@ -11,8 +11,6 @@
  * shadows pi's built-in `find` tool via same-name registration.
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import { createInterface } from "node:readline";
@@ -22,12 +20,7 @@ import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { Type } from "@sinclair/typebox";
 import { formatHeadTail } from "@cvr/pi-output-buffer";
 import { boxRendererWindowed, textSection, type Excerpt } from "@cvr/pi-box-format";
-import {
-  clearConfigCache,
-  getEnabledExtensionConfig,
-  setGlobalSettingsPath,
-  type ExtensionConfigSchema,
-} from "@cvr/pi-config";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
   { focus: "head" as const, context: 3 },

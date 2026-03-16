@@ -8,6 +8,7 @@
  * shared spawn patterns and provides a test seam.
  */
 
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { Cause, Effect, Layer, Queue, Ref, Schema, ServiceMap, Stream } from "effect";
 
@@ -197,7 +198,10 @@ function isCommandError(err: unknown): err is CommandError | CommandTimeout | Co
 }
 
 /** Maps unknown promise rejection to typed command error. */
-function toCommandError(command: string, err: unknown): CommandError | CommandTimeout | CommandAborted {
+function toCommandError(
+  command: string,
+  err: unknown,
+): CommandError | CommandTimeout | CommandAborted {
   if (isCommandError(err)) return err;
   return new CommandError({
     command,
@@ -252,19 +256,14 @@ export class ProcessRunner extends ServiceMap.Service<
             detached: true, // own process group for tree kill
           };
 
-          let child: ChildProcess;
-          try {
-            child = spawn(command, args, spawnOpts);
-          } catch (err) {
-            Queue.failCauseUnsafe(
-              queue,
-              Cause.fail(new CommandError({
+          const child = yield* Effect.try({
+            try: () => spawn(command, args, spawnOpts),
+            catch: (err) =>
+              new CommandError({
                 command,
                 message: `spawn failed: ${err instanceof Error ? err.message : String(err)}`,
-              })),
-            );
-            return;
-          }
+              }),
+          });
 
           let stderr = "";
           let timedOut = false;
@@ -335,11 +334,13 @@ export class ProcessRunner extends ServiceMap.Service<
             if ((code ?? 1) !== 0) {
               Queue.failCauseUnsafe(
                 queue,
-                Cause.fail(new CommandError({
-                  command,
-                  message: `exit code ${code ?? 1}`,
-                  stderr,
-                })),
+                Cause.fail(
+                  new CommandError({
+                    command,
+                    message: `exit code ${code ?? 1}`,
+                    stderr,
+                  }),
+                ),
               );
               return;
             }
@@ -384,16 +385,18 @@ export class ProcessRunner extends ServiceMap.Service<
           ]).pipe(
             Effect.flatMap(() => {
               if (result.exitCode !== 0) {
-                return Effect.fail(new CommandError({
-                  command,
-                  message: `exit code ${result.exitCode}`,
-                  stderr: result.stderr,
-                }));
+                return Effect.fail(
+                  new CommandError({
+                    command,
+                    message: `exit code ${result.exitCode}`,
+                    stderr: result.stderr,
+                  }),
+                );
               }
               return Effect.succeed(result.stdout);
             }),
           ),
-        ).pipe(Stream.flatMap((s) => s ? Stream.make(s) : Stream.empty));
+        ).pipe(Stream.flatMap((s) => (s ? Stream.make(s) : Stream.empty)));
       },
     });
 }

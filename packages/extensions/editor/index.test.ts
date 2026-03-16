@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { Layer, ManagedRuntime } from "effect";
+import { ManagedRuntime } from "effect";
 import { GitClient } from "@cvr/pi-git-client";
-import { ProcessRunner } from "@cvr/pi-process-runner";
 import { formatModelDisplay, getGitDiffStats } from "./index";
 
 describe("editor extension", () => {
@@ -21,9 +20,7 @@ describe("editor extension", () => {
 
   describe("getGitDiffStats", () => {
     function makeGitRuntime(diffStat: string) {
-      return ManagedRuntime.make(
-        GitClient.layerTest({ diffStat }),
-      );
+      return ManagedRuntime.make(GitClient.layerTest({ diffStat }));
     }
 
     it("returns empty string without runtime", async () => {

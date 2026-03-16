@@ -30,12 +30,7 @@ import { evaluatePermission, loadPermissions } from "@cvr/pi-permissions";
 import { Effect, ManagedRuntime } from "effect";
 import { resolveToAbsolute } from "@cvr/pi-fs";
 import { OutputBuffer } from "@cvr/pi-output-buffer";
-import {
-  clearConfigCache,
-  getEnabledExtensionConfig,
-  setGlobalSettingsPath,
-  type ExtensionConfigSchema,
-} from "@cvr/pi-config";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 
 type BashExtConfig = {
   headLines: number;

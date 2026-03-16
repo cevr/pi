@@ -40,6 +40,7 @@ describe("truncateToWidth", () => {
     // "hello world" at width 8: "hello w" (7 visible) + RST + ellipsis
     const result = truncateToWidth("hello world", 8);
     expect(result).toContain("…");
+    // oxlint-disable-next-line no-control-regex -- intentional ANSI escape stripping
     expect(visibleWidth(result.replace(/\x1b\[[0-9;]*m/g, ""))).toBe(8);
   });
 

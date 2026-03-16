@@ -16,12 +16,7 @@ import { execSync } from "node:child_process";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
-import {
-  clearConfigCache,
-  getEnabledExtensionConfig,
-  setGlobalSettingsPath,
-  type ExtensionConfigSchema,
-} from "@cvr/pi-config";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 import { registerMentionSource } from "@cvr/pi-mentions";
 import { createSessionMentionSource } from "./session-mention-source";
 import { type BoxSection, type Excerpt, boxRendererWindowed } from "@cvr/pi-box-format";

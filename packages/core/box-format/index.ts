@@ -36,6 +36,7 @@ const RST = "\x1b[0m";
  * keep local versions so box-format works in test environments where
  * pi-tui isn't available.
  */
+// oxlint-disable-next-line no-control-regex -- intentional ANSI escape stripping
 const ANSI_RE = /\x1b\[[0-9;]*m|\x1b\]8;;[^\x07]*\x07/g;
 
 /** tab stop width — terminals default to 8 but most code uses 4 */
@@ -230,6 +231,7 @@ export function formatBoxesWindowed(
             style: chrome,
             header: {
               text: section.header,
+              // oxlint-disable-next-line no-control-regex -- intentional ANSI escape stripping
               width: section.header.replace(/\x1b\[[0-9;]*m/g, "").length,
             },
           }),

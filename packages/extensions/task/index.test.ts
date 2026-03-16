@@ -1,15 +1,9 @@
 // Extracted from index.ts — review imports
-import { describe, expect, it, test, afterEach, mock, spyOn } from "bun:test";
+import { describe, expect, it, afterEach, mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-  createTaskTool,
-  createTaskExtension,
-  CONFIG_DEFAULTS,
-  DEFAULT_DEPS,
-  TASK_CONFIG_SCHEMA,
-} from "./index";
+import { createTaskExtension, CONFIG_DEFAULTS, DEFAULT_DEPS, TASK_CONFIG_SCHEMA } from "./index";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
 
 const tmpdir = os.tmpdir();

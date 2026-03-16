@@ -14,7 +14,6 @@
  */
 
 import { spawn } from "node:child_process";
-import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { createInterface } from "node:readline";
@@ -30,12 +29,7 @@ import {
   type BoxLine,
   type Excerpt,
 } from "@cvr/pi-box-format";
-import {
-  clearConfigCache,
-  getEnabledExtensionConfig,
-  setGlobalSettingsPath,
-  type ExtensionConfigSchema,
-} from "@cvr/pi-config";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 
 type GrepExtConfig = {
   maxTotalMatches: number;

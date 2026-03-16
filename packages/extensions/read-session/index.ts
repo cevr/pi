@@ -26,12 +26,7 @@ import {
   type SingleResult,
 } from "@cvr/pi-sub-agent-render";
 import { headTailChars } from "@cvr/pi-output-buffer";
-import {
-  clearConfigCache,
-  getEnabledExtensionConfig,
-  setGlobalSettingsPath,
-  type ExtensionConfigSchema,
-} from "@cvr/pi-config";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 
 type ReadSessionExtConfig = {
   model: string;

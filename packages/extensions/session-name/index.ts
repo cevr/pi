@@ -7,18 +7,10 @@
  * may drift. uses gemini flash for speed/cost.
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import * as piAi from "@mariozechner/pi-ai";
 import type { Api, Model, Message } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import {
-  clearConfigCache,
-  getEnabledExtensionConfig,
-  setGlobalSettingsPath,
-  type ExtensionConfigSchema,
-} from "@cvr/pi-config";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 
 type SessionNameExtConfig = {
   model: { provider: string; id: string };
