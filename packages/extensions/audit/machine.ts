@@ -5,6 +5,9 @@
  */
 
 import type { Reducer, TransitionResult } from "@cvr/pi-state-machine";
+import type { SkillCatalogEntry } from "@cvr/pi-diff-context";
+
+export type { SkillCatalogEntry, DiffContext } from "@cvr/pi-diff-context";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -20,11 +23,6 @@ export interface AuditConcern {
   name: string;
   description: string;
   skills: string[];
-}
-
-export interface SkillCatalogEntry {
-  name: string;
-  description: string;
 }
 
 // ---------------------------------------------------------------------------

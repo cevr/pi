@@ -5,6 +5,7 @@
  */
 
 import type { BuiltinEffect, Reducer, TransitionResult } from "@cvr/pi-state-machine";
+import type { DiffContext } from "@cvr/pi-diff-context";
 import type { TodoItem } from "./utils";
 
 // ---------------------------------------------------------------------------
@@ -24,22 +25,30 @@ export interface PendingPlan {
   planText: string;
 }
 
+export type ExecutionPhase = "running" | "gating" | "counseling";
+
 export type PlanState =
   | { _tag: "Inactive" }
-  | { _tag: "Planning"; savedTools: string[]; pending?: PendingPlan }
+  | { _tag: "Planning"; savedTools: string[]; pending?: PendingPlan; diffContext?: DiffContext }
   | { _tag: "AwaitingChoice"; savedTools: string[]; pending: PendingPlan }
-  | { _tag: "Executing"; todoItems: TodoItem[]; planFilePath: string | null };
+  | {
+      _tag: "Executing";
+      todoItems: TodoItem[];
+      planFilePath: string | null;
+      gated: boolean;
+      phase: ExecutionPhase;
+    };
 
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
 
 export type PlanEvent =
-  | { _tag: "Toggle"; currentTools: string[] }
-  | { _tag: "PlanWithPrompt"; prompt: string; currentTools: string[] }
+  | { _tag: "Toggle"; currentTools: string[]; diffContext?: DiffContext }
+  | { _tag: "PlanWithPrompt"; prompt: string; currentTools: string[]; diffContext?: DiffContext }
   | { _tag: "AgentEnd"; todoItems: TodoItem[]; planText: string; planFilePath: string }
   | { _tag: "TurnEnd"; todoItems: TodoItem[] }
-  | { _tag: "ChooseExecute" }
+  | { _tag: "ChooseExecute"; gated?: boolean }
   | { _tag: "ChooseStay" }
   | { _tag: "ChooseRefine"; refinement: string }
   | { _tag: "Reset" }
@@ -52,8 +61,14 @@ export type PlanEvent =
       savedTools: string[] | null;
       flagPlan: boolean;
       currentTools: string[];
+      gated?: boolean;
     }
-  | { _tag: "ExecutionComplete" };
+  | { _tag: "ExecutionComplete" }
+  | { _tag: "TaskDone" }
+  | { _tag: "GatePass" }
+  | { _tag: "GateFail" }
+  | { _tag: "CounselPass" }
+  | { _tag: "CounselFail" };
 
 // ---------------------------------------------------------------------------
 // Extension-specific effects
@@ -71,6 +86,7 @@ export interface PersistPayload {
   executing: boolean;
   planFilePath: string | null;
   savedTools: string[] | null;
+  gated?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +130,7 @@ function persist(s: PlanState): PlanEffect {
           executing: true,
           planFilePath: s.planFilePath,
           savedTools: null,
+          gated: s.gated || undefined,
         };
     }
   })();
@@ -131,7 +148,11 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
     // ----- Toggle -----
     case "Toggle": {
       if (state._tag === "Inactive") {
-        const next: PlanState = { _tag: "Planning", savedTools: event.currentTools };
+        const next: PlanState = {
+          _tag: "Planning",
+          savedTools: event.currentTools,
+          diffContext: event.diffContext,
+        };
         return {
           state: next,
           effects: [
@@ -172,7 +193,9 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
           : state._tag === "AwaitingChoice"
             ? state.pending
             : undefined;
-      const next: PlanState = { _tag: "Planning", savedTools, pending };
+      const diffContext =
+        event.diffContext ?? (state._tag === "Planning" ? state.diffContext : undefined);
+      const next: PlanState = { _tag: "Planning", savedTools, pending, diffContext };
       return {
         state: next,
         effects: [
@@ -229,6 +252,8 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
         _tag: "Executing",
         todoItems: pending.todoItems,
         planFilePath: pending.planFilePath,
+        gated: event.gated ?? false,
+        phase: "running",
       };
       const execMessage =
         pending.todoItems.length > 0
@@ -275,6 +300,8 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
         _tag: "Executing",
         todoItems: event.todoItems,
         planFilePath: state.planFilePath,
+        gated: state.gated,
+        phase: state.phase,
       };
       const effects: Effect[] = [UI, persist(next)];
       if (state.planFilePath) {
@@ -313,6 +340,109 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
       return { state: next, effects };
     }
 
+    // ----- Gated execution events -----
+    case "TaskDone": {
+      if (state._tag !== "Executing" || !state.gated || state.phase !== "running") return { state };
+      const next: PlanState = { ...state, phase: "gating" };
+      return {
+        state: next,
+        effects: [
+          {
+            type: "sendMessage",
+            customType: "plan-gate",
+            content:
+              "Run the full gate (typecheck, lint, format, test). Report GATE_PASS if all pass, GATE_FAIL if any fail.",
+            display: false,
+            triggerTurn: true,
+          },
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
+    case "GatePass": {
+      if (state._tag !== "Executing" || state.phase !== "gating") return { state };
+      const next: PlanState = { ...state, phase: "counseling" };
+      return {
+        state: next,
+        effects: [
+          {
+            type: "sendMessage",
+            customType: "plan-counsel",
+            content:
+              "Gate passed. Run counsel for cross-vendor review of the changes. Report COUNSEL_PASS if approved, COUNSEL_FAIL if issues found.",
+            display: false,
+            triggerTurn: true,
+          },
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
+    case "GateFail": {
+      if (state._tag !== "Executing" || state.phase !== "gating") return { state };
+      const next: PlanState = { ...state, phase: "running" };
+      return {
+        state: next,
+        effects: [
+          { type: "notify", message: "Gate failed — fix and retry", level: "warning" },
+          {
+            type: "sendMessage",
+            customType: "plan-gate-fix",
+            content:
+              "Gate failed. Fix the failures, then mark the step as done again with [DONE:n].",
+            display: false,
+            triggerTurn: true,
+          },
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
+    case "CounselPass": {
+      if (state._tag !== "Executing" || state.phase !== "counseling") return { state };
+      const next: PlanState = { ...state, phase: "running" };
+      return {
+        state: next,
+        effects: [
+          { type: "notify", message: "Counsel approved — commit and continue" },
+          {
+            type: "sendMessage",
+            customType: "plan-counsel-pass",
+            content: "Counsel approved. Commit the changes and continue to the next step.",
+            display: false,
+            triggerTurn: true,
+          },
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
+    case "CounselFail": {
+      if (state._tag !== "Executing" || state.phase !== "counseling") return { state };
+      const next: PlanState = { ...state, phase: "running" };
+      return {
+        state: next,
+        effects: [
+          { type: "notify", message: "Counsel found issues — address feedback", level: "warning" },
+          {
+            type: "sendMessage",
+            customType: "plan-counsel-fix",
+            content:
+              "Counsel found issues. Address the feedback, then mark the step as done again with [DONE:n].",
+            display: false,
+            triggerTurn: true,
+          },
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
     // ----- Reset -----
     case "Reset": {
       return { state: { _tag: "Inactive" }, effects: [UI] };
@@ -329,6 +459,8 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
           _tag: "Executing",
           todoItems: event.todoItems,
           planFilePath: event.planFilePath,
+          gated: event.gated ?? false,
+          phase: "running",
         };
         effects.push(UI);
         if (event.planFilePath) {

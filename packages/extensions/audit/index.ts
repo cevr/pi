@@ -19,9 +19,13 @@ import { ProcessRunner } from "@cvr/pi-process-runner";
 import { register, type MachineConfig } from "@cvr/pi-state-machine";
 import type { Command } from "@cvr/pi-state-machine";
 import { Layer, ManagedRuntime } from "effect";
-import { resolveBaseBranch, getDiffStat, getChangedFiles } from "./git";
+import {
+  resolveBaseBranch,
+  getDiffStat,
+  getChangedFiles,
+  buildSkillCatalog,
+} from "@cvr/pi-diff-context";
 import { auditReducer, type AuditEffect, type AuditEvent, type AuditState } from "./machine";
-import { buildSkillCatalog } from "./skills";
 import { parseConcernsJson, PHASE_MARKERS } from "./utils";
 
 // ---------------------------------------------------------------------------

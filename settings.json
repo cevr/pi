@@ -12,6 +12,6 @@
   "hideThinkingBlock": true,
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
-  "lastChangelogVersion": "0.58.3",
+  "lastChangelogVersion": "0.58.4",
   "packages": ["npm:pi-subagents", "npm:pi-interview"]
 }

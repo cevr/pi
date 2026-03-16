@@ -13,8 +13,12 @@ import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
 import { readPrinciples } from "@cvr/pi-brain-principles";
+import { gatherDiffContext, type DiffContext } from "@cvr/pi-diff-context";
+import { GitClient } from "@cvr/pi-git-client";
+import { ProcessRunner } from "@cvr/pi-process-runner";
 import { register } from "@cvr/pi-state-machine";
 import type { Command, StateObserver } from "@cvr/pi-state-machine";
+import { Layer, ManagedRuntime } from "effect";
 import {
   PLAN_MODE_TOOLS,
   planReducer,
@@ -91,12 +95,16 @@ function getTextContent(message: AssistantMessage): string {
 
 function formatUI(state: PlanState, ctx: ExtensionContext): void {
   switch (state._tag) {
-    case "Executing":
+    case "Executing": {
       if (state.todoItems.length > 0) {
         const completed = state.todoItems.filter((t) => t.completed).length;
+        const phaseSuffix =
+          state.gated && state.phase !== "running"
+            ? ` ${state.phase === "gating" ? "⚙ gate" : "🔍 counsel"}`
+            : "";
         ctx.ui.setStatus(
           "plan-mode",
-          ctx.ui.theme.fg("accent", `📋 ${completed}/${state.todoItems.length}`),
+          ctx.ui.theme.fg("accent", `📋 ${completed}/${state.todoItems.length}${phaseSuffix}`),
         );
         ctx.ui.setWidget(
           "plan-todos",
@@ -109,6 +117,7 @@ function formatUI(state: PlanState, ctx: ExtensionContext): void {
         );
       }
       break;
+    }
     case "Planning":
     case "AwaitingChoice":
       ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "⏸ plan"));
@@ -122,10 +131,30 @@ function formatUI(state: PlanState, ctx: ExtensionContext): void {
 }
 
 // ---------------------------------------------------------------------------
+// Diff context formatting
+// ---------------------------------------------------------------------------
+
+function buildDiffContextBlock(dc: DiffContext): string {
+  if (dc.changedFiles.length === 0) return "";
+  const files = dc.changedFiles.map((f) => `- ${f}`).join("\n");
+  const skills =
+    dc.skillCatalog.length > 0
+      ? `\n\n## Available Skills\n${dc.skillCatalog.map((s) => `- ${s.name}: ${s.description}`).join("\n")}`
+      : "";
+  return `\n\n## Branch Changes (vs ${dc.baseBranch})\n${dc.diffStat}\n\n${files}${skills}`;
+}
+
+// ---------------------------------------------------------------------------
 // Extension factory
 // ---------------------------------------------------------------------------
 
 export default function planModeExtension(pi: ExtensionAPI): void {
+  const gitRuntime = ManagedRuntime.make(GitClient.layer.pipe(Layer.provide(ProcessRunner.layer)));
+
+  pi.on("session_shutdown" as any, async () => {
+    await gitRuntime.dispose();
+  });
+
   // ----- Effect interpreter -----
   function interpretEffect(effect: PlanEffect, _pi: ExtensionAPI, ctx: ExtensionContext): void {
     switch (effect.type) {
@@ -146,16 +175,6 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
   // ----- Commands -----
   const commands: Command<PlanState, PlanEvent>[] = [
-    {
-      mode: "event",
-      name: "plan",
-      description: "Toggle plan mode. /plan <prompt> enters plan mode and sends the prompt.",
-      toEvent: (_state, args): PlanEvent => {
-        const prompt = args.trim();
-        if (prompt) return { _tag: "PlanWithPrompt", prompt, currentTools: pi.getActiveTools() };
-        return { _tag: "Toggle", currentTools: pi.getActiveTools() };
-      },
-    },
     {
       mode: "query",
       name: "todos",
@@ -200,11 +219,14 @@ export default function planModeExtension(pi: ExtensionAPI): void {
       }
       const choice = await ctx.ui.select("Plan mode - what next?", [
         "Execute the plan (track progress)",
+        "Execute with gating (gate + counsel after each step)",
         "Stay in plan mode",
         "Refine the plan",
       ]);
 
-      if (choice?.startsWith("Execute")) {
+      if (choice?.startsWith("Execute with gating")) {
+        sendIfCurrent({ _tag: "ChooseExecute", gated: true });
+      } else if (choice?.startsWith("Execute")) {
         sendIfCurrent({ _tag: "ChooseExecute" });
       } else if (choice === "Refine the plan") {
         const refinement = await ctx.ui.editor("Refine the plan:", "");
@@ -250,6 +272,10 @@ export default function planModeExtension(pi: ExtensionAPI): void {
             messages: event.messages.filter((m: any) => {
               if (m.customType === "plan-mode-context") return false;
               if (m.customType === "plan-execution-context") return false;
+              if (typeof m.customType === "string" && m.customType.startsWith("plan-gate"))
+                return false;
+              if (typeof m.customType === "string" && m.customType.startsWith("plan-counsel"))
+                return false;
               if (m.role !== "user") return true;
               if (state._tag === "Inactive") {
                 const content = m.content;
@@ -271,6 +297,10 @@ export default function planModeExtension(pi: ExtensionAPI): void {
             if (state._tag === "Planning" || state._tag === "AwaitingChoice") {
               const principles = readPrinciples();
               const principlesBlock = principles ? `\n\n${principles}` : "";
+              const diffBlock =
+                state._tag === "Planning" && state.diffContext
+                  ? buildDiffContextBlock(state.diffContext)
+                  : "";
               return {
                 message: {
                   customType: "plan-mode-context",
@@ -290,13 +320,15 @@ Plan:
 2. Second step description
 ...
 
-Do NOT attempt to make changes - just describe what you would do.${principlesBlock}`,
+Do NOT attempt to make changes - just describe what you would do.${diffBlock}${principlesBlock}`,
                   display: false,
                 },
               };
             }
 
             if (state._tag === "Executing" && state.todoItems.length > 0) {
+              const principles = readPrinciples();
+              const principlesBlock = principles ? `\n\n${principles}` : "";
               const remaining = state.todoItems.filter((t) => !t.completed);
               const todoList = remaining.map((t) => `${t.step}. ${t.text}`).join("\n");
               const planRef = state.planFilePath
@@ -313,7 +345,7 @@ ${todoList}${planRef}
 Use the counsel tool for cross-vendor review before committing each batch of changes.
 
 Execute each step in order.
-After completing a step, include a [DONE:n] tag in your response.`,
+After completing a step, include a [DONE:n] tag in your response.${principlesBlock}`,
                   display: false,
                 },
               };
@@ -330,7 +362,17 @@ After completing a step, include a [DONE:n] tag in your response.`,
             const text = getTextContent(event.message);
             const updatedItems = state.todoItems.map((t) => ({ ...t }));
             const marked = markCompletedSteps(text, updatedItems);
-            if (marked > 0) return { _tag: "TurnEnd", todoItems: updatedItems };
+            if (marked > 0) {
+              // In gated mode, fire TaskDone after updating todo state
+              // The TurnEnd will update items, then agent_end triggers gating on the next cycle
+              // Actually we fire TurnEnd first, then TaskDone triggers gating
+              queueMicrotask(() => {
+                if (state.gated && state.phase === "running") {
+                  machine.send({ _tag: "TaskDone" });
+                }
+              });
+              return { _tag: "TurnEnd", todoItems: updatedItems };
+            }
             return null;
           },
         },
@@ -339,6 +381,23 @@ After completing a step, include a [DONE:n] tag in your response.`,
           mode: "fire",
           toEvent: (state, event, ctx): PlanEvent | null => {
             if (state._tag === "Executing" && state.todoItems.length > 0) {
+              const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
+              const text = lastAssistant ? getTextContent(lastAssistant) : "";
+
+              // Gated sub-phase detection
+              if (state.gated) {
+                if (state.phase === "gating") {
+                  if (/GATE_PASS/i.test(text)) return { _tag: "GatePass" };
+                  if (/GATE_FAIL/i.test(text)) return { _tag: "GateFail" };
+                  return null;
+                }
+                if (state.phase === "counseling") {
+                  if (/COUNSEL_PASS/i.test(text)) return { _tag: "CounselPass" };
+                  if (/COUNSEL_FAIL/i.test(text)) return { _tag: "CounselFail" };
+                  return null;
+                }
+              }
+
               return state.todoItems.every((t) => t.completed)
                 ? { _tag: "ExecutionComplete" }
                 : null;
@@ -381,6 +440,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
             const planFilePath = data?.planFilePath ?? null;
             const savedTools = data?.savedTools ?? null;
             const enabled = data?.enabled ?? false;
+            const gated = data?.gated ?? false;
             const flagPlan = pi.getFlag("plan") === true;
 
             // Re-scan messages for completion markers on resume
@@ -415,6 +475,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
               planFilePath,
               savedTools,
               flagPlan,
+              gated,
               currentTools: pi.getActiveTools(),
             };
           },
@@ -444,4 +505,35 @@ After completing a step, include a [DONE:n] tag in your response.`,
     },
     interpretEffect,
   );
+
+  // ----- /plan command (imperative — async diff context gathering) -----
+  pi.registerCommand("plan", {
+    description: "Toggle plan mode. /plan <prompt> enters plan mode and sends the prompt.",
+    handler: async (args, ctx) => {
+      const prompt = args.trim();
+      const currentTools = pi.getActiveTools();
+
+      // If toggling off, no need for diff context
+      const state = machine.getState();
+      if (!prompt && (state._tag === "Planning" || state._tag === "AwaitingChoice")) {
+        machine.send({ _tag: "Toggle", currentTools });
+        return;
+      }
+
+      // Gather diff context (best-effort — don't block on failure)
+      let diffContext: DiffContext | undefined;
+      try {
+        diffContext = await gatherDiffContext(ctx.cwd, gitRuntime);
+        if (diffContext.changedFiles.length === 0) diffContext = undefined;
+      } catch {
+        /* no diff context available */
+      }
+
+      if (prompt) {
+        machine.send({ _tag: "PlanWithPrompt", prompt, currentTools, diffContext });
+      } else {
+        machine.send({ _tag: "Toggle", currentTools, diffContext });
+      }
+    },
+  });
 }

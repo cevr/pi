@@ -1,20 +1,41 @@
 /**
- * Git helpers for the audit extension.
+ * diff-context — shared diff + skill catalog gathering for audit and plan-mode.
  *
- * Uses GitClient Effect service via ManagedRuntime (same pattern as editor extension).
+ * Git helpers use GitClient Effect service via ManagedRuntime.
+ * Skill catalog uses the public loadSkills API from pi-coding-agent.
  */
 
 import { GitClient } from "@cvr/pi-git-client";
 import { Effect, type ManagedRuntime } from "effect";
+import { loadSkills } from "@mariozechner/pi-coding-agent";
 
-type GitRuntime = ManagedRuntime.ManagedRuntime<GitClient, never>;
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type GitRuntime = ManagedRuntime.ManagedRuntime<GitClient, never>;
+
+export interface SkillCatalogEntry {
+  name: string;
+  description: string;
+}
+
+export interface DiffContext {
+  baseBranch: string;
+  diffStat: string;
+  changedFiles: string[];
+  skillCatalog: SkillCatalogEntry[];
+}
+
+// ---------------------------------------------------------------------------
+// Git helpers
+// ---------------------------------------------------------------------------
 
 /**
  * Resolve the base branch to diff against.
  * Tries: origin/HEAD → origin/main → origin/master → HEAD~20
  */
 export async function resolveBaseBranch(cwd: string, runtime: GitRuntime): Promise<string> {
-  // Try origin/HEAD (set by `git remote set-head origin --auto`)
   try {
     const ref = await runtime.runPromise(
       Effect.gen(function* () {
@@ -23,13 +44,11 @@ export async function resolveBaseBranch(cwd: string, runtime: GitRuntime): Promi
       }),
     );
     const trimmed = ref.trim();
-    // "refs/remotes/origin/main" → "origin/main"
     if (trimmed.startsWith("refs/remotes/")) return trimmed.slice("refs/remotes/".length);
   } catch {
     /* not set */
   }
 
-  // Try origin/main
   try {
     await runtime.runPromise(
       Effect.gen(function* () {
@@ -42,7 +61,6 @@ export async function resolveBaseBranch(cwd: string, runtime: GitRuntime): Promi
     /* doesn't exist */
   }
 
-  // Try origin/master
   try {
     await runtime.runPromise(
       Effect.gen(function* () {
@@ -92,4 +110,27 @@ export async function getChangedFiles(
   } catch {
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Skill catalog
+// ---------------------------------------------------------------------------
+
+export function buildSkillCatalog(cwd: string): SkillCatalogEntry[] {
+  const { skills } = loadSkills({ cwd, includeDefaults: true });
+  return skills
+    .filter((s) => s.description.length > 0)
+    .map((s) => ({ name: s.name, description: s.description }));
+}
+
+/**
+ * Gather full diff context: base branch, diff stat, changed files, and skill catalog.
+ * Convenience wrapper that combines all the above.
+ */
+export async function gatherDiffContext(cwd: string, runtime: GitRuntime): Promise<DiffContext> {
+  const baseBranch = await resolveBaseBranch(cwd, runtime);
+  const diffStat = await getDiffStat(cwd, baseBranch, runtime);
+  const changedFiles = await getChangedFiles(cwd, baseBranch, runtime);
+  const skillCatalog = buildSkillCatalog(cwd);
+  return { baseBranch, diffStat, changedFiles, skillCatalog };
 }
