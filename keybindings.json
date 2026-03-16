@@ -1,1 +1,7 @@
-{}
+{
+  "cycleModelForward": "shift+tab",
+  "cycleModelBackward": "shift+ctrl+tab",
+  "cycleThinkingLevel": "ctrl+t",
+  "toggleThinking": "ctrl+shift+t",
+  "selectModel": "ctrl+l"
+}

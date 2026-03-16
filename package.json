@@ -78,6 +78,7 @@
       "./dist/extensions/mentions.js",
       "./dist/extensions/mermaid.js",
       "./dist/extensions/oracle.js",
+      "./dist/extensions/plan-mode.js",
       "./dist/extensions/read.js",
       "./dist/extensions/read-session.js",
       "./dist/extensions/read-web-page.js",
