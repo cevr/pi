@@ -91,27 +91,21 @@ export class GitClient extends ServiceMap.Service<
       return {
         exec: git,
 
-        log: (cwd: string, opts?: { maxCount?: number }) =>
-          Effect.gen(function* () {
-            const maxCount = opts?.maxCount ?? 50;
-            const stdout = yield* git(
-              ["log", `--max-count=${maxCount}`, "--format=%H\t%aI\t%s"],
-              cwd,
-            );
-            return stdout
-              .trim()
-              .split("\n")
-              .filter((l) => l.includes("\t"))
-              .map((line) => {
-                const [sha = "", committedAt = "", subject = ""] = line.split("\t");
-                return {
-                  sha,
-                  shortSha: sha.slice(0, 12),
-                  subject,
-                  committedAt,
-                };
-              });
-          }),
+        log: (cwd: string, opts?: { maxCount?: number }) => {
+          const maxCount = opts?.maxCount ?? 50;
+          return git(["log", `--max-count=${maxCount}`, "--format=%H\t%aI\t%s"], cwd).pipe(
+            Effect.map((stdout) =>
+              stdout
+                .trim()
+                .split("\n")
+                .filter((l) => l.includes("\t"))
+                .map((line) => {
+                  const [sha = "", committedAt = "", subject = ""] = line.split("\t");
+                  return { sha, shortSha: sha.slice(0, 12), subject, committedAt };
+                }),
+            ),
+          );
+        },
 
         diffStat: (cwd: string, opts?: { timeoutMs?: number }) =>
           git(["diff", "--stat"], cwd, opts),

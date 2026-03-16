@@ -237,44 +237,22 @@ export class ProcessRunner extends ServiceMap.Service<
     results?: Map<string, ProcessResult>,
   ) =>
     Layer.succeed(ProcessRunner, {
-      run: (command: string, opts?: RunOptions) =>
-        Effect.gen(function* () {
-          const result = results?.get(command) ?? {
-            exitCode: 0,
-            stdout: "",
-            stderr: "",
-          };
-          yield* Ref.update(spawnLog, (log) => [
-            ...log,
-            {
-              command,
-              args: opts?.args ?? [],
-              cwd: opts?.cwd,
-              result,
-            },
-          ]);
-          return result;
-        }),
+      run: (command: string, opts?: RunOptions) => {
+        const result = results?.get(command) ?? { exitCode: 0, stdout: "", stderr: "" };
+        return Ref.update(spawnLog, (log) => [
+          ...log,
+          { command, args: opts?.args ?? [], cwd: opts?.cwd, result },
+        ]).pipe(Effect.as(result));
+      },
 
-      runStream: (command: string, opts?: RunOptions) =>
-        Stream.fromEffect(
-          Effect.gen(function* () {
-            const result = results?.get(command) ?? {
-              exitCode: 0,
-              stdout: "",
-              stderr: "",
-            };
-            yield* Ref.update(spawnLog, (log) => [
-              ...log,
-              {
-                command,
-                args: opts?.args ?? [],
-                cwd: opts?.cwd,
-                result,
-              },
-            ]);
-            return result.stdout;
-          }),
-        ).pipe(Stream.flatMap((s) => Stream.fromIterable(s.split("\n")))),
+      runStream: (command: string, opts?: RunOptions) => {
+        const result = results?.get(command) ?? { exitCode: 0, stdout: "", stderr: "" };
+        return Stream.fromEffect(
+          Ref.update(spawnLog, (log) => [
+            ...log,
+            { command, args: opts?.args ?? [], cwd: opts?.cwd, result },
+          ]).pipe(Effect.as(result.stdout)),
+        ).pipe(Stream.flatMap((s) => Stream.fromIterable(s.split("\n"))));
+      },
     });
 }

@@ -40,34 +40,30 @@ export class Mutex extends ServiceMap.Service<
    */
   static layer = Layer.effect(
     Mutex,
-    Effect.gen(function* () {
-      const semaphores = yield* Ref.make(new Map<string, Semaphore.Semaphore>());
+    Ref.make(new Map<string, Semaphore.Semaphore>()).pipe(
+      Effect.map((semaphores) => {
+        const getSemaphore = (key: string) =>
+          Ref.get(semaphores).pipe(
+            Effect.flatMap((current) => {
+              const existing = current.get(key);
+              if (existing) return Effect.succeed(existing);
+              const sem = Semaphore.makeUnsafe(1);
+              return Ref.update(semaphores, (map) => new Map(map).set(key, sem)).pipe(
+                Effect.as(sem),
+              );
+            }),
+          );
 
-      const getSemaphore = (key: string) =>
-        Effect.gen(function* () {
-          const current = yield* Ref.get(semaphores);
-          const existing = current.get(key);
-          if (existing) return existing;
-
-          const sem = Semaphore.makeUnsafe(1);
-          yield* Ref.update(semaphores, (map) => {
-            const next = new Map(map);
-            next.set(key, sem);
-            return next;
-          });
-          return sem;
-        });
-
-      return {
-        withLock: <A, E, R>(filePath: string, effect: Effect.Effect<A, E, R>) => {
-          const key = nodePath.resolve(filePath);
-          return Effect.gen(function* () {
-            const sem = yield* getSemaphore(key);
-            return yield* sem.withPermits(1)(effect);
-          });
-        },
-      };
-    }),
+        return {
+          withLock: <A, E, R>(filePath: string, effect: Effect.Effect<A, E, R>) => {
+            const key = nodePath.resolve(filePath);
+            return getSemaphore(key).pipe(
+              Effect.flatMap((sem) => sem.withPermits(1)(effect)),
+            );
+          },
+        };
+      }),
+    ),
   );
 
   /**
