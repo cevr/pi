@@ -32,24 +32,12 @@ const PermissionRuleSchema = Schema.Struct({
 export type PermissionRule = typeof PermissionRuleSchema.Type;
 
 const PermissionRulesFromJson = Schema.fromJsonString(Schema.Array(PermissionRuleSchema));
-const decodeRules = Schema.decodeUnknownEffect(PermissionRulesFromJson);
+const _decodeRules = Schema.decodeUnknownEffect(PermissionRulesFromJson);
 
 export interface PermissionVerdict {
   action: "allow" | "reject";
   message?: string;
 }
-
-// ---------------------------------------------------------------------------
-// errors
-// ---------------------------------------------------------------------------
-
-export class PermissionDenied extends Schema.TaggedErrorClass<PermissionDenied>()(
-  "PermissionDenied",
-  {
-    tool: Schema.String,
-    message: Schema.String,
-  },
-) {}
 
 // ---------------------------------------------------------------------------
 // pure evaluation (shared by Effect and legacy paths)
@@ -85,7 +73,12 @@ export function evaluatePermission(
 // ---------------------------------------------------------------------------
 
 function isEnoent(err: unknown): boolean {
-  return err != null && typeof err === "object" && "code" in err && (err as { code: string }).code === "ENOENT";
+  return (
+    err != null &&
+    typeof err === "object" &&
+    "code" in err &&
+    (err as { code: string }).code === "ENOENT"
+  );
 }
 
 /** Read + decode permissions from disk. Missing file → []. Malformed/unreadable → FAIL_CLOSED. */
@@ -95,20 +88,28 @@ export function decodePermissionsFile(filePath: string): PermissionRule[] {
     raw = fs.readFileSync(filePath, "utf-8");
   } catch (err) {
     if (isEnoent(err)) return []; // no file → no rules → allow all
-    console.error(`[@cvr/pi-permissions] cannot read ${filePath} — rejecting all tool calls until fixed`);
+    console.error(
+      `[@cvr/pi-permissions] cannot read ${filePath} — rejecting all tool calls until fixed`,
+    );
     return FAIL_CLOSED_RULES;
   }
   try {
     return decodeRulesSync(raw);
   } catch {
-    console.error(`[@cvr/pi-permissions] malformed ${filePath} — rejecting all tool calls until fixed`);
+    console.error(
+      `[@cvr/pi-permissions] malformed ${filePath} — rejecting all tool calls until fixed`,
+    );
     return FAIL_CLOSED_RULES;
   }
 }
 
 /** Rules that reject everything — used when permissions file is malformed or unreadable. */
 const FAIL_CLOSED_RULES: PermissionRule[] = [
-  { tool: "*", action: "reject", message: "permissions.json is malformed — all tools blocked until fixed" },
+  {
+    tool: "*",
+    action: "reject",
+    message: "permissions.json is malformed — all tools blocked until fixed",
+  },
 ];
 
 // ---------------------------------------------------------------------------

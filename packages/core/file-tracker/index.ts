@@ -4,17 +4,13 @@
  * each edit writes a JSON file to a configurable directory (default:
  * ~/.pi/file-changes/{sessionId}/{toolCallId}.{uuid}).
  *
- * `FileTracker` Effect service for effectful callers.
- * Sync functions (`saveChange`, `loadChanges`, etc.) for non-Effect callers.
- * `simpleDiff` is a pure function (no service needed).
+ * sync functions (`saveChange`, `loadChanges`, etc.) + `simpleDiff` (pure).
  */
 
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effect, Layer, Option, Schema, ServiceMap } from "effect";
-
 // ---------------------------------------------------------------------------
 // types
 // ---------------------------------------------------------------------------
@@ -31,16 +27,7 @@ export interface FileChange {
 }
 
 // ---------------------------------------------------------------------------
-// errors
-// ---------------------------------------------------------------------------
-
-export class FileTrackerError extends Schema.TaggedErrorClass<FileTrackerError>()(
-  "FileTrackerError",
-  { message: Schema.String },
-) {}
-
-// ---------------------------------------------------------------------------
-// sync internals (shared by service layer and sync API)
+// sync internals
 // ---------------------------------------------------------------------------
 
 const _state = {
@@ -161,119 +148,6 @@ export function findLatestChange(
 }
 
 // ---------------------------------------------------------------------------
-// service
-// ---------------------------------------------------------------------------
-
-export class FileTracker extends ServiceMap.Service<
-  FileTracker,
-  {
-    readonly save: (
-      sessionId: string,
-      toolCallId: string,
-      change: Omit<FileChange, "id" | "reverted">,
-    ) => Effect.Effect<string, FileTrackerError>;
-    readonly load: (sessionId: string, toolCallId: string) => Effect.Effect<FileChange[]>;
-    readonly revert: (
-      sessionId: string,
-      toolCallId: string,
-      changeId: string,
-    ) => Effect.Effect<Option.Option<FileChange>, FileTrackerError>;
-    readonly findLatest: (
-      sessionId: string,
-      filePath: string,
-      activeToolCallIds: string[],
-    ) => Effect.Effect<Option.Option<{ toolCallId: string; change: FileChange }>>;
-  }
->()("@cvr/pi-file-tracker/index/FileTracker") {
-  static layer = Layer.succeed(FileTracker, {
-    save: (sessionId: string, toolCallId: string, change: Omit<FileChange, "id" | "reverted">) =>
-      Effect.try({
-        try: () => saveChange(sessionId, toolCallId, change),
-        catch: (err) =>
-          new FileTrackerError({
-            message: `save failed: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-      }),
-
-    load: (sessionId: string, toolCallId: string) =>
-      Effect.sync(() => loadChanges(sessionId, toolCallId)),
-
-    revert: (sessionId: string, toolCallId: string, changeId: string) =>
-      Effect.try({
-        try: () => Option.fromNullOr(revertChange(sessionId, toolCallId, changeId)),
-        catch: (err) =>
-          new FileTrackerError({
-            message: `revert failed: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-      }),
-
-    findLatest: (sessionId: string, filePath: string, activeToolCallIds: string[]) =>
-      Effect.sync(() =>
-        Option.fromNullOr(findLatestChange(sessionId, filePath, activeToolCallIds)),
-      ),
-  });
-
-  static layerTest = Layer.effect(
-    FileTracker,
-    Effect.sync(() => {
-      const store = new Map<string, FileChange>();
-
-      return {
-        save: (
-          sessionId: string,
-          toolCallId: string,
-          change: Omit<FileChange, "id" | "reverted">,
-        ) =>
-          Effect.sync(() => {
-            const id = crypto.randomUUID();
-            const record: FileChange = { ...change, id, reverted: false };
-            store.set(`${sessionId}/${toolCallId}.${id}`, record);
-            return id;
-          }),
-
-        load: (sessionId: string, toolCallId: string) =>
-          Effect.sync(() => {
-            const prefix = `${sessionId}/${toolCallId}.`;
-            const results: FileChange[] = [];
-            for (const [key, value] of store) {
-              if (key.startsWith(prefix)) results.push(value);
-            }
-            return results;
-          }),
-
-        revert: (sessionId: string, toolCallId: string, changeId: string) =>
-          Effect.sync(() => {
-            const key = `${sessionId}/${toolCallId}.${changeId}`;
-            const change = store.get(key);
-            if (!change || change.reverted) return Option.none<FileChange>();
-            change.reverted = true;
-            return Option.some(change);
-          }),
-
-        findLatest: (sessionId: string, filePath: string, activeToolCallIds: string[]) =>
-          Effect.sync(() => {
-            const uri = `file://${path.resolve(filePath)}`;
-            for (let i = activeToolCallIds.length - 1; i >= 0; i--) {
-              const toolCallId = activeToolCallIds[i];
-              if (!toolCallId) continue;
-              const prefix = `${sessionId}/${toolCallId}.`;
-              for (const [key, change] of store) {
-                if (key.startsWith(prefix) && !change.reverted && change.uri === uri) {
-                  return Option.some({ toolCallId, change });
-                }
-              }
-            }
-            return Option.none<{
-              toolCallId: string;
-              change: FileChange;
-            }>();
-          }),
-      };
-    }),
-  );
-}
-
-// ---------------------------------------------------------------------------
 // simpleDiff — pure function, no service needed
 // ---------------------------------------------------------------------------
 
@@ -281,14 +155,16 @@ const _diffLib = (() => {
   try {
     const esmRequire = createRequire(import.meta.url);
     const diffLib = esmRequire("diff");
-    return { createPatch: diffLib.createPatch as (
-      fileName: string,
-      oldStr: string,
-      newStr: string,
-      oldHeader?: string,
-      newHeader?: string,
-      options?: { context?: number },
-    ) => string };
+    return {
+      createPatch: diffLib.createPatch as (
+        fileName: string,
+        oldStr: string,
+        newStr: string,
+        oldHeader?: string,
+        newHeader?: string,
+        options?: { context?: number },
+      ) => string,
+    };
   } catch {
     return null;
   }
@@ -296,9 +172,16 @@ const _diffLib = (() => {
 
 export function simpleDiff(filePath: string, before: string, after: string): string {
   if (_diffLib) {
-    const patch = _diffLib.createPatch(path.basename(filePath), before, after, "original", "modified", {
-      context: 3,
-    });
+    const patch = _diffLib.createPatch(
+      path.basename(filePath),
+      before,
+      after,
+      "original",
+      "modified",
+      {
+        context: 3,
+      },
+    );
     const lines = patch.split("\n");
     const startIdx = lines.findIndex((l) => l.startsWith("---"));
     return (startIdx > 0 ? lines.slice(startIdx) : lines).join("\n");

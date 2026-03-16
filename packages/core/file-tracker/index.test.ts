@@ -2,7 +2,6 @@ import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Effect, Option } from "effect";
 import {
   saveChange,
   loadChanges,
@@ -10,7 +9,6 @@ import {
   findLatestChange,
   simpleDiff,
   setFileChangesDir,
-  FileTracker,
 } from "./index";
 
 let tmpDir: string;
@@ -187,54 +185,5 @@ describe("findLatestChange", () => {
 
   it("returns null for no changes", () => {
     expect(findLatestChange(sessionId, "/nope.txt", ["tc-x"])).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// FileTracker service (layerTest — in-memory)
-// ---------------------------------------------------------------------------
-
-const runWithMemory = <A, E>(effect: Effect.Effect<A, E, FileTracker>): Promise<A> =>
-  Effect.runPromise(Effect.provide(effect, FileTracker.layerTest));
-
-describe("FileTracker (layerTest)", () => {
-  it("saves and loads in memory", async () => {
-    const result = await runWithMemory(
-      Effect.gen(function* () {
-        const tracker = yield* FileTracker;
-        yield* tracker.save("s1", "tc1", {
-          uri: "file:///test.txt",
-          before: "",
-          after: "hello",
-          diff: "",
-          isNewFile: true,
-          timestamp: Date.now(),
-        });
-        return yield* tracker.load("s1", "tc1");
-      }),
-    );
-    expect(result).toHaveLength(1);
-    expect(result[0]!.after).toBe("hello");
-  });
-
-  it("reverts in memory", async () => {
-    const result = await runWithMemory(
-      Effect.gen(function* () {
-        const tracker = yield* FileTracker;
-        const id = yield* tracker.save("s1", "tc1", {
-          uri: "file:///test.txt",
-          before: "old",
-          after: "new",
-          diff: "",
-          isNewFile: false,
-          timestamp: Date.now(),
-        });
-        const reverted = yield* tracker.revert("s1", "tc1", id);
-        const second = yield* tracker.revert("s1", "tc1", id);
-        return { reverted, second };
-      }),
-    );
-    expect(Option.isSome(result.reverted)).toBe(true);
-    expect(Option.isNone(result.second)).toBe(true);
   });
 });
