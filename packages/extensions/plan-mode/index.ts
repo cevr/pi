@@ -25,10 +25,11 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
+import { readPrinciples } from "@cvr/pi-brain-principles";
 import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils";
 
 /** Read-only tools available in plan mode. */
-const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "skill"];
+const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "skill", "interview"];
 
 const PLANS_DIR = path.join(os.homedir(), ".pi", "plans");
 
@@ -166,8 +167,17 @@ export default function planModeExtension(pi: ExtensionAPI): void {
   }
 
   pi.registerCommand("plan", {
-    description: "Toggle plan mode (read-only exploration)",
-    handler: async (_args, ctx) => togglePlanMode(ctx),
+    description: "Toggle plan mode. /plan <prompt> enters plan mode and sends the prompt.",
+    handler: async (args, ctx) => {
+      const prompt = typeof args === "string" ? args.trim() : "";
+      if (prompt) {
+        // /plan <prompt> — enter plan mode and send the prompt
+        if (!planModeEnabled) enterPlanMode(ctx);
+        pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+      } else {
+        togglePlanMode(ctx);
+      }
+    },
   });
 
   pi.registerCommand("todos", {
@@ -203,15 +213,15 @@ export default function planModeExtension(pi: ExtensionAPI): void {
     }
   });
 
-  // Filter out stale plan/execution context messages
+  // Filter stale plan/execution context — always strip old copies so before_agent_start
+  // can inject one fresh copy per turn (prevents accumulation across turns).
   pi.on("context", async (event) => {
-    if (planModeEnabled && executionMode) return;
-
     return {
       messages: event.messages.filter((m) => {
         const msg = m as AgentMessage & { customType?: string };
-        if (!planModeEnabled && msg.customType === "plan-mode-context") return false;
-        if (!executionMode && msg.customType === "plan-execution-context") return false;
+        // always strip — before_agent_start re-injects fresh each turn
+        if (msg.customType === "plan-mode-context") return false;
+        if (msg.customType === "plan-execution-context") return false;
         if (msg.role !== "user") return true;
 
         const content = msg.content;
@@ -233,6 +243,8 @@ export default function planModeExtension(pi: ExtensionAPI): void {
   // Inject plan/execution context before agent starts
   pi.on("before_agent_start", async () => {
     if (planModeEnabled) {
+      const principles = readPrinciples();
+      const principlesBlock = principles ? `\n\n${principles}` : "";
       return {
         message: {
           customType: "plan-mode-context",
@@ -243,6 +255,7 @@ Restrictions:
 - You can only use: ${PLAN_MODE_TOOLS.join(", ")}
 - You CANNOT use: edit, write (file modifications are disabled)
 - Bash is restricted to an allowlist of read-only commands
+- Use the interview tool to ask the user clarifying questions about scope
 
 Create a detailed numbered plan under a "Plan:" header:
 
@@ -251,7 +264,7 @@ Plan:
 2. Second step description
 ...
 
-Do NOT attempt to make changes - just describe what you would do.`,
+Do NOT attempt to make changes - just describe what you would do.${principlesBlock}`,
           display: false,
         },
       };
@@ -270,6 +283,8 @@ Do NOT attempt to make changes - just describe what you would do.`,
 
 Remaining steps:
 ${todoList}${planRef}
+
+Use the counsel tool for cross-vendor review before committing each batch of changes.
 
 Execute each step in order.
 After completing a step, include a [DONE:n] tag in your response.`,
@@ -381,6 +396,16 @@ After completing a step, include a [DONE:n] tag in your response.`,
         pi.sendUserMessage(refinement.trim());
       }
     }
+  });
+
+  // Reset state on session switch (prevents leaking into different session)
+  pi.on("session_switch", async (_event, ctx) => {
+    planModeEnabled = false;
+    executionMode = false;
+    todoItems = [];
+    planFilePath = null;
+    savedTools = null;
+    updateStatus(ctx);
   });
 
   // Restore state on session start/resume

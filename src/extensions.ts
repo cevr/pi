@@ -1,6 +1,7 @@
 export { default as bash } from "../packages/extensions/bash/index";
 export { default as codeReview } from "../packages/extensions/code-review/index";
 export { default as commandPalette } from "../packages/extensions/command-palette/index";
+export { default as counsel } from "../packages/extensions/counsel/index";
 export { default as createFile } from "../packages/extensions/create-file/index";
 export { default as editFile } from "../packages/extensions/edit-file/index";
 export { default as editor } from "../packages/extensions/editor/index";
@@ -20,6 +21,7 @@ export { default as planMode } from "../packages/extensions/plan-mode/index";
 export { default as read } from "../packages/extensions/read/index";
 export { default as readSession } from "../packages/extensions/read-session/index";
 export { default as readWebPage } from "../packages/extensions/read-web-page/index";
+export { default as reviewLoop } from "../packages/extensions/review-loop/index";
 export { default as searchSessions } from "../packages/extensions/search-sessions/index";
 export { default as sessionName } from "../packages/extensions/session-name/index";
 export { default as skill } from "../packages/extensions/skill/index";
