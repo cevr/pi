@@ -9,7 +9,7 @@
  */
 
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { Effect, Layer, Ref, Schema, ServiceMap, Stream } from "effect";
+import { Cause, Effect, Layer, Queue, Ref, Schema, ServiceMap, Stream } from "effect";
 
 // ---------------------------------------------------------------------------
 // errors
@@ -57,6 +57,35 @@ export interface SpawnRecord {
 }
 
 // ---------------------------------------------------------------------------
+// internal helpers
+// ---------------------------------------------------------------------------
+
+/** Kill a child process and its entire process group. SIGTERM then SIGKILL after 3s. */
+function killTree(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+  const pid = child.pid;
+  if (pid == null) return;
+  try {
+    // kill the process group (negative pid) — catches grandchildren from sh -c
+    process.kill(-pid, signal);
+  } catch {
+    // group kill failed (already dead, or not a group leader) — try direct
+    try {
+      child.kill(signal);
+    } catch {
+      // already dead
+    }
+  }
+}
+
+/** SIGTERM the tree, then SIGKILL after 3s. Returns cleanup fn for the escalation timer. */
+function killTreeWithEscalation(child: ChildProcess): () => void {
+  killTree(child, "SIGTERM");
+  const escalation = setTimeout(() => killTree(child, "SIGKILL"), 3000);
+  escalation.unref();
+  return () => clearTimeout(escalation);
+}
+
+// ---------------------------------------------------------------------------
 // internal spawn helper
 // ---------------------------------------------------------------------------
 
@@ -67,6 +96,7 @@ function spawnCollect(command: string, opts?: RunOptions): Promise<ProcessResult
       cwd: opts?.cwd,
       env: opts?.env ? { ...process.env, ...opts.env } : undefined,
       stdio: ["pipe", "pipe", "pipe"],
+      detached: true, // own process group for tree kill
     };
 
     let child: ChildProcess;
@@ -86,6 +116,7 @@ function spawnCollect(command: string, opts?: RunOptions): Promise<ProcessResult
     let stderr = "";
     let timedOut = false;
     let aborted = false;
+    let escalationCleanup: (() => void) | undefined;
 
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -101,22 +132,19 @@ function spawnCollect(command: string, opts?: RunOptions): Promise<ProcessResult
       child.stdin?.end();
     }
 
-    // timeout: SIGTERM then SIGKILL
+    // timeout: SIGTERM then SIGKILL (tree kill)
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    let killId: ReturnType<typeof setTimeout> | undefined;
     if (opts?.timeoutMs) {
       timeoutId = setTimeout(() => {
         timedOut = true;
-        child.kill("SIGTERM");
-        killId = setTimeout(() => child.kill("SIGKILL"), 3000);
+        escalationCleanup = killTreeWithEscalation(child);
       }, opts.timeoutMs);
     }
 
     // AbortSignal bridging
     const onAbort = () => {
       aborted = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 3000);
+      escalationCleanup = killTreeWithEscalation(child);
     };
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -151,7 +179,7 @@ function spawnCollect(command: string, opts?: RunOptions): Promise<ProcessResult
 
     function cleanup() {
       if (timeoutId) clearTimeout(timeoutId);
-      if (killId) clearTimeout(killId);
+      escalationCleanup?.();
       opts?.signal?.removeEventListener("abort", onAbort);
     }
   });
@@ -214,22 +242,124 @@ export class ProcessRunner extends ServiceMap.Service<
       }),
 
     runStream: (command: string, opts?: RunOptions) =>
-      Stream.fromEffect(
-        Effect.tryPromise({
-          try: (signal) => {
-            const combinedController = new AbortController();
-            signal.addEventListener("abort", () => combinedController.abort(), { once: true });
-            opts?.signal?.addEventListener("abort", () => combinedController.abort(), {
-              once: true,
-            });
-            return spawnCollect(command, {
-              ...opts,
-              signal: combinedController.signal,
-            });
-          },
-          catch: (err) => toCommandError(command, err),
+      Stream.callback<string, CommandError | CommandTimeout | CommandAborted>((queue) =>
+        Effect.gen(function* () {
+          const args = opts?.args ?? [];
+          const spawnOpts: SpawnOptions = {
+            cwd: opts?.cwd,
+            env: opts?.env ? { ...process.env, ...opts.env } : undefined,
+            stdio: ["pipe", "pipe", "pipe"],
+            detached: true, // own process group for tree kill
+          };
+
+          let child: ChildProcess;
+          try {
+            child = spawn(command, args, spawnOpts);
+          } catch (err) {
+            Queue.failCauseUnsafe(
+              queue,
+              Cause.fail(new CommandError({
+                command,
+                message: `spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+              })),
+            );
+            return;
+          }
+
+          let stderr = "";
+          let timedOut = false;
+          let aborted = false;
+          let closed = false;
+          let escalationCleanup: (() => void) | undefined;
+
+          // stream stdout chunks as they arrive
+          child.stdout?.on("data", (chunk: Buffer) => {
+            Queue.offerUnsafe(queue, chunk.toString());
+          });
+          child.stderr?.on("data", (chunk: Buffer) => {
+            stderr += chunk.toString();
+          });
+
+          if (opts?.stdin) {
+            child.stdin?.write(opts.stdin);
+            child.stdin?.end();
+          } else {
+            child.stdin?.end();
+          }
+
+          // timeout: tree kill with escalation
+          let timeoutId: ReturnType<typeof setTimeout> | undefined;
+          if (opts?.timeoutMs) {
+            timeoutId = setTimeout(() => {
+              timedOut = true;
+              escalationCleanup = killTreeWithEscalation(child);
+            }, opts.timeoutMs);
+          }
+
+          // AbortSignal bridging
+          const onAbort = () => {
+            aborted = true;
+            escalationCleanup = killTreeWithEscalation(child);
+          };
+          opts?.signal?.addEventListener("abort", onAbort, { once: true });
+
+          const cleanup = () => {
+            if (timeoutId) clearTimeout(timeoutId);
+            escalationCleanup?.();
+            opts?.signal?.removeEventListener("abort", onAbort);
+          };
+
+          child.on("error", (err) => {
+            closed = true;
+            cleanup();
+            Queue.failCauseUnsafe(
+              queue,
+              Cause.fail(new CommandError({ command, message: err.message, stderr })),
+            );
+          });
+
+          child.on("close", (code) => {
+            closed = true;
+            cleanup();
+            if (aborted) {
+              Queue.failCauseUnsafe(queue, Cause.fail(new CommandAborted({ command })));
+              return;
+            }
+            if (timedOut) {
+              Queue.failCauseUnsafe(
+                queue,
+                Cause.fail(new CommandTimeout({ command, timeoutMs: opts?.timeoutMs ?? 0 })),
+              );
+              return;
+            }
+            if ((code ?? 1) !== 0) {
+              Queue.failCauseUnsafe(
+                queue,
+                Cause.fail(new CommandError({
+                  command,
+                  message: `exit code ${code ?? 1}`,
+                  stderr,
+                })),
+              );
+              return;
+            }
+            Queue.endUnsafe(queue);
+          });
+
+          // cleanup on scope finalization (Effect interruption / early consumer stop)
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              cleanup();
+              if (!closed) {
+                // child still running — kill tree with escalation
+                const esc = killTreeWithEscalation(child);
+                // unref so we don't block process exit
+                child.on("close", esc);
+              }
+            }),
+          );
         }),
-      ).pipe(Stream.flatMap((result) => Stream.fromIterable(result.stdout.split("\n")))),
+      ),
   });
 
   static layerTest = (
@@ -251,8 +381,19 @@ export class ProcessRunner extends ServiceMap.Service<
           Ref.update(spawnLog, (log) => [
             ...log,
             { command, args: opts?.args ?? [], cwd: opts?.cwd, result },
-          ]).pipe(Effect.as(result.stdout)),
-        ).pipe(Stream.flatMap((s) => Stream.fromIterable(s.split("\n"))));
+          ]).pipe(
+            Effect.flatMap(() => {
+              if (result.exitCode !== 0) {
+                return Effect.fail(new CommandError({
+                  command,
+                  message: `exit code ${result.exitCode}`,
+                  stderr: result.stderr,
+                }));
+              }
+              return Effect.succeed(result.stdout);
+            }),
+          ),
+        ).pipe(Stream.flatMap((s) => s ? Stream.make(s) : Stream.empty));
       },
     });
 }

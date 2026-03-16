@@ -69,8 +69,8 @@ describe("ProcessRunner (real)", () => {
     expect(result._tag).toBe("Failure");
   });
 
-  it("streams stdout line by line", async () => {
-    const lines = await runWithReal(
+  it("streams stdout chunks incrementally", async () => {
+    const chunks = await runWithReal(
       Effect.gen(function* () {
         const runner = yield* ProcessRunner;
         return yield* runner
@@ -82,7 +82,41 @@ describe("ProcessRunner (real)", () => {
       }),
     );
 
+    // chunks are raw strings (may arrive as one or many), join and split to verify content
+    const combined = chunks.join("");
+    expect(combined).toContain("line1");
+    expect(combined).toContain("line2");
+    expect(combined).toContain("line3");
+  });
+
+  it("streams stdout can be split into lines by consumer", async () => {
+    const lines = await runWithReal(
+      Effect.gen(function* () {
+        const runner = yield* ProcessRunner;
+        return yield* runner
+          .runStream("sh", { args: ["-c", "echo line1; echo line2; echo line3"] })
+          .pipe(
+            Stream.splitLines,
+            Stream.runCollect,
+            Effect.map((chunk) => [...chunk]),
+          );
+      }),
+    );
+
     expect(lines.filter((l) => l.trim())).toEqual(["line1", "line2", "line3"]);
+  });
+
+  it("stream fails on non-zero exit code", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ProcessRunner;
+        return yield* runner
+          .runStream("sh", { args: ["-c", "echo partial; exit 1"] })
+          .pipe(Stream.runCollect, Effect.result);
+      }).pipe(Effect.provide(ProcessRunner.layer)),
+    );
+
+    expect(result._tag).toBe("Failure");
   });
 
   it("passes stdin to process", async () => {
@@ -137,12 +171,12 @@ describe("ProcessRunner (layerTest)", () => {
     expect(result.stdout).toBe("main\n");
   });
 
-  it("streams from test results", async () => {
+  it("streams stdout as single chunk from test results", async () => {
     const logRef = Ref.makeUnsafe<Array<SpawnRecord>>([]);
     const results = new Map([["cat", { exitCode: 0, stdout: "a\nb\nc", stderr: "" }]]);
     const testLayer = ProcessRunner.layerTest(logRef, results);
 
-    const lines = await Effect.runPromise(
+    const chunks = await Effect.runPromise(
       Effect.gen(function* () {
         const runner = yield* ProcessRunner;
         return yield* runner.runStream("cat").pipe(
@@ -152,6 +186,21 @@ describe("ProcessRunner (layerTest)", () => {
       }).pipe(Effect.provide(testLayer)),
     );
 
-    expect(lines).toEqual(["a", "b", "c"]);
+    expect(chunks).toEqual(["a\nb\nc"]);
+  });
+
+  it("stream fails on non-zero exit in test layer", async () => {
+    const logRef = Ref.makeUnsafe<Array<SpawnRecord>>([]);
+    const results = new Map([["fail", { exitCode: 1, stdout: "", stderr: "bad" }]]);
+    const testLayer = ProcessRunner.layerTest(logRef, results);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ProcessRunner;
+        return yield* runner.runStream("fail").pipe(Stream.runCollect, Effect.result);
+      }).pipe(Effect.provide(testLayer)),
+    );
+
+    expect(result._tag).toBe("Failure");
   });
 });

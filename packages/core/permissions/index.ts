@@ -25,7 +25,7 @@ const PermissionRuleSchema = Schema.Struct({
       cmd: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
     }),
   ),
-  action: Schema.Literal("allow", "reject"),
+  action: Schema.Literals(["allow", "reject"]),
   message: Schema.optional(Schema.String),
 });
 
