@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import {
   clearConfigCache,
   getExtensionConfig,
@@ -388,24 +388,25 @@ describe("ConfigService", () => {
     expect(result.enabled).toBe(true);
   });
 
-  test("getGlobal reads top-level key", async () => {
+  test("getGlobal reads top-level key as Some", async () => {
     const result = await runWithConfig(
       Effect.gen(function* () {
         const config = yield* ConfigService;
         return yield* config.getGlobal("promptVariables");
       }),
     );
-    expect(result).toEqual({ foo: { literal: "bar" } });
+    expect(Option.isSome(result)).toBe(true);
+    expect(Option.getOrUndefined(result)).toEqual({ foo: { literal: "bar" } });
   });
 
-  test("getGlobal returns undefined for missing key", async () => {
+  test("getGlobal returns None for missing key", async () => {
     const result = await runWithConfig(
       Effect.gen(function* () {
         const config = yield* ConfigService;
         return yield* config.getGlobal("missing");
       }),
     );
-    expect(result).toBeUndefined();
+    expect(Option.isNone(result)).toBe(true);
   });
 
   test("configDir returns test path", async () => {

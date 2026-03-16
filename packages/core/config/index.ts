@@ -17,7 +17,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effect, Layer, Schema, ServiceMap } from "effect";
+import { Effect, Layer, Option, Schema, ServiceMap } from "effect";
 
 // ---------------------------------------------------------------------------
 // encapsulated config state — no bare module-level mutable variables
@@ -221,7 +221,7 @@ export class ConfigService extends ServiceMap.Service<
       defaults: T,
       opts?: GetExtensionConfigWithSchemaOpts<T>,
     ) => Effect.Effect<EnabledExtensionConfig<T>, ConfigError>;
-    readonly getGlobal: <T>(key: string) => Effect.Effect<T | undefined>;
+    readonly getGlobal: <T>(key: string) => Effect.Effect<Option.Option<T>>;
     readonly configDir: () => Effect.Effect<string>;
   }
 >()("@cvr/pi-config/index/ConfigService") {
@@ -247,7 +247,7 @@ export class ConfigService extends ServiceMap.Service<
       opts?: GetExtensionConfigWithSchemaOpts<T>,
     ) => Effect.sync(() => getEnabledExtensionConfig(namespace, defaults, opts)),
 
-    getGlobal: <T>(key: string) => Effect.sync(() => getGlobalConfig<T>(key)),
+    getGlobal: <T>(key: string) => Effect.sync(() => Option.fromNullishOr(getGlobalConfig<T>(key))),
 
     configDir: () => Effect.sync(() => resolveConfigDir()),
   });
@@ -302,7 +302,7 @@ export class ConfigService extends ServiceMap.Service<
         return Effect.succeed({ enabled, config });
       },
 
-      getGlobal: <T>(key: string) => Effect.succeed(configData[key] as T | undefined),
+      getGlobal: <T>(key: string) => Effect.succeed(Option.fromNullishOr(configData[key] as T | undefined)),
 
       configDir: () => Effect.succeed("/test/config"),
     });
