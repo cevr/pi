@@ -5,14 +5,15 @@
  * replacing the editor host itself. that keeps domain semantics out of the ui
  * host while preserving normal fallback behavior like @file completion.
  *
- * backed by SubscriptionRef inside the `EditorCapabilities` Effect service.
+ * sync API only — cross-extension state sharing requires a shared singleton.
+ * separate ManagedRuntimes per extension would create isolated SubscriptionRefs
+ * with no shared state, defeating the purpose.
  */
 
 import type { AutocompleteProvider } from "@mariozechner/pi-tui";
-import { Effect, Layer, Ref, Schema, ServiceMap, SubscriptionRef } from "effect";
 
 // ---------------------------------------------------------------------------
-// types (shared between Effect and legacy APIs)
+// types
 // ---------------------------------------------------------------------------
 
 export interface EditorAutocompleteContext {
@@ -24,15 +25,6 @@ export interface EditorAutocompleteContributor {
   priority?: number;
   enhance(provider: AutocompleteProvider, context: EditorAutocompleteContext): AutocompleteProvider;
 }
-
-// ---------------------------------------------------------------------------
-// errors
-// ---------------------------------------------------------------------------
-
-export class EditorCapabilitiesError extends Schema.TaggedErrorClass<EditorCapabilitiesError>()(
-  "EditorCapabilitiesError",
-  { message: Schema.String },
-) {}
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -61,91 +53,7 @@ function composeProvider(
 }
 
 // ---------------------------------------------------------------------------
-// service
-// ---------------------------------------------------------------------------
-
-export class EditorCapabilities extends ServiceMap.Service<
-  EditorCapabilities,
-  {
-    readonly register: (
-      contributor: EditorAutocompleteContributor,
-    ) => Effect.Effect<() => Effect.Effect<void>>;
-    readonly list: () => Effect.Effect<EditorAutocompleteContributor[]>;
-    readonly compose: (
-      baseProvider: AutocompleteProvider,
-      context: EditorAutocompleteContext,
-    ) => Effect.Effect<AutocompleteProvider>;
-  }
->()("@cvr/pi-editor-capabilities/index/EditorCapabilities") {
-  static layer = Layer.effect(
-    EditorCapabilities,
-    Effect.gen(function* () {
-      const ref = yield* SubscriptionRef.make(new Map<string, EditorAutocompleteContributor>());
-
-      return {
-        register: (contributor: EditorAutocompleteContributor) =>
-          Effect.gen(function* () {
-            yield* SubscriptionRef.update(ref, (map) => {
-              const next = new Map(map);
-              next.set(contributor.id, contributor);
-              return next;
-            });
-            return () =>
-              SubscriptionRef.update(ref, (map) => {
-                const next = new Map(map);
-                if (next.get(contributor.id) === contributor) {
-                  next.delete(contributor.id);
-                }
-                return next;
-              });
-          }),
-
-        list: () => SubscriptionRef.get(ref).pipe(Effect.map(sortContributors)),
-
-        compose: (baseProvider: AutocompleteProvider, context: EditorAutocompleteContext) =>
-          SubscriptionRef.get(ref).pipe(
-            Effect.map((contributors) => composeProvider(baseProvider, context, contributors)),
-          ),
-      };
-    }),
-  );
-
-  static layerTest = Layer.effect(
-    EditorCapabilities,
-    Effect.gen(function* () {
-      const ref = yield* Ref.make(new Map<string, EditorAutocompleteContributor>());
-
-      return {
-        register: (contributor: EditorAutocompleteContributor) =>
-          Effect.gen(function* () {
-            yield* Ref.update(ref, (map) => {
-              const next = new Map(map);
-              next.set(contributor.id, contributor);
-              return next;
-            });
-            return () =>
-              Ref.update(ref, (map) => {
-                const next = new Map(map);
-                if (next.get(contributor.id) === contributor) {
-                  next.delete(contributor.id);
-                }
-                return next;
-              });
-          }),
-
-        list: () => Ref.get(ref).pipe(Effect.map(sortContributors)),
-
-        compose: (baseProvider: AutocompleteProvider, context: EditorAutocompleteContext) =>
-          Ref.get(ref).pipe(
-            Effect.map((contributors) => composeProvider(baseProvider, context, contributors)),
-          ),
-      };
-    }),
-  );
-}
-
-// ---------------------------------------------------------------------------
-// sync API — bridges to encapsulated state (no bare module-level singletons)
+// sync API — encapsulated state (no bare module-level singletons)
 // ---------------------------------------------------------------------------
 
 const _state = {

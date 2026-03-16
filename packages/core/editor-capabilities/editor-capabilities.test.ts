@@ -1,7 +1,11 @@
 import type { AutocompleteProvider } from "@mariozechner/pi-tui";
-import { describe, expect, it } from "bun:test";
-import { Effect } from "effect";
-import { EditorCapabilities } from "./index";
+import { afterEach, describe, expect, it } from "bun:test";
+import {
+  registerEditorAutocompleteContributor,
+  listEditorAutocompleteContributors,
+  composeEditorAutocompleteProvider,
+  subscribeEditorAutocompleteContributors,
+} from "./index";
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -53,45 +57,42 @@ function createMentionsContributor(log: string[]) {
 }
 
 // ---------------------------------------------------------------------------
-// Effect EditorCapabilities service tests
+// cleanup — unregister all contributors between tests
 // ---------------------------------------------------------------------------
 
-const runWithService = <A, E>(effect: Effect.Effect<A, E, EditorCapabilities>): Promise<A> =>
-  Effect.runPromise(Effect.provide(effect, EditorCapabilities.layer));
+const cleanups: (() => void)[] = [];
+afterEach(() => {
+  for (const fn of cleanups) fn();
+  cleanups.length = 0;
+});
 
-describe("EditorCapabilities service", () => {
-  it("registers and lists contributors", async () => {
-    const result = await runWithService(
-      Effect.gen(function* () {
-        const caps = yield* EditorCapabilities;
-        const unregister = yield* caps.register({
-          id: "test",
-          priority: 5,
-          enhance: (p) => p,
-        });
-        const list = yield* caps.list();
-        yield* unregister();
-        const after = yield* caps.list();
-        return { list, after };
-      }),
-    );
+// ---------------------------------------------------------------------------
+// tests
+// ---------------------------------------------------------------------------
 
-    expect(result.list).toHaveLength(1);
-    expect(result.list[0]!.id).toBe("test");
-    expect(result.after).toHaveLength(0);
+describe("editor-capabilities sync API", () => {
+  it("registers and lists contributors", () => {
+    const unsub = registerEditorAutocompleteContributor({
+      id: "test",
+      priority: 5,
+      enhance: (p) => p,
+    });
+    cleanups.push(unsub);
+
+    const list = listEditorAutocompleteContributors();
+    expect(list).toHaveLength(1);
+    expect(list[0]!.id).toBe("test");
+
+    unsub();
+    expect(listEditorAutocompleteContributors()).toHaveLength(0);
   });
 
-  it("composes providers through contributors", async () => {
+  it("composes providers through contributors", () => {
     const log: string[] = [];
-    const result = await runWithService(
-      Effect.gen(function* () {
-        const caps = yield* EditorCapabilities;
-        yield* caps.register(createMentionsContributor(log));
-        const base = createBaseProvider(log);
-        const composed = yield* caps.compose(base, { cwd: "/repo" });
-        return composed.getSuggestions(["@commit/"], 0, 8);
-      }),
-    );
+    cleanups.push(registerEditorAutocompleteContributor(createMentionsContributor(log)));
+    const base = createBaseProvider(log);
+    const composed = composeEditorAutocompleteProvider(base, { cwd: "/repo" });
+    const result = composed.getSuggestions(["@commit/"], 0, 8);
 
     expect(result).toEqual({
       items: [{ value: "@commit/abc123", label: "@commit/abc123" }],
@@ -101,30 +102,30 @@ describe("EditorCapabilities service", () => {
     expect(log).toContain("mentions:get");
   });
 
-  it("sorts by priority then id", async () => {
-    const result = await runWithService(
-      Effect.gen(function* () {
-        const caps = yield* EditorCapabilities;
-        yield* caps.register({ id: "z", priority: 0, enhance: (p) => p });
-        yield* caps.register({ id: "a", priority: 10, enhance: (p) => p });
-        yield* caps.register({ id: "m", priority: 0, enhance: (p) => p });
-        return yield* caps.list();
-      }),
-    );
+  it("sorts by priority then id", () => {
+    cleanups.push(registerEditorAutocompleteContributor({ id: "z", priority: 0, enhance: (p) => p }));
+    cleanups.push(registerEditorAutocompleteContributor({ id: "a", priority: 10, enhance: (p) => p }));
+    cleanups.push(registerEditorAutocompleteContributor({ id: "m", priority: 0, enhance: (p) => p }));
 
-    expect(result.map((c) => c.id)).toEqual(["m", "z", "a"]);
+    const list = listEditorAutocompleteContributors();
+    expect(list.map((c) => c.id)).toEqual(["m", "z", "a"]);
   });
 
-  it("layerTest works the same as layer", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const caps = yield* EditorCapabilities;
-        yield* caps.register({ id: "test", enhance: (p) => p });
-        return yield* caps.list();
-      }).pipe(Effect.provide(EditorCapabilities.layerTest)),
-    );
+  it("notifies subscribers on change", () => {
+    let notified = 0;
+    const unsub = subscribeEditorAutocompleteContributors(() => notified++);
+    cleanups.push(unsub);
 
-    expect(result).toHaveLength(1);
-    expect(result[0]!.id).toBe("test");
+    const unregister = registerEditorAutocompleteContributor({ id: "x", enhance: (p) => p });
+    cleanups.push(unregister);
+    expect(notified).toBe(1);
+
+    unregister();
+    expect(notified).toBe(2);
+
+    unsub();
+    const unregY = registerEditorAutocompleteContributor({ id: "y", enhance: (p) => p });
+    cleanups.push(unregY);
+    expect(notified).toBe(2); // unsubscribed, no more notifications
   });
 });
