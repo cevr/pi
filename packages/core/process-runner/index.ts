@@ -158,6 +158,26 @@ function spawnCollect(command: string, opts?: RunOptions): Promise<ProcessResult
 }
 
 // ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+/** Type guard for tagged error classes from spawnCollect rejections. */
+function isCommandError(err: unknown): err is CommandError | CommandTimeout | CommandAborted {
+  if (err == null || typeof err !== "object" || !("_tag" in err)) return false;
+  const tag = (err as { _tag: string })._tag;
+  return tag === "CommandError" || tag === "CommandTimeout" || tag === "CommandAborted";
+}
+
+/** Maps unknown promise rejection to typed command error. */
+function toCommandError(command: string, err: unknown): CommandError | CommandTimeout | CommandAborted {
+  if (isCommandError(err)) return err;
+  return new CommandError({
+    command,
+    message: err instanceof Error ? err.message : String(err),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // service
 // ---------------------------------------------------------------------------
 
@@ -190,16 +210,7 @@ export class ProcessRunner extends ServiceMap.Service<
             signal: combinedController.signal,
           });
         },
-        catch: (err) => {
-          const tag = err != null && typeof err === "object" && "_tag" in err ? (err as any)._tag : null;
-          if (tag === "CommandError") return err as CommandError;
-          if (tag === "CommandTimeout") return err as CommandTimeout;
-          if (tag === "CommandAborted") return err as CommandAborted;
-          return new CommandError({
-            command,
-            message: err instanceof Error ? err.message : String(err),
-          });
-        },
+        catch: (err) => toCommandError(command, err),
       }),
 
     runStream: (command: string, opts?: RunOptions) =>
@@ -216,16 +227,7 @@ export class ProcessRunner extends ServiceMap.Service<
               signal: combinedController.signal,
             });
           },
-          catch: (err) => {
-            const tag = err != null && typeof err === "object" && "_tag" in err ? (err as any)._tag : null;
-            if (tag === "CommandError") return err as CommandError;
-            if (tag === "CommandTimeout") return err as CommandTimeout;
-            if (tag === "CommandAborted") return err as CommandAborted;
-            return new CommandError({
-              command,
-              message: err instanceof Error ? err.message : String(err),
-            });
-          },
+          catch: (err) => toCommandError(command, err),
         }),
       ).pipe(Stream.flatMap((result) => Stream.fromIterable(result.stdout.split("\n")))),
   });

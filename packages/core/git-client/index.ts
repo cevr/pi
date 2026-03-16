@@ -77,16 +77,14 @@ export class GitClient extends ServiceMap.Service<
             }
             return Effect.succeed(result.stdout);
           }),
-          Effect.catch((err) => {
-            if (err != null && typeof err === "object" && "_tag" in err && (err as any)._tag === "GitError") {
-              return Effect.fail(err as GitError);
-            }
-            return Effect.fail(
-              new GitError({
-                command: `git ${args.join(" ")}`,
-                message: err instanceof Error ? err.message : String(err),
-              }),
-            );
+          Effect.catchTags({
+            GitError: (err) => Effect.fail(err),
+            CommandError: (err) =>
+              Effect.fail(new GitError({ command: `git ${args.join(" ")}`, message: err.message, stderr: err.stderr })),
+            CommandTimeout: (err) =>
+              Effect.fail(new GitError({ command: `git ${args.join(" ")}`, message: `timeout after ${err.timeoutMs}ms` })),
+            CommandAborted: () =>
+              Effect.fail(new GitError({ command: `git ${args.join(" ")}`, message: "aborted" })),
           }),
         );
 
