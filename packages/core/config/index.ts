@@ -187,4 +187,3 @@ export function getGlobalConfig<T>(key: string): T | undefined {
 export function resolveConfigDir(): string {
   return path.dirname(resolveGlobalSettingsPath());
 }
-

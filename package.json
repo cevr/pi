@@ -14,6 +14,9 @@
       "@mariozechner/pi-tui": "^0.58.0"
     }
   },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "exports": {
     "./extensions": {
@@ -21,9 +24,6 @@
       "import": "./dist/extensions.js"
     }
   },
-  "files": [
-    "dist"
-  ],
   "scripts": {
     "sync:pi-extensions": "node ./scripts/sync-pi-extensions-manifest.mjs",
     "build": "node ./scripts/sync-pi-extensions-manifest.mjs && tsdown && node ./scripts/sync-pi-extensions-manifest.mjs",

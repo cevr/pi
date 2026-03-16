@@ -57,9 +57,7 @@ export class Mutex extends ServiceMap.Service<
         return {
           withLock: <A, E, R>(filePath: string, effect: Effect.Effect<A, E, R>) => {
             const key = nodePath.resolve(filePath);
-            return getSemaphore(key).pipe(
-              Effect.flatMap((sem) => sem.withPermits(1)(effect)),
-            );
+            return getSemaphore(key).pipe(Effect.flatMap((sem) => sem.withPermits(1)(effect)));
           },
         };
       }),
@@ -77,4 +75,3 @@ export class Mutex extends ServiceMap.Service<
       },
     });
 }
-

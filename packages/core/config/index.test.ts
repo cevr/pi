@@ -324,4 +324,3 @@ describe("resolveConfigDir", () => {
     expect(resolveConfigDir()).toBe("/fake/dir");
   });
 });
-

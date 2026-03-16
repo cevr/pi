@@ -46,7 +46,10 @@ export class GitClient extends ServiceMap.Service<
     ) => Effect.Effect<GitLogEntry[], GitError>;
 
     /** git diff --stat */
-    readonly diffStat: (cwd: string, opts?: { timeoutMs?: number }) => Effect.Effect<string, GitError>;
+    readonly diffStat: (
+      cwd: string,
+      opts?: { timeoutMs?: number },
+    ) => Effect.Effect<string, GitError>;
 
     /** git remote get-url origin */
     readonly remoteUrl: (cwd: string) => Effect.Effect<Option.Option<string>, GitError>;
@@ -80,9 +83,20 @@ export class GitClient extends ServiceMap.Service<
           Effect.catchTags({
             GitError: (err) => Effect.fail(err),
             CommandError: (err) =>
-              Effect.fail(new GitError({ command: `git ${args.join(" ")}`, message: err.message, stderr: err.stderr })),
+              Effect.fail(
+                new GitError({
+                  command: `git ${args.join(" ")}`,
+                  message: err.message,
+                  stderr: err.stderr,
+                }),
+              ),
             CommandTimeout: (err) =>
-              Effect.fail(new GitError({ command: `git ${args.join(" ")}`, message: `timeout after ${err.timeoutMs}ms` })),
+              Effect.fail(
+                new GitError({
+                  command: `git ${args.join(" ")}`,
+                  message: `timeout after ${err.timeoutMs}ms`,
+                }),
+              ),
             CommandAborted: () =>
               Effect.fail(new GitError({ command: `git ${args.join(" ")}`, message: "aborted" })),
           }),

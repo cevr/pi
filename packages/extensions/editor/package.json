@@ -9,12 +9,12 @@
     "@cvr/pi-git-client": "workspace:*",
     "@cvr/pi-process-runner": "workspace:*"
   },
-  "peerDependencies": {
-    "effect": "catalog:"
-  },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "catalog:",
     "@mariozechner/pi-tui": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   },
   "pi": {
     "extensions": [

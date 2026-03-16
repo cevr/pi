@@ -13,13 +13,13 @@
     "@cvr/pi-sub-agent-render": "workspace:*",
     "@sinclair/typebox": "^0.34.0"
   },
-  "peerDependencies": {
-    "effect": "catalog:"
-  },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "catalog:",
     "@mariozechner/pi-tui": "catalog:",
     "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   },
   "pi": {
     "extensions": [

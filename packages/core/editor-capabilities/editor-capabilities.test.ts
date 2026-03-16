@@ -103,9 +103,15 @@ describe("editor-capabilities sync API", () => {
   });
 
   it("sorts by priority then id", () => {
-    cleanups.push(registerEditorAutocompleteContributor({ id: "z", priority: 0, enhance: (p) => p }));
-    cleanups.push(registerEditorAutocompleteContributor({ id: "a", priority: 10, enhance: (p) => p }));
-    cleanups.push(registerEditorAutocompleteContributor({ id: "m", priority: 0, enhance: (p) => p }));
+    cleanups.push(
+      registerEditorAutocompleteContributor({ id: "z", priority: 0, enhance: (p) => p }),
+    );
+    cleanups.push(
+      registerEditorAutocompleteContributor({ id: "a", priority: 10, enhance: (p) => p }),
+    );
+    cleanups.push(
+      registerEditorAutocompleteContributor({ id: "m", priority: 0, enhance: (p) => p }),
+    );
 
     const list = listEditorAutocompleteContributors();
     expect(list.map((c) => c.id)).toEqual(["m", "z", "a"]);

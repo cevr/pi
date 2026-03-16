@@ -1,10 +1,4 @@
-import {
-  readdirSync,
-  statSync,
-  existsSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { readdirSync, statSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,11 +34,7 @@ packageJson.pi.extensions = nextExtensions;
 
 if (changed) {
   writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
-  console.log(
-    `updated pi.extensions manifest (${nextExtensions.length} entries)`,
-  );
+  console.log(`updated pi.extensions manifest (${nextExtensions.length} entries)`);
 } else {
-  console.log(
-    `pi.extensions manifest already in sync (${nextExtensions.length} entries)`,
-  );
+  console.log(`pi.extensions manifest already in sync (${nextExtensions.length} entries)`);
 }
