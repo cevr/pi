@@ -88,6 +88,7 @@
       "@cvr/pi-sub-agent-render": ["./packages/core/sub-agent-render/index.ts"],
       "@cvr/pi-tool-cost": ["./packages/core/tool-cost/index.ts"],
       "@cvr/pi-tui": ["./packages/core/tui/index.ts"],
+      "@cvr/pi-audit": ["./packages/extensions/audit/index.ts"],
       "@cvr/pi-bash": ["./packages/extensions/bash/index.ts"],
       "@cvr/pi-code-review": ["./packages/extensions/code-review/index.ts"],
       "@cvr/pi-command-palette": ["./packages/extensions/command-palette/index.ts"],
