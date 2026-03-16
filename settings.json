@@ -6,7 +6,7 @@
     "enabled": false
   },
   "extensions": ["~/Developer/personal/dotfiles/pi/dist/extensions"],
-  "skills": ["~/Developer/personal/dotfiles/pi/skills"],
+  "skills": ["~/Developer/personal/dotfiles/skills"],
   "quietStartup": true,
   "hideThinkingBlock": true,
   "showHardwareCursor": true,
