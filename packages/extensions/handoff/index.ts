@@ -36,7 +36,14 @@ import { Type } from "@sinclair/typebox";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 import { registerMentionSource } from "@cvr/pi-mentions";
 import { resolvePrompt } from "@cvr/pi-spawn";
+import { register, type MachineConfig } from "@cvr/pi-state-machine";
 import { createHandoffMentionSource } from "./handoff-mention-source";
+import {
+  handoffReducer,
+  type HandoffEffect,
+  type HandoffEvent,
+  type HandoffState,
+} from "./machine";
 
 type HandoffExtConfig = {
   threshold: number;
@@ -211,6 +218,10 @@ function showProvenance(ctx: ExtensionContext, parentPath: string): void {
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Extension factory
+// ---------------------------------------------------------------------------
+
 export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS) {
   return function handoffExtension(pi: ExtensionAPI): void {
     const { enabled, config: cfg } = deps.getEnabledExtensionConfig(
@@ -243,11 +254,6 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
       const body = handoffSections["extraction-prompt"] ?? "";
       return `${conversationText}\n\n${body}\n${goal}\n\nUse the create_handoff_context tool to extract relevant information and files.`;
     }
-
-    let storedHandoffPrompt: string | null = null;
-    let handoffPending = false;
-    let parentSessionFile: string | undefined;
-    let generating = false;
 
     /** resolve the dedicated handoff model, fall back to ctx.model */
     function getHandoffModel(ctx: {
@@ -299,101 +305,119 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
       return assembleHandoffPrompt(sessionId, extraction, goal);
     }
 
-    /** switch to a new session and send the handoff prompt */
-    async function executeHandoff(
-      prompt: string,
-      parent: string | undefined,
-      ctx: any,
-    ): Promise<boolean> {
-      storedHandoffPrompt = null;
-      handoffPending = false;
-      generating = false;
-      ctx.ui?.setStatus?.("handoff", "");
-      pi.events.emit("editor:remove-label", { key: "handoff" });
+    // -----------------------------------------------------------------------
+    // Machine
+    // -----------------------------------------------------------------------
 
-      const switchResult = await ctx.newSession({ parentSession: parent });
-      if (switchResult.cancelled) return false;
+    const machineConfig: MachineConfig<HandoffState, HandoffEvent, HandoffEffect> = {
+      id: "handoff",
+      initial: { _tag: "Idle" },
+      reducer: handoffReducer,
 
-      if (parent) showProvenance(ctx, parent);
+      events: {
+        // provenance on session start — pure reply, no state change
+        session_start: {
+          mode: "reply" as const,
+          handle: (_state, _piEvent, ctx) => {
+            const parentPath = ctx.sessionManager.getHeader()?.parentSession;
+            if (parentPath) showProvenance(ctx, parentPath);
+          },
+        },
 
-      pi.sendUserMessage(prompt);
-      return true;
-    }
+        // always cancel compaction
+        session_before_compact: {
+          mode: "reply" as const,
+          handle: () => ({ cancel: true }),
+        },
 
-    // --- provenance: show "handed off from" when session has a parent ---
-    pi.on("session_start", async (_event, ctx) => {
-      const parentPath = ctx.sessionManager.getHeader()?.parentSession;
-      if (parentPath) showProvenance(ctx, parentPath);
-    });
+        // monitor context after each agent turn
+        agent_end: {
+          mode: "fire" as const,
+          toEvent: (state, _piEvent, ctx): HandoffEvent | null => {
+            if (state._tag === "Ready" || state._tag === "Generating") return null;
 
-    // --- always cancel compaction. we handoff instead. ---
-    pi.on("session_before_compact", async (_event, _ctx) => {
-      return { cancel: true };
-    });
+            const usage = ctx.getContextUsage();
+            if (!usage || usage.percent === null) return null;
+            if (usage.percent < cfg.threshold * 100) return null;
+            const handoffModel = getHandoffModel(ctx);
+            if (!handoffModel) return null;
 
-    // --- monitor context after each agent turn ---
-    pi.on("agent_end", async (_event, ctx) => {
-      if (handoffPending || generating) return;
+            const parentFile = ctx.sessionManager.getSessionFile();
 
-      const usage = ctx.getContextUsage();
-      if (!usage || usage.percent === null) return;
-      if (usage.percent < cfg.threshold * 100) return;
-      const handoffModel = getHandoffModel(ctx);
-      if (!handoffModel) return;
+            // async generation — fire GenerateStart, then async work feeds back
+            generateHandoffPrompt(
+              ctx,
+              handoffModel,
+              "continue the most specific pending task from the conversation",
+            )
+              .then((prompt) => {
+                if (!prompt) {
+                  machine.send({ _tag: "GenerateFail", error: "no extraction result" });
+                  return;
+                }
+                machine.send({ _tag: "GenerateComplete", prompt });
+              })
+              .catch((err) => {
+                machine.send({ _tag: "GenerateFail", error: String(err) });
+              });
 
-      generating = true;
-      parentSessionFile = ctx.sessionManager.getSessionFile();
+            return { _tag: "GenerateStart", parentSessionFile: parentFile };
+          },
+        },
 
-      try {
-        const prompt = await generateHandoffPrompt(
-          ctx,
-          handoffModel,
-          "continue the most specific pending task from the conversation",
-        );
+        // reset on manual session switch
+        session_switch: {
+          mode: "fire" as const,
+          toEvent: (): HandoffEvent => ({ _tag: "Reset" }),
+        },
+      },
+    };
 
-        if (!prompt) {
-          generating = false;
-          ctx.ui.notify("handoff generation failed: no extraction result", "error");
-          return;
+    const machine = register<HandoffState, HandoffEvent, HandoffEffect>(
+      pi,
+      machineConfig,
+      (effect, _pi, ctx) => {
+        switch (effect.type) {
+          case "setEditorText":
+            ctx.ui.setEditorText(effect.text);
+            break;
+          case "setEditorLabel":
+            pi.events.emit("editor:set-label", {
+              key: effect.key,
+              text: effect.text,
+              position: effect.position,
+              align: effect.align,
+            });
+            break;
+          case "removeEditorLabel":
+            pi.events.emit("editor:remove-label", { key: effect.key });
+            break;
+          case "clearWidget":
+            ctx.ui.setWidget(effect.key, undefined);
+            break;
         }
+      },
+    );
 
-        storedHandoffPrompt = prompt;
-        handoffPending = true;
-        generating = false;
+    // -----------------------------------------------------------------------
+    // /handoff command — imperative (async UI branches)
+    // -----------------------------------------------------------------------
 
-        ctx.ui.setEditorText("/handoff");
-        ctx.ui.setStatus("handoff", `handoff ready (${Math.round(usage.percent)}%)`);
-        pi.events.emit("editor:set-label", {
-          key: "handoff",
-          text: `handoff ready (${Math.round(usage.percent)}%)`,
-          position: "top",
-          align: "right",
-        });
-        ctx.ui.notify(
-          `context at ${Math.round(usage.percent)}% — handoff prompt generated. press enter to continue in a new session.`,
-          "warning",
-        );
-      } catch (err) {
-        generating = false;
-        ctx.ui.notify(`handoff generation failed: ${String(err)}`, "error");
-      }
-    });
-
-    // --- /handoff command: create new session + send prompt ---
     pi.registerCommand("handoff", {
       description: "Transfer context to a new focused session (replaces compaction)",
       handler: async (args, ctx) => {
         const goal = args.trim();
+        let state = machine.getState();
 
         // manual invocation with a goal — generate fresh handoff
-        if (goal && !handoffPending) {
+        if (goal && state._tag !== "Ready") {
           const handoffModel = getHandoffModel(ctx);
           if (!handoffModel) {
             ctx.ui.notify("no model available for handoff", "error");
             return;
           }
 
-          parentSessionFile = ctx.sessionManager.getSessionFile();
+          const parentFile = ctx.sessionManager.getSessionFile();
 
           const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
             const loader = new BorderedLoader(
@@ -418,10 +442,11 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
             return;
           }
 
-          storedHandoffPrompt = result;
+          machine.send({ _tag: "ManualReady", prompt: result, parentSessionFile: parentFile });
+          state = machine.getState();
         }
 
-        if (!storedHandoffPrompt) {
+        if (state._tag !== "Ready") {
           ctx.ui.notify("no handoff prompt available. usage: /handoff <goal>", "error");
           return;
         }
@@ -429,7 +454,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
         // let user review/edit the handoff prompt before sending
         const edited = await ctx.ui.editor(
           "handoff prompt — ⏎ to handoff ␛ to cancel",
-          storedHandoffPrompt,
+          state.prompt,
         );
 
         if (!edited) {
@@ -438,28 +463,28 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
         }
 
         const prompt = edited;
-        const parent = parentSessionFile;
+        const parent = state.parentSessionFile;
 
-        const switched = await executeHandoff(prompt, parent, ctx);
-        if (!switched) {
-          // restore state if user cancels
-          storedHandoffPrompt = prompt;
-          handoffPending = true;
+        machine.send({ _tag: "SwitchStart" });
+
+        const switchResult = await ctx.newSession({ parentSession: parent });
+        if (switchResult.cancelled) {
+          machine.send({ _tag: "SwitchCancelled" });
           ctx.ui.notify("session switch cancelled", "info");
+          return;
         }
+
+        machine.send({ _tag: "SwitchComplete" });
+
+        if (parent) showProvenance(ctx, parent);
+        pi.sendUserMessage(prompt);
       },
     });
 
-    // reset state on manual session switch
-    pi.on("session_switch", async (_event, ctx) => {
-      storedHandoffPrompt = null;
-      handoffPending = false;
-      generating = false;
-      pi.events.emit("editor:remove-label", { key: "handoff" });
-      ctx.ui.setWidget("handoff-provenance", undefined);
-    });
+    // -----------------------------------------------------------------------
+    // handoff tool — agent-invokable session transfer
+    // -----------------------------------------------------------------------
 
-    // --- handoff tool: agent-invokable session transfer ---
     const handoffTool: ToolDefinition = {
       name: "handoff",
       label: "Handoff",
@@ -484,7 +509,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
           throw new Error("no model available for handoff extraction");
         }
 
-        parentSessionFile = _ctx.sessionManager.getSessionFile();
+        const parentFile = _ctx.sessionManager.getSessionFile();
 
         const prompt = await generateHandoffPrompt(
           _ctx,
@@ -496,17 +521,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
           throw new Error("handoff generation failed: could not extract context");
         }
 
-        storedHandoffPrompt = prompt;
-        handoffPending = true;
-
-        _ctx.ui.setEditorText("/handoff");
-        _ctx.ui.setStatus("handoff", "handoff ready");
-        pi.events.emit("editor:set-label", {
-          key: "handoff",
-          text: "handoff ready",
-          position: "top",
-          align: "right",
-        });
+        machine.send({ _tag: "ManualReady", prompt, parentSessionFile: parentFile });
 
         return {
           content: [
