@@ -1,6 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Effect } from "effect";
-import { evaluatePermission, type PermissionRule, Permissions } from "./index";
+import { evaluatePermission, decodePermissionsFile, type PermissionRule, Permissions } from "./index";
 
 // ---------------------------------------------------------------------------
 // shared test rules
@@ -147,5 +150,92 @@ describe("Permissions service", () => {
     );
 
     expect(result.action).toBe("allow");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// boundary tests — production layer + sync API
+// ---------------------------------------------------------------------------
+
+describe("permissions boundary", () => {
+  function tmpFile(content: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-perms-test-"));
+    const p = path.join(dir, "permissions.json");
+    fs.writeFileSync(p, content);
+    return p;
+  }
+
+  it("loads valid JSON from disk via production layer", async () => {
+    const p = tmpFile(JSON.stringify([{ tool: "Bash", action: "reject" }]));
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const perms = yield* Permissions;
+        return yield* perms.loadRules();
+      }).pipe(Effect.provide(Permissions.layer(p))),
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]!.action).toBe("reject");
+  });
+
+  it("returns [] when file is missing (allow all)", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const perms = yield* Permissions;
+        return yield* perms.loadRules();
+      }).pipe(Effect.provide(Permissions.layer("/nonexistent/permissions.json"))),
+    );
+    expect(result).toHaveLength(0);
+  });
+
+  it("fails closed on malformed JSON (reject all)", async () => {
+    const p = tmpFile("NOT VALID JSON {{{");
+    const errSpy = spyOn(console, "error").mockImplementation(() => undefined);
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const perms = yield* Permissions;
+        return yield* perms.evaluate("Bash", { cmd: "ls" });
+      }).pipe(Effect.provide(Permissions.layer(p))),
+    );
+    expect(result.action).toBe("reject");
+    expect(result.message).toContain("malformed");
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("fails closed on invalid schema shape (reject all)", async () => {
+    const p = tmpFile(JSON.stringify([{ tool: 123, action: "maybe" }]));
+    const errSpy = spyOn(console, "error").mockImplementation(() => undefined);
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const perms = yield* Permissions;
+        return yield* perms.evaluate("Read", { cmd: "/etc/passwd" });
+      }).pipe(Effect.provide(Permissions.layer(p))),
+    );
+    expect(result.action).toBe("reject");
+    errSpy.mockRestore();
+  });
+
+  it("sync decodePermissionsFile returns [] for missing file", () => {
+    const rules = decodePermissionsFile("/nonexistent/permissions.json");
+    expect(rules).toHaveLength(0);
+  });
+
+  it("sync decodePermissionsFile fails closed on malformed JSON", () => {
+    const p = tmpFile("NOT VALID JSON {{{");
+    const errSpy = spyOn(console, "error").mockImplementation(() => undefined);
+    const rules = decodePermissionsFile(p);
+    expect(rules).toHaveLength(1);
+    expect(rules[0]!.action).toBe("reject");
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("sync decodePermissionsFile fails closed on invalid schema", () => {
+    const p = tmpFile(JSON.stringify([{ tool: 123, action: "maybe" }]));
+    const errSpy = spyOn(console, "error").mockImplementation(() => undefined);
+    const rules = decodePermissionsFile(p);
+    expect(rules).toHaveLength(1);
+    expect(rules[0]!.action).toBe("reject");
+    errSpy.mockRestore();
   });
 });

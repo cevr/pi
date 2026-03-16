@@ -15,15 +15,24 @@ import * as nodePath from "node:path";
 import { Effect, Layer, Schema, ServiceMap } from "effect";
 
 // ---------------------------------------------------------------------------
-// types
+// schemas + types
 // ---------------------------------------------------------------------------
 
-export interface PermissionRule {
-  tool: string;
-  matches?: { cmd?: string | string[] };
-  action: "allow" | "reject";
-  message?: string;
-}
+const PermissionRuleSchema = Schema.Struct({
+  tool: Schema.String,
+  matches: Schema.optional(
+    Schema.Struct({
+      cmd: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+    }),
+  ),
+  action: Schema.Literal("allow", "reject"),
+  message: Schema.optional(Schema.String),
+});
+
+export type PermissionRule = typeof PermissionRuleSchema.Type;
+
+const PermissionRulesFromJson = Schema.fromJsonString(Schema.Array(PermissionRuleSchema));
+const decodeRules = Schema.decodeUnknownEffect(PermissionRulesFromJson);
 
 export interface PermissionVerdict {
   action: "allow" | "reject";
@@ -72,6 +81,37 @@ export function evaluatePermission(
 }
 
 // ---------------------------------------------------------------------------
+// shared loader
+// ---------------------------------------------------------------------------
+
+function isEnoent(err: unknown): boolean {
+  return err != null && typeof err === "object" && "code" in err && (err as { code: string }).code === "ENOENT";
+}
+
+/** Read + decode permissions from disk. Missing file → []. Malformed/unreadable → FAIL_CLOSED. */
+export function decodePermissionsFile(filePath: string): PermissionRule[] {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf-8");
+  } catch (err) {
+    if (isEnoent(err)) return []; // no file → no rules → allow all
+    console.error(`[@cvr/pi-permissions] cannot read ${filePath} — rejecting all tool calls until fixed`);
+    return FAIL_CLOSED_RULES;
+  }
+  try {
+    return decodeRulesSync(raw);
+  } catch {
+    console.error(`[@cvr/pi-permissions] malformed ${filePath} — rejecting all tool calls until fixed`);
+    return FAIL_CLOSED_RULES;
+  }
+}
+
+/** Rules that reject everything — used when permissions file is malformed or unreadable. */
+const FAIL_CLOSED_RULES: PermissionRule[] = [
+  { tool: "*", action: "reject", message: "permissions.json is malformed — all tools blocked until fixed" },
+];
+
+// ---------------------------------------------------------------------------
 // service
 // ---------------------------------------------------------------------------
 
@@ -85,36 +125,18 @@ export class Permissions extends ServiceMap.Service<
     ) => Effect.Effect<PermissionVerdict>;
   }
 >()("@cvr/pi-permissions/index/Permissions") {
-  static layer = (permissionsPath?: string) =>
-    Layer.succeed(Permissions, {
-      loadRules: () =>
-        Effect.sync(() => {
-          try {
-            const p =
-              permissionsPath ?? nodePath.join(os.homedir(), ".pi", "agent", "permissions.json");
-            const raw = fs.readFileSync(p, "utf-8");
-            const parsed = JSON.parse(raw);
-            if (!Array.isArray(parsed)) return [];
-            return parsed as PermissionRule[];
-          } catch {
-            return [];
-          }
-        }),
+  static readonly FAIL_CLOSED = FAIL_CLOSED_RULES;
+
+  static layer = (permissionsPath?: string) => {
+    const p = permissionsPath ?? nodePath.join(os.homedir(), ".pi", "agent", "permissions.json");
+
+    return Layer.succeed(Permissions, {
+      loadRules: () => Effect.sync(() => decodePermissionsFile(p)),
 
       evaluate: (toolName: string, params: { cmd?: string }) =>
-        Effect.sync(() => {
-          try {
-            const p =
-              permissionsPath ?? nodePath.join(os.homedir(), ".pi", "agent", "permissions.json");
-            const raw = fs.readFileSync(p, "utf-8");
-            const parsed = JSON.parse(raw);
-            const rules: PermissionRule[] = Array.isArray(parsed) ? parsed : [];
-            return evaluatePermission(toolName, params, rules);
-          } catch {
-            return evaluatePermission(toolName, params, []);
-          }
-        }),
+        Effect.sync(() => evaluatePermission(toolName, params, decodePermissionsFile(p))),
     });
+  };
 
   static layerTest = (rules: PermissionRule[]) =>
     Layer.succeed(Permissions, {
@@ -130,13 +152,8 @@ export class Permissions extends ServiceMap.Service<
 
 const PERMISSIONS_PATH = nodePath.join(os.homedir(), ".pi", "agent", "permissions.json");
 
+const decodeRulesSync = Schema.decodeUnknownSync(PermissionRulesFromJson);
+
 export function loadPermissions(): PermissionRule[] {
-  try {
-    const raw = fs.readFileSync(PERMISSIONS_PATH, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed;
-  } catch {
-    return [];
-  }
+  return decodePermissionsFile(PERMISSIONS_PATH);
 }
