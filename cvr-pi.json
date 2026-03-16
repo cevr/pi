@@ -5,8 +5,11 @@
   },
   "@cvr/pi-handoff": {
     "enabled": true,
-    "contextThreshold": 0.85,
-    "model": "gemini-2.5-flash"
+    "threshold": 0.85,
+    "model": {
+      "provider": "anthropic",
+      "id": "claude-sonnet-4-6"
+    }
   },
   "@cvr/pi-session-name": {
     "enabled": true
