@@ -54,6 +54,7 @@ export type Reducer<S, E, Ext = never> = (state: S, event: E) => TransitionResul
 type PiEventName =
   | "session_start"
   | "session_switch"
+  | "session_before_compact"
   | "context"
   | "before_agent_start"
   | "agent_start"
