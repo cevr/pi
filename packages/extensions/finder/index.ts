@@ -17,7 +17,7 @@ import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
-import { piSpawn, resolvePrompt, zeroUsage } from "@cvr/pi-spawn";
+import { PiSpawnService, resolvePrompt, zeroUsage } from "@cvr/pi-spawn";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import {
   getFinalOutput,
@@ -25,6 +25,7 @@ import {
   subAgentResult,
   type SingleResult,
 } from "@cvr/pi-sub-agent-render";
+import { Effect, ManagedRuntime } from "effect";
 
 type FinderExtConfig = {
   model: string;
@@ -87,7 +88,10 @@ interface FinderParams {
   query: string;
 }
 
-export function createFinderTool(config: FinderConfig = {}): ToolDefinition {
+export function createFinderTool(
+  config: FinderConfig = {},
+  runtime: ManagedRuntime.ManagedRuntime<PiSpawnService, never>,
+): ToolDefinition {
   return {
     name: "finder",
     label: "Finder",
@@ -137,51 +141,62 @@ export function createFinderTool(config: FinderConfig = {}): ToolDefinition {
         usage: zeroUsage(),
       };
 
-      const result = await piSpawn({
-        cwd: ctx.cwd,
-        task: p.query,
-        model: config.model ?? CONFIG_DEFAULTS.model,
-        builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
-        extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
-        systemPromptBody: config.systemPrompt,
-        signal,
-        sessionId,
-        onUpdate: (partial) => {
-          singleResult.messages = partial.messages;
-          singleResult.usage = partial.usage;
-          singleResult.model = partial.model;
-          singleResult.stopReason = partial.stopReason;
-          singleResult.errorMessage = partial.errorMessage;
-          if (onUpdate) {
-            onUpdate({
-              content: [
-                {
-                  type: "text",
-                  text: getFinalOutput(partial.messages) || "(searching...)",
-                },
-              ],
-              details: singleResult,
-            } as any);
+      return runtime.runPromise(
+        Effect.gen(function* () {
+          const svc = yield* PiSpawnService;
+          const result = yield* svc.spawn({
+            cwd: ctx.cwd,
+            task: p.query,
+            model: config.model ?? CONFIG_DEFAULTS.model,
+            builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
+            extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
+            systemPromptBody: config.systemPrompt,
+            signal,
+            sessionId,
+            onUpdate: (partial) => {
+              singleResult.messages = partial.messages;
+              singleResult.usage = partial.usage;
+              singleResult.model = partial.model;
+              singleResult.stopReason = partial.stopReason;
+              singleResult.errorMessage = partial.errorMessage;
+              if (onUpdate) {
+                onUpdate({
+                  content: [
+                    {
+                      type: "text",
+                      text: getFinalOutput(partial.messages) || "(searching...)",
+                    },
+                  ],
+                  details: singleResult,
+                } as any);
+              }
+            },
+          });
+
+          singleResult.exitCode = result.exitCode;
+          singleResult.messages = result.messages;
+          singleResult.usage = result.usage;
+          singleResult.model = result.model;
+          singleResult.stopReason = result.stopReason;
+          singleResult.errorMessage = result.errorMessage;
+
+          const isError =
+            result.exitCode !== 0 ||
+            result.stopReason === "error" ||
+            result.stopReason === "aborted";
+          const output = getFinalOutput(result.messages) || "(no output)";
+
+          if (isError) {
+            return subAgentResult(
+              result.errorMessage || result.stderr || output,
+              singleResult,
+              true,
+            );
           }
-        },
-      });
 
-      singleResult.exitCode = result.exitCode;
-      singleResult.messages = result.messages;
-      singleResult.usage = result.usage;
-      singleResult.model = result.model;
-      singleResult.stopReason = result.stopReason;
-      singleResult.errorMessage = result.errorMessage;
-
-      const isError =
-        result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-      const output = getFinalOutput(result.messages) || "(no output)";
-
-      if (isError) {
-        return subAgentResult(result.errorMessage || result.stderr || output, singleResult, true);
-      }
-
-      return subAgentResult(output, singleResult);
+          return subAgentResult(output, singleResult);
+        }),
+      );
     },
 
     renderCall(args: any, theme: any) {
@@ -224,16 +239,25 @@ export function createFinderExtension(
     );
     if (!enabled) return;
 
+    const runtime = ManagedRuntime.make(PiSpawnService.layer);
+
     pi.registerTool(
       deps.withPromptPatch(
-        createFinderTool({
-          systemPrompt: deps.resolvePrompt(cfg.promptString, cfg.promptFile),
-          model: cfg.model,
-          extensionTools: cfg.extensionTools,
-          builtinTools: cfg.builtinTools,
-        }),
+        createFinderTool(
+          {
+            systemPrompt: deps.resolvePrompt(cfg.promptString, cfg.promptFile),
+            model: cfg.model,
+            extensionTools: cfg.extensionTools,
+            builtinTools: cfg.builtinTools,
+          },
+          runtime,
+        ),
       ),
     );
+
+    pi.on("session_shutdown", async () => {
+      await runtime.dispose();
+    });
   };
 }
 

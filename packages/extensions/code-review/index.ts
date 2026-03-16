@@ -18,7 +18,7 @@ import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
-import { piSpawn, resolvePrompt, zeroUsage } from "@cvr/pi-spawn";
+import { PiSpawnService, resolvePrompt, zeroUsage } from "@cvr/pi-spawn";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import {
   getFinalOutput,
@@ -26,6 +26,7 @@ import {
   subAgentResult,
   type SingleResult,
 } from "@cvr/pi-sub-agent-render";
+import { Effect, ManagedRuntime } from "effect";
 
 type CodeReviewExtConfig = {
   model: string;
@@ -158,7 +159,10 @@ interface CodeReviewParams {
   instructions?: string;
 }
 
-export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinition {
+export function createCodeReviewTool(
+  config: CodeReviewConfig = {},
+  runtime: ManagedRuntime.ManagedRuntime<PiSpawnService, never>,
+): ToolDefinition {
   return {
     name: "code_review",
     label: "Code Review",
@@ -223,52 +227,63 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
       const systemPrompt = config.systemPrompt || DEFAULT_SYSTEM_PROMPT;
       const reportFormat = config.reportFormat || DEFAULT_REPORT_FORMAT;
 
-      const result = await piSpawn({
-        cwd: ctx.cwd,
-        task: fullTask,
-        model: config.model ?? CONFIG_DEFAULTS.model,
-        builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
-        extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
-        systemPromptBody: systemPrompt,
-        followUp: reportFormat,
-        signal,
-        sessionId,
-        onUpdate: (partial) => {
-          singleResult.messages = partial.messages;
-          singleResult.usage = partial.usage;
-          singleResult.model = partial.model;
-          singleResult.stopReason = partial.stopReason;
-          singleResult.errorMessage = partial.errorMessage;
-          if (onUpdate) {
-            onUpdate({
-              content: [
-                {
-                  type: "text",
-                  text: getFinalOutput(partial.messages) || "(reviewing...)",
-                },
-              ],
-              details: singleResult,
-            } as any);
+      return runtime.runPromise(
+        Effect.gen(function* () {
+          const svc = yield* PiSpawnService;
+          const result = yield* svc.spawn({
+            cwd: ctx.cwd,
+            task: fullTask,
+            model: config.model ?? CONFIG_DEFAULTS.model,
+            builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
+            extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
+            systemPromptBody: systemPrompt,
+            followUp: reportFormat,
+            signal,
+            sessionId,
+            onUpdate: (partial) => {
+              singleResult.messages = partial.messages;
+              singleResult.usage = partial.usage;
+              singleResult.model = partial.model;
+              singleResult.stopReason = partial.stopReason;
+              singleResult.errorMessage = partial.errorMessage;
+              if (onUpdate) {
+                onUpdate({
+                  content: [
+                    {
+                      type: "text",
+                      text: getFinalOutput(partial.messages) || "(reviewing...)",
+                    },
+                  ],
+                  details: singleResult,
+                } as any);
+              }
+            },
+          });
+
+          singleResult.exitCode = result.exitCode;
+          singleResult.messages = result.messages;
+          singleResult.usage = result.usage;
+          singleResult.model = result.model;
+          singleResult.stopReason = result.stopReason;
+          singleResult.errorMessage = result.errorMessage;
+
+          const isError =
+            result.exitCode !== 0 ||
+            result.stopReason === "error" ||
+            result.stopReason === "aborted";
+          const output = getFinalOutput(result.messages) || "(no output)";
+
+          if (isError) {
+            return subAgentResult(
+              result.errorMessage || result.stderr || output,
+              singleResult,
+              true,
+            );
           }
-        },
-      });
 
-      singleResult.exitCode = result.exitCode;
-      singleResult.messages = result.messages;
-      singleResult.usage = result.usage;
-      singleResult.model = result.model;
-      singleResult.stopReason = result.stopReason;
-      singleResult.errorMessage = result.errorMessage;
-
-      const isError =
-        result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-      const output = getFinalOutput(result.messages) || "(no output)";
-
-      if (isError) {
-        return subAgentResult(result.errorMessage || result.stderr || output, singleResult, true);
-      }
-
-      return subAgentResult(output, singleResult);
+          return subAgentResult(output, singleResult);
+        }),
+      );
     },
 
     renderCall(args: any, theme: any) {
@@ -321,17 +336,26 @@ export function createCodeReviewExtension(
     );
     if (!enabled) return;
 
+    const runtime = ManagedRuntime.make(PiSpawnService.layer);
+
     pi.registerTool(
       deps.withPromptPatch(
-        createCodeReviewTool({
-          systemPrompt: deps.resolvePrompt(cfg.promptString, cfg.promptFile),
-          reportFormat: deps.resolvePrompt(cfg.reportPromptString, cfg.reportPromptFile),
-          model: cfg.model,
-          builtinTools: cfg.builtinTools,
-          extensionTools: cfg.extensionTools,
-        }),
+        createCodeReviewTool(
+          {
+            systemPrompt: deps.resolvePrompt(cfg.promptString, cfg.promptFile),
+            reportFormat: deps.resolvePrompt(cfg.reportPromptString, cfg.reportPromptFile),
+            model: cfg.model,
+            builtinTools: cfg.builtinTools,
+            extensionTools: cfg.extensionTools,
+          },
+          runtime,
+        ),
       ),
     );
+
+    pi.on("session_shutdown", async () => {
+      await runtime.dispose();
+    });
   };
 }
 

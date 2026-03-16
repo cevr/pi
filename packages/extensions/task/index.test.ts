@@ -3,6 +3,7 @@ import { describe, expect, it, afterEach, mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { createTaskExtension, CONFIG_DEFAULTS, DEFAULT_DEPS, TASK_CONFIG_SCHEMA } from "./index";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
 
@@ -17,14 +18,18 @@ function writeTmpJson(dir: string, filename: string, data: unknown): string {
 
 function createMockExtensionApiHarness() {
   const tools: unknown[] = [];
+  const listeners: Record<string, Function[]> = {};
 
   const pi = {
     registerTool(tool: unknown) {
       tools.push(tool);
     },
+    on(event: string, handler: Function) {
+      (listeners[event] ??= []).push(handler);
+    },
   } as unknown as ExtensionAPI;
 
-  return { pi, tools };
+  return { pi, tools, listeners };
 }
 
 afterEach(() => {
@@ -42,7 +47,7 @@ describe("task extension", () => {
       }),
     );
     const tool = { name: "Task" } as ToolDefinition;
-    const createTaskToolSpy = mock(() => tool);
+    const createTaskToolSpy = mock((..._args: any[]) => tool);
     const withPromptPatchSpy = mock((nextTool: ToolDefinition) => nextTool);
     const extension = createTaskExtension({
       createTaskTool: createTaskToolSpy as typeof DEFAULT_DEPS.createTaskTool,
@@ -57,7 +62,8 @@ describe("task extension", () => {
     expect(getEnabledExtensionConfigSpy).toHaveBeenCalledWith("@cvr/pi-task", CONFIG_DEFAULTS, {
       schema: TASK_CONFIG_SCHEMA,
     });
-    expect(createTaskToolSpy).toHaveBeenCalledWith({
+    expect(createTaskToolSpy).toHaveBeenCalledTimes(1);
+    expect(createTaskToolSpy.mock.calls[0]![0]).toEqual({
       builtinTools: CONFIG_DEFAULTS.builtinTools,
       extensionTools: CONFIG_DEFAULTS.extensionTools,
     });
@@ -72,7 +78,7 @@ describe("task extension", () => {
         config: defaults,
       }),
     );
-    const createTaskToolSpy = mock(() => ({ name: "Task" }) as ToolDefinition);
+    const createTaskToolSpy = mock((..._args: any[]) => ({ name: "Task" }) as ToolDefinition);
     const withPromptPatchSpy = mock((tool: ToolDefinition) => tool);
     const extension = createTaskExtension({
       createTaskTool: createTaskToolSpy as typeof DEFAULT_DEPS.createTaskTool,
@@ -100,7 +106,7 @@ describe("task extension", () => {
     setGlobalSettingsPath(settingsPath);
     const errorSpy = spyOn(console, "error").mockImplementation(() => undefined);
     const tool = { name: "Task" } as ToolDefinition;
-    const createTaskToolSpy = mock(() => tool);
+    const createTaskToolSpy = mock((..._args: any[]) => tool);
     const withPromptPatchSpy = mock((nextTool: ToolDefinition) => nextTool);
     const extension = createTaskExtension({
       ...DEFAULT_DEPS,
@@ -114,7 +120,8 @@ describe("task extension", () => {
     expect(errorSpy).toHaveBeenCalledWith(
       "[@cvr/pi-config] invalid config for @cvr/pi-task; falling back to defaults.",
     );
-    expect(createTaskToolSpy).toHaveBeenCalledWith({
+    expect(createTaskToolSpy).toHaveBeenCalledTimes(1);
+    expect(createTaskToolSpy.mock.calls[0]![0]).toEqual({
       builtinTools: CONFIG_DEFAULTS.builtinTools,
       extensionTools: CONFIG_DEFAULTS.extensionTools,
     });

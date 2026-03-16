@@ -16,7 +16,7 @@ import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { htmlToMarkdown } from "@cvr/pi-html-to-md";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
-import { piSpawn, resolvePrompt, zeroUsage } from "@cvr/pi-spawn";
+import { PiSpawnService, resolvePrompt, zeroUsage } from "@cvr/pi-spawn";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import {
   getFinalOutput,
@@ -24,6 +24,7 @@ import {
   subAgentResult,
   type SingleResult,
 } from "@cvr/pi-sub-agent-render";
+import { Effect, ManagedRuntime } from "effect";
 import { OutputBuffer, headTailChars } from "@cvr/pi-output-buffer";
 import { osc8Link } from "@cvr/pi-box-format";
 
@@ -157,7 +158,10 @@ export interface ReadWebPageConfig {
   model?: string;
 }
 
-export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefinition {
+export function createReadWebPageTool(
+  config: ReadWebPageConfig = {},
+  runtime: ManagedRuntime.ManagedRuntime<PiSpawnService, never>,
+): ToolDefinition {
   return {
     name: "read_web_page",
     label: "Read Web Page",
@@ -281,51 +285,62 @@ export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefin
 
         const promptSystem = config.systemPrompt || DEFAULT_PROMPT_SYSTEM;
 
-        const result = await piSpawn({
-          cwd: ctx.cwd,
-          task,
-          model: config.model ?? CONFIG_DEFAULTS.model,
-          builtinTools: [],
-          extensionTools: [],
-          systemPromptBody: promptSystem,
-          signal,
-          sessionId,
-          onUpdate: (partial) => {
-            singleResult.messages = partial.messages;
-            singleResult.usage = partial.usage;
-            singleResult.model = partial.model;
-            singleResult.stopReason = partial.stopReason;
-            singleResult.errorMessage = partial.errorMessage;
-            if (onUpdate) {
-              onUpdate({
-                content: [
-                  {
-                    type: "text",
-                    text: getFinalOutput(partial.messages) || "(analyzing...)",
-                  },
-                ],
-                details: singleResult,
-              } as any);
+        return runtime.runPromise(
+          Effect.gen(function* () {
+            const svc = yield* PiSpawnService;
+            const result = yield* svc.spawn({
+              cwd: ctx.cwd,
+              task,
+              model: config.model ?? CONFIG_DEFAULTS.model,
+              builtinTools: [],
+              extensionTools: [],
+              systemPromptBody: promptSystem,
+              signal,
+              sessionId,
+              onUpdate: (partial) => {
+                singleResult.messages = partial.messages;
+                singleResult.usage = partial.usage;
+                singleResult.model = partial.model;
+                singleResult.stopReason = partial.stopReason;
+                singleResult.errorMessage = partial.errorMessage;
+                if (onUpdate) {
+                  onUpdate({
+                    content: [
+                      {
+                        type: "text",
+                        text: getFinalOutput(partial.messages) || "(analyzing...)",
+                      },
+                    ],
+                    details: singleResult,
+                  } as any);
+                }
+              },
+            });
+
+            singleResult.exitCode = result.exitCode;
+            singleResult.messages = result.messages;
+            singleResult.usage = result.usage;
+            singleResult.model = result.model;
+            singleResult.stopReason = result.stopReason;
+            singleResult.errorMessage = result.errorMessage;
+
+            const isError =
+              result.exitCode !== 0 ||
+              result.stopReason === "error" ||
+              result.stopReason === "aborted";
+            const output = getFinalOutput(result.messages) || "(no output)";
+
+            if (isError) {
+              return subAgentResult(
+                result.errorMessage || result.stderr || output,
+                singleResult,
+                true,
+              );
             }
-          },
-        });
 
-        singleResult.exitCode = result.exitCode;
-        singleResult.messages = result.messages;
-        singleResult.usage = result.usage;
-        singleResult.model = result.model;
-        singleResult.stopReason = result.stopReason;
-        singleResult.errorMessage = result.errorMessage;
-
-        const isError =
-          result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-        const output = getFinalOutput(result.messages) || "(no output)";
-
-        if (isError) {
-          return subAgentResult(result.errorMessage || result.stderr || output, singleResult, true);
-        }
-
-        return subAgentResult(output, singleResult);
+            return subAgentResult(output, singleResult);
+          }),
+        );
       }
 
       return { content: [{ type: "text" as const, text: content }] } as any;
@@ -371,14 +386,23 @@ export function createReadWebPageExtension(
     );
     if (!enabled) return;
 
+    const runtime = ManagedRuntime.make(PiSpawnService.layer);
+
     pi.registerTool(
       deps.withPromptPatch(
-        createReadWebPageTool({
-          systemPrompt: deps.resolvePrompt(cfg.promptString, cfg.promptFile),
-          model: cfg.model,
-        }),
+        createReadWebPageTool(
+          {
+            systemPrompt: deps.resolvePrompt(cfg.promptString, cfg.promptFile),
+            model: cfg.model,
+          },
+          runtime,
+        ),
       ),
     );
+
+    pi.on("session_shutdown", async () => {
+      await runtime.dispose();
+    });
   };
 }
 
