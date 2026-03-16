@@ -3,6 +3,7 @@ import { describe, expect, it, afterEach, mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
 import {
   createSearchSessionsExtension,
@@ -35,14 +36,20 @@ function writeTmpJson(dir: string, filename: string, data: unknown): string {
 
 function createMockExtensionApiHarness() {
   const tools: unknown[] = [];
+  const listeners = new Map<string, Function[]>();
 
   const pi = {
     registerTool(tool: unknown) {
       tools.push(tool);
     },
+    on(event: string, handler: Function) {
+      const list = listeners.get(event) ?? [];
+      list.push(handler);
+      listeners.set(event, list);
+    },
   } as unknown as ExtensionAPI;
 
-  return { pi, tools };
+  return { pi, tools, listeners };
 }
 
 afterEach(() => {

@@ -12,7 +12,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
@@ -27,6 +26,8 @@ import {
   parseSessionFile,
   type BranchResult,
 } from "@cvr/pi-mentions";
+import { ProcessRunner } from "@cvr/pi-process-runner";
+import { Effect, ManagedRuntime } from "effect";
 
 type SearchSessionsExtConfig = {
   maxResults: number;
@@ -118,22 +119,28 @@ function matchesDateRange(branch: BranchResult, after?: string, before?: string)
 
 // --- rg pre-filter ---
 
-function rgFilterFiles(
+async function rgFilterFiles(
   keyword: string,
   sessionsDir: string,
   timeoutMs: number,
-): Set<string> | null {
+  runtime: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
+): Promise<Set<string> | null> {
   try {
-    const result = execSync(`rg -l -i ${JSON.stringify(keyword)} ${JSON.stringify(sessionsDir)}`, {
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: timeoutMs,
-    })
-      .toString()
-      .trim();
-    if (!result) return new Set();
-    return new Set(result.split("\n").filter(Boolean));
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ProcessRunner;
+        return yield* runner.run("rg", {
+          args: ["-l", "-i", keyword, sessionsDir],
+          timeoutMs,
+        });
+      }),
+    );
+    if (result.exitCode !== 0) return null;
+    const stdout = result.stdout.trim();
+    if (!stdout) return new Set();
+    return new Set(stdout.split("\n").filter(Boolean));
   } catch {
-    // rg not found or no matches — fall back to no filtering
+    // rg not found, timeout, or other error — fall back to no filtering
     return null;
   }
 }
@@ -270,6 +277,7 @@ interface SearchSessionsParams {
 
 export function createSearchSessionsTool(
   config: SearchSessionsExtConfig = CONFIG_DEFAULTS,
+  runtime?: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
 ): ToolDefinition {
   return {
     name: "search_sessions",
@@ -356,8 +364,13 @@ export function createSearchSessionsTool(
       }
 
       // 2. rg pre-filter if keyword set
-      if (p.keyword) {
-        const matches = rgFilterFiles(p.keyword, config.sessionsDir, config.rgTimeoutMs);
+      if (p.keyword && runtime) {
+        const matches = await rgFilterFiles(
+          p.keyword,
+          config.sessionsDir,
+          config.rgTimeoutMs,
+          runtime,
+        );
         if (matches !== null) {
           sessionFiles = sessionFiles.filter((f) => matches.has(f));
         }
@@ -486,8 +499,12 @@ export function createSearchSessionsExtension(
     );
     if (!enabled) return;
 
+    const runtime = ManagedRuntime.make(ProcessRunner.layer);
     deps.registerMentionSource(createSessionMentionSource());
-    pi.registerTool(deps.withPromptPatch(createSearchSessionsTool(cfg)));
+    pi.registerTool(deps.withPromptPatch(createSearchSessionsTool(cfg, runtime)));
+    pi.on("session_shutdown", async () => {
+      await runtime.dispose();
+    });
   };
 }
 

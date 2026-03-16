@@ -11,9 +11,7 @@
  * shadows pi's built-in `find` tool via same-name registration.
  */
 
-import { spawn } from "node:child_process";
 import * as path from "node:path";
-import { createInterface } from "node:readline";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
@@ -21,6 +19,8 @@ import { Type } from "@sinclair/typebox";
 import { formatHeadTail } from "@cvr/pi-output-buffer";
 import { boxRendererWindowed, textSection, type Excerpt } from "@cvr/pi-box-format";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
+import { ProcessRunner, CommandAborted } from "@cvr/pi-process-runner";
+import { Effect, ManagedRuntime } from "effect";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
   { focus: "head" as const, context: 3 },
@@ -63,7 +63,10 @@ interface GlobParams {
   offset?: number;
 }
 
-export function createGlobTool(config: GlobExtConfig = CONFIG_DEFAULTS): ToolDefinition {
+export function createGlobTool(
+  config: GlobExtConfig = CONFIG_DEFAULTS,
+  runtime?: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
+): ToolDefinition {
   return {
     name: "find",
     label: "Find Files",
@@ -118,120 +121,112 @@ export function createGlobTool(config: GlobExtConfig = CONFIG_DEFAULTS): ToolDef
       const limit = p.limit ?? config.defaultLimit;
       const offset = p.offset ?? 0;
 
-      return new Promise((resolve) => {
-        const args = [
-          "--files",
-          "--hidden",
-          "--color=never",
-          "--sortr",
-          "modified",
-          "--glob",
-          "!.git",
-          "--glob",
-          "!.jj",
-          "--glob",
-          p.filePattern,
-          searchPath,
-        ];
+      if (!runtime) {
+        return {
+          content: [{ type: "text" as const, text: "find error: runtime not initialized" }],
+          isError: true,
+        } as any;
+      }
 
-        const child = spawn("rg", args, { stdio: ["ignore", "pipe", "pipe"] });
-        const rl = createInterface({ input: child.stdout! });
+      try {
+        const result = await runtime.runPromise(
+          Effect.gen(function* () {
+            const runner = yield* ProcessRunner;
+            return yield* runner.run("rg", {
+              args: [
+                "--files",
+                "--hidden",
+                "--color=never",
+                "--sortr",
+                "modified",
+                "--glob",
+                "!.git",
+                "--glob",
+                "!.jj",
+                "--glob",
+                p.filePattern,
+                searchPath,
+              ],
+              cwd: searchPath,
+              signal,
+            });
+          }),
+        );
 
-        let stderr = "";
-        let aborted = false;
         const allPaths: string[] = [];
-
-        const onAbort = () => {
-          aborted = true;
-          if (!child.killed) child.kill();
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-
-        child.stderr?.on("data", (chunk: Buffer) => {
-          stderr += chunk.toString();
-        });
-
-        rl.on("line", (line) => {
+        for (const line of result.stdout.split("\n")) {
           const trimmed = line.trim();
-          if (!trimmed) return;
+          if (!trimmed) continue;
           const rel = path.relative(searchPath, trimmed).replace(/\\/g, "/");
           if (rel && !rel.startsWith("..")) {
             allPaths.push(rel);
           }
-        });
+        }
 
-        child.on("error", (err) => {
-          rl.close();
-          signal?.removeEventListener("abort", onAbort);
-          resolve({
-            content: [{ type: "text" as const, text: `find error: ${err.message}` }],
+        if (result.exitCode !== 0 && result.exitCode !== 1 && allPaths.length === 0) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: result.stderr.trim() || `rg exited with code ${result.exitCode}`,
+              },
+            ],
             isError: true,
-          } as any);
-        });
+          } as any;
+        }
 
-        child.on("close", (code) => {
-          rl.close();
-          signal?.removeEventListener("abort", onAbort);
+        if (allPaths.length === 0) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "no files found matching pattern",
+              },
+            ],
+          } as any;
+        }
 
-          if (aborted) {
-            resolve({
-              content: [{ type: "text" as const, text: "search aborted" }],
-              isError: true,
-            } as any);
-            return;
-          }
+        const total = allPaths.length;
 
-          if (code !== 0 && code !== 1 && allPaths.length === 0) {
-            resolve({
-              content: [
-                {
-                  type: "text" as const,
-                  text: stderr.trim() || `rg exited with code ${code}`,
-                },
-              ],
-              isError: true,
-            } as any);
-            return;
-          }
+        // if paginating (offset > 0), use traditional pagination
+        // otherwise use head+tail for first page
+        let output: string;
+        if (offset > 0) {
+          const paginated = allPaths.slice(offset, offset + limit);
+          output = paginated.join("\n");
+          output += `\n\n(showing ${offset + 1}-${offset + paginated.length} of ${total} results)`;
+        } else if (total > limit) {
+          output = formatHeadTail(
+            allPaths,
+            limit,
+            (n) => `... [${n} more results, use a more specific pattern to narrow] ...`,
+          );
+          output += `\n\n(${total} total results)`;
+        } else {
+          output = allPaths.join("\n");
+        }
 
-          if (allPaths.length === 0) {
-            resolve({
-              content: [
-                {
-                  type: "text" as const,
-                  text: "no files found matching pattern",
-                },
-              ],
-            } as any);
-            return;
-          }
-
-          const total = allPaths.length;
-
-          // if paginating (offset > 0), use traditional pagination
-          // otherwise use head+tail for first page
-          let output: string;
-          if (offset > 0) {
-            const paginated = allPaths.slice(offset, offset + limit);
-            output = paginated.join("\n");
-            output += `\n\n(showing ${offset + 1}-${offset + paginated.length} of ${total} results)`;
-          } else if (total > limit) {
-            output = formatHeadTail(
-              allPaths,
-              limit,
-              (n) => `... [${n} more results, use a more specific pattern to narrow] ...`,
-            );
-            output += `\n\n(${total} total results)`;
-          } else {
-            output = allPaths.join("\n");
-          }
-
-          resolve({
-            content: [{ type: "text" as const, text: output }],
-            details: { header: p.filePattern },
-          } as any);
-        });
-      });
+        return {
+          content: [{ type: "text" as const, text: output }],
+          details: { header: p.filePattern },
+        } as any;
+      } catch (err) {
+        if (err instanceof CommandAborted) {
+          return {
+            content: [{ type: "text" as const, text: "search aborted" }],
+            isError: true,
+          } as any;
+        }
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `find error: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          ],
+          isError: true,
+        } as any;
+      }
     },
   };
 }
@@ -247,7 +242,11 @@ export function createGlobExtension(
     );
     if (!enabled) return;
 
-    pi.registerTool(deps.withPromptPatch(createGlobTool(cfg)));
+    const runtime = ManagedRuntime.make(ProcessRunner.layer);
+    pi.registerTool(deps.withPromptPatch(createGlobTool(cfg, runtime)));
+    pi.on("session_shutdown", async () => {
+      await runtime.dispose();
+    });
   };
 }
 

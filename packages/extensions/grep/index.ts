@@ -13,10 +13,8 @@
  * shadows pi's built-in `grep` tool via same-name registration.
  */
 
-import { spawn } from "node:child_process";
 import * as path from "node:path";
 import * as os from "node:os";
-import { createInterface } from "node:readline";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
@@ -30,6 +28,8 @@ import {
   type Excerpt,
 } from "@cvr/pi-box-format";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
+import { ProcessRunner, CommandAborted } from "@cvr/pi-process-runner";
+import { Effect, ManagedRuntime } from "effect";
 
 type GrepExtConfig = {
   maxTotalMatches: number;
@@ -151,7 +151,10 @@ interface GrepParams {
   literal?: boolean;
 }
 
-export function createGrepTool(config: GrepExtConfig = CONFIG_DEFAULTS): ToolDefinition {
+export function createGrepTool(
+  config: GrepExtConfig = CONFIG_DEFAULTS,
+  runtime?: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
+): ToolDefinition {
   const maxCollectMatches = config.maxTotalMatches * 2;
 
   return {
@@ -222,7 +225,14 @@ export function createGrepTool(config: GrepExtConfig = CONFIG_DEFAULTS): ToolDef
           : path.resolve(ctx.cwd, p.path)
         : ctx.cwd;
 
-      return new Promise((resolve) => {
+      if (!runtime) {
+        return {
+          content: [{ type: "text" as const, text: "grep error: runtime not initialized" }],
+          isError: true,
+        } as any;
+      }
+
+      try {
         const args = [
           "--json",
           "--line-number",
@@ -244,42 +254,38 @@ export function createGrepTool(config: GrepExtConfig = CONFIG_DEFAULTS): ToolDef
 
         args.push("--", p.pattern, searchPath);
 
-        const child = spawn("rg", args, { stdio: ["ignore", "pipe", "pipe"] });
-        const rl = createInterface({ input: child.stdout! });
+        const result = await runtime.runPromise(
+          Effect.gen(function* () {
+            const runner = yield* ProcessRunner;
+            return yield* runner.run("rg", {
+              args,
+              cwd: searchPath,
+              signal,
+            });
+          }),
+        );
 
-        let stderr = "";
+        // parse JSON lines from stdout
         let totalMatches = 0;
-        let killedDueToLimit = false;
-        let aborted = false;
-        /** all match + context events, in stream order */
+        let hitCollectLimit = false;
         const events: RgEvent[] = [];
 
-        const onAbort = () => {
-          aborted = true;
-          if (!child.killed) child.kill();
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-
-        child.stderr?.on("data", (chunk: Buffer) => {
-          stderr += chunk.toString();
-        });
-
-        rl.on("line", (line) => {
-          if (!line.trim() || killedDueToLimit) return;
+        for (const line of result.stdout.split("\n")) {
+          if (!line.trim() || hitCollectLimit) continue;
 
           let event: any;
           try {
             event = JSON.parse(line);
           } catch {
-            return;
+            continue;
           }
 
-          if (event.type !== "match" && event.type !== "context") return;
+          if (event.type !== "match" && event.type !== "context") continue;
 
           const filePath: string | undefined = event.data?.path?.text;
           const lineNumber: number | undefined = event.data?.line_number;
           const lineText: string = (event.data?.lines?.text ?? "").replace(/\r?\n$/, "");
-          if (!filePath || typeof lineNumber !== "number") return;
+          if (!filePath || typeof lineNumber !== "number") continue;
 
           if (event.type === "match") {
             totalMatches++;
@@ -293,215 +299,206 @@ export function createGrepTool(config: GrepExtConfig = CONFIG_DEFAULTS): ToolDef
           });
 
           if (totalMatches >= maxCollectMatches) {
-            killedDueToLimit = true;
-            if (!child.killed) child.kill();
+            hitCollectLimit = true;
           }
-        });
+        }
 
-        child.on("error", (err) => {
-          rl.close();
-          signal?.removeEventListener("abort", onAbort);
-          resolve({
-            content: [{ type: "text" as const, text: `grep error: ${err.message}` }],
+        if (result.exitCode !== 0 && result.exitCode !== 1 && !hitCollectLimit) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: result.stderr.trim() || `ripgrep exited with code ${result.exitCode}`,
+              },
+            ],
             isError: true,
-          } as any);
-        });
+          } as any;
+        }
 
-        child.on("close", (code) => {
-          rl.close();
-          signal?.removeEventListener("abort", onAbort);
-
-          if (aborted) {
-            resolve({
-              content: [{ type: "text" as const, text: "search aborted" }],
-              isError: true,
-            } as any);
-            return;
+        if (totalMatches === 0) {
+          let text = "no matches found";
+          if (!p.literal && looksLikeRegex(p.pattern)) {
+            text +=
+              "\n\n(pattern contains regex characters — try literal: true if searching for exact text)";
           }
+          return { content: [{ type: "text" as const, text }] } as any;
+        }
 
-          if (!killedDueToLimit && code !== 0 && code !== 1) {
-            resolve({
-              content: [
-                {
-                  type: "text" as const,
-                  text: stderr.trim() || `ripgrep exited with code ${code}`,
-                },
-              ],
-              isError: true,
-            } as any);
-            return;
+        // --- phase 2: build output from collected events ---
+
+        // group events by file, preserving order
+        const fileOrder: string[] = [];
+        const fileEvents = new Map<string, RgEvent[]>();
+        for (const ev of events) {
+          if (!fileEvents.has(ev.filePath)) {
+            fileOrder.push(ev.filePath);
+            fileEvents.set(ev.filePath, []);
           }
+          fileEvents.get(ev.filePath)!.push(ev);
+        }
 
-          if (totalMatches === 0) {
-            let text = "no matches found";
-            if (!p.literal && looksLikeRegex(p.pattern)) {
-              text +=
-                "\n\n(pattern contains regex characters — try literal: true if searching for exact text)";
-            }
-            resolve({ content: [{ type: "text" as const, text }] } as any);
-            return;
-          }
+        const outputLines: string[] = [];
+        /** output line indices that are actual matches (not context) */
+        const matchLineIndices: number[] = [];
+        /** index of first match line per file — focus points for collapsed display */
+        const firstMatchPerFile: number[] = [];
+        const perFileMatchCount = new Map<string, number>();
+        const fileGroups: GrepFile[] = [];
 
-          // --- phase 2: build output from collected events ---
+        for (let fi = 0; fi < fileOrder.length; fi++) {
+          const filePath = fileOrder[fi];
+          if (!filePath) continue;
+          const fileEvts = fileEvents.get(filePath)!;
 
-          // group events by file, preserving order
-          const fileOrder: string[] = [];
-          const fileEvents = new Map<string, RgEvent[]>();
-          for (const ev of events) {
-            if (!fileEvents.has(ev.filePath)) {
-              fileOrder.push(ev.filePath);
-              fileEvents.set(ev.filePath, []);
-            }
-            fileEvents.get(ev.filePath)!.push(ev);
-          }
-
-          const outputLines: string[] = [];
-          /** output line indices that are actual matches (not context) */
-          const matchLineIndices: number[] = [];
-          /** index of first match line per file — focus points for collapsed display */
-          const firstMatchPerFile: number[] = [];
-          const perFileMatchCount = new Map<string, number>();
-          const fileGroups: GrepFile[] = [];
-
-          for (let fi = 0; fi < fileOrder.length; fi++) {
-            const filePath = fileOrder[fi];
-            if (!filePath) continue;
-            const fileEvts = fileEvents.get(filePath)!;
-
-            // determine which matches to include (per-file limit)
-            const includedMatchLines = new Set<number>();
-            let matchesInFile = 0;
-            for (const ev of fileEvts) {
-              if (ev.kind === "match") {
-                matchesInFile++;
-                if (matchesInFile <= config.maxPerFile) {
-                  includedMatchLines.add(ev.lineNumber);
-                }
+          // determine which matches to include (per-file limit)
+          const includedMatchLines = new Set<number>();
+          let matchesInFile = 0;
+          for (const ev of fileEvts) {
+            if (ev.kind === "match") {
+              matchesInFile++;
+              if (matchesInFile <= config.maxPerFile) {
+                includedMatchLines.add(ev.lineNumber);
               }
             }
-            perFileMatchCount.set(filePath, Math.min(matchesInFile, config.maxPerFile));
+          }
+          perFileMatchCount.set(filePath, Math.min(matchesInFile, config.maxPerFile));
 
-            // include context lines only if adjacent to an included match
-            const includedLines = new Set<number>();
-            for (const ln of includedMatchLines) {
-              includedLines.add(ln);
-              // include context lines within contextLines distance
-              for (let d = 1; d <= config.contextLines; d++) {
-                includedLines.add(ln - d);
-                includedLines.add(ln + d);
-              }
+          // include context lines only if adjacent to an included match
+          const includedLines = new Set<number>();
+          for (const ln of includedMatchLines) {
+            includedLines.add(ln);
+            // include context lines within contextLines distance
+            for (let d = 1; d <= config.contextLines; d++) {
+              includedLines.add(ln - d);
+              includedLines.add(ln + d);
             }
-
-            // blank separator between file groups
-            if (fi > 0) {
-              outputLines.push("");
-            }
-
-            const rel = path.relative(searchPath, filePath).replace(/\\/g, "/");
-            const displayPath = rel && !rel.startsWith("..") ? rel : path.basename(filePath);
-
-            const grepFile: GrepFile = {
-              path: displayPath,
-              matches: [],
-              hitLimit: matchesInFile > config.maxPerFile,
-            };
-
-            let lastOutputLineNum = -Infinity;
-            let isFirstMatchInFile = true;
-
-            for (const ev of fileEvts) {
-              if (!includedLines.has(ev.lineNumber)) continue;
-              // deduplicate (rg can emit same line as both context for
-              // adjacent matches — we only want it once)
-              if (ev.lineNumber <= lastOutputLineNum) continue;
-
-              // insert "--" separator for non-contiguous groups within file
-              // (gap > 1 means there's a break in line numbers)
-              if (lastOutputLineNum >= 0 && ev.lineNumber > lastOutputLineNum + 1) {
-                outputLines.push("--");
-              }
-
-              const idx = outputLines.length;
-              outputLines.push(
-                `${displayPath}:${ev.lineNumber}: ${truncateLine(ev.lineText, config.maxLineChars)}`,
-              );
-              lastOutputLineNum = ev.lineNumber;
-
-              grepFile.matches.push({
-                lineNum: ev.lineNumber,
-                text: truncateLine(ev.lineText, config.maxLineChars),
-                isContext: ev.kind === "context",
-              });
-
-              if (includedMatchLines.has(ev.lineNumber)) {
-                matchLineIndices.push(idx);
-                if (isFirstMatchInFile) {
-                  firstMatchPerFile.push(idx);
-                  isFirstMatchInFile = false;
-                }
-              }
-            }
-            fileGroups.push(grepFile);
           }
 
-          // apply head+tail if over display limit
-          let output: string;
-          const notices: string[] = [];
-          let finalMatchIndices: number[];
+          // blank separator between file groups
+          if (fi > 0) {
+            outputLines.push("");
+          }
 
-          if (outputLines.length > config.maxTotalMatches * 3) {
-            // with context lines, the threshold is higher
-            const limit = config.maxTotalMatches * 2;
-            const { head, tail, truncatedCount } = headTail(outputLines, limit);
-            output = [...head, "", `... [${truncatedCount} lines truncated] ...`, "", ...tail].join(
-              "\n",
+          const rel = path.relative(searchPath, filePath).replace(/\\/g, "/");
+          const displayPath = rel && !rel.startsWith("..") ? rel : path.basename(filePath);
+
+          const grepFile: GrepFile = {
+            path: displayPath,
+            matches: [],
+            hitLimit: matchesInFile > config.maxPerFile,
+          };
+
+          let lastOutputLineNum = -Infinity;
+          let isFirstMatchInFile = true;
+
+          for (const ev of fileEvts) {
+            if (!includedLines.has(ev.lineNumber)) continue;
+            // deduplicate (rg can emit same line as both context for
+            // adjacent matches — we only want it once)
+            if (ev.lineNumber <= lastOutputLineNum) continue;
+
+            // insert "--" separator for non-contiguous groups within file
+            // (gap > 1 means there's a break in line numbers)
+            if (lastOutputLineNum >= 0 && ev.lineNumber > lastOutputLineNum + 1) {
+              outputLines.push("--");
+            }
+
+            const idx = outputLines.length;
+            outputLines.push(
+              `${displayPath}:${ev.lineNumber}: ${truncateLine(ev.lineText, config.maxLineChars)}`,
             );
-            // remap match indices into the truncated output
-            const headLen = head.length;
-            const gapLen = 3; // blank + marker + blank
-            const tailStart = outputLines.length - tail.length;
-            finalMatchIndices = matchLineIndices
-              .map((i) => {
-                if (i < headLen) return i;
-                if (i >= tailStart) return headLen + gapLen + (i - tailStart);
-                return -1; // truncated
-              })
-              .filter((i) => i >= 0);
-            notices.push(`${truncatedCount} lines truncated, showing first and last ${limit / 2}`);
-          } else {
-            output = outputLines.join("\n");
-            finalMatchIndices = matchLineIndices;
-          }
+            lastOutputLineNum = ev.lineNumber;
 
-          if (killedDueToLimit) {
-            notices.push(`stopped at ${maxCollectMatches} matches — refine pattern`);
-          }
+            grepFile.matches.push({
+              lineNum: ev.lineNumber,
+              text: truncateLine(ev.lineText, config.maxLineChars),
+              isContext: ev.kind === "context",
+            });
 
-          const filesAtLimit = Array.from(perFileMatchCount.values()).filter(
-            (c) => c >= config.maxPerFile,
-          ).length;
-          if (filesAtLimit > 0) {
-            notices.push(
-              `${filesAtLimit} file${filesAtLimit > 1 ? "s" : ""} hit the ${config.maxPerFile}-per-file limit`,
-            );
+            if (includedMatchLines.has(ev.lineNumber)) {
+              matchLineIndices.push(idx);
+              if (isFirstMatchInFile) {
+                firstMatchPerFile.push(idx);
+                isFirstMatchInFile = false;
+              }
+            }
           }
+          fileGroups.push(grepFile);
+        }
 
-          if (notices.length > 0) {
-            output += `\n\n[${notices.join(". ")}]`;
-          }
+        // apply head+tail if over display limit
+        let output: string;
+        const notices: string[] = [];
+        let finalMatchIndices: number[];
 
-          resolve({
-            content: [{ type: "text" as const, text: output }],
-            details: {
-              fileGroups,
-              notices,
-              matchLineIndices: finalMatchIndices,
-              firstMatchPerFile,
-              searchPath,
+        if (outputLines.length > config.maxTotalMatches * 3) {
+          // with context lines, the threshold is higher
+          const limit = config.maxTotalMatches * 2;
+          const { head, tail, truncatedCount } = headTail(outputLines, limit);
+          output = [...head, "", `... [${truncatedCount} lines truncated] ...`, "", ...tail].join(
+            "\n",
+          );
+          // remap match indices into the truncated output
+          const headLen = head.length;
+          const gapLen = 3; // blank + marker + blank
+          const tailStart = outputLines.length - tail.length;
+          finalMatchIndices = matchLineIndices
+            .map((i) => {
+              if (i < headLen) return i;
+              if (i >= tailStart) return headLen + gapLen + (i - tailStart);
+              return -1; // truncated
+            })
+            .filter((i) => i >= 0);
+          notices.push(`${truncatedCount} lines truncated, showing first and last ${limit / 2}`);
+        } else {
+          output = outputLines.join("\n");
+          finalMatchIndices = matchLineIndices;
+        }
+
+        if (hitCollectLimit) {
+          notices.push(`stopped at ${maxCollectMatches} matches — refine pattern`);
+        }
+
+        const filesAtLimit = Array.from(perFileMatchCount.values()).filter(
+          (c) => c >= config.maxPerFile,
+        ).length;
+        if (filesAtLimit > 0) {
+          notices.push(
+            `${filesAtLimit} file${filesAtLimit > 1 ? "s" : ""} hit the ${config.maxPerFile}-per-file limit`,
+          );
+        }
+
+        if (notices.length > 0) {
+          output += `\n\n[${notices.join(". ")}]`;
+        }
+
+        return {
+          content: [{ type: "text" as const, text: output }],
+          details: {
+            fileGroups,
+            notices,
+            matchLineIndices: finalMatchIndices,
+            firstMatchPerFile,
+            searchPath,
+          },
+        } as any;
+      } catch (err) {
+        if (err instanceof CommandAborted) {
+          return {
+            content: [{ type: "text" as const, text: "search aborted" }],
+            isError: true,
+          } as any;
+        }
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `grep error: ${err instanceof Error ? err.message : String(err)}`,
             },
-          } as any);
-        });
-      });
+          ],
+          isError: true,
+        } as any;
+      }
     },
 
     renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
@@ -566,7 +563,11 @@ export function createGrepExtension(
     );
     if (!enabled) return;
 
-    pi.registerTool(deps.withPromptPatch(createGrepTool(cfg)));
+    const runtime = ManagedRuntime.make(ProcessRunner.layer);
+    pi.registerTool(deps.withPromptPatch(createGrepTool(cfg, runtime)));
+    pi.on("session_shutdown", async () => {
+      await runtime.dispose();
+    });
   };
 }
 
