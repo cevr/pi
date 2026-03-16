@@ -4,7 +4,9 @@ import {
   auditReducer,
   type AuditConcern,
   type AuditEffect,
+  type AuditFinding,
   type AuditState,
+  type FixPhase,
   type SkillCatalogEntry,
 } from "./machine";
 import type { BuiltinEffect } from "@cvr/pi-state-machine";
@@ -24,6 +26,12 @@ const CATALOG: SkillCatalogEntry[] = [
 const CONCERNS: AuditConcern[] = [
   { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
   { name: "frontend", description: "React patterns", skills: ["react", "ui"] },
+];
+
+const FINDINGS: AuditFinding[] = [
+  { file: "src/app.tsx", description: "Missing null check", severity: "critical" },
+  { file: "src/lib.ts", description: "Unused import", severity: "warning" },
+  { file: "src/utils.ts", description: "Consider memoizing", severity: "suggestion" },
 ];
 
 function idle(): AuditState {
@@ -52,6 +60,16 @@ function auditing(concerns = CONCERNS): AuditState {
 
 function synthesizing(concerns = CONCERNS): AuditState {
   return { _tag: "Synthesizing", concerns, userPrompt: "" };
+}
+
+function fixing(findings = FINDINGS, currentFinding = 0, phase: FixPhase = "running"): AuditState {
+  return {
+    _tag: "Fixing",
+    concerns: CONCERNS,
+    findings,
+    currentFinding,
+    phase,
+  };
 }
 
 function hasEffect(effects: readonly Effect[] | undefined, type: string): boolean {
@@ -187,17 +205,127 @@ describe("auditReducer — AuditingComplete", () => {
 // ---------------------------------------------------------------------------
 
 describe("auditReducer — SynthesisComplete", () => {
-  it("Synthesizing → Idle with notify", () => {
-    const r = auditReducer(synthesizing(), { _tag: "SynthesisComplete" });
+  it("Synthesizing + findings → Fixing first finding", () => {
+    const r = auditReducer(synthesizing(), { _tag: "SynthesisComplete", findings: FINDINGS });
+    expect(r.state._tag).toBe("Fixing");
+    if (r.state._tag === "Fixing") {
+      expect(r.state.currentFinding).toBe(0);
+      expect(r.state.phase).toBe("running");
+      expect(r.state.findings).toEqual(FINDINGS);
+    }
+    expect(hasEffect(r.effects, "sendMessage")).toBe(true);
+    expect(hasEffect(r.effects, "setStatus")).toBe(true);
+  });
+
+  it("Synthesizing + empty findings → Idle", () => {
+    const r = auditReducer(synthesizing(), { _tag: "SynthesisComplete", findings: [] });
     expect(r.state._tag).toBe("Idle");
     const notify = getEffect<BuiltinEffect>(r.effects, "notify");
-    expect(notify).toMatchObject({ message: "audit complete" });
+    expect(notify).toMatchObject({ message: expect.stringContaining("no findings") });
   });
 
   it("non-Synthesizing + SynthesisComplete is no-op", () => {
     const state = auditing();
-    const r = auditReducer(state, { _tag: "SynthesisComplete" });
+    const r = auditReducer(state, { _tag: "SynthesisComplete", findings: FINDINGS });
     expect(r.state).toBe(state);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fixing — gated loop
+// ---------------------------------------------------------------------------
+
+describe("auditReducer — FindingFixed", () => {
+  it("Fixing(running) → Fixing(gating)", () => {
+    const r = auditReducer(fixing(), { _tag: "FindingFixed" });
+    expect(r.state._tag).toBe("Fixing");
+    if (r.state._tag === "Fixing") {
+      expect(r.state.phase).toBe("gating");
+    }
+    expect(hasEffect(r.effects, "sendMessage")).toBe(true);
+  });
+
+  it("wrong phase → no-op", () => {
+    const state = fixing(FINDINGS, 0, "gating");
+    const r = auditReducer(state, { _tag: "FindingFixed" });
+    expect(r.state).toBe(state);
+  });
+});
+
+describe("auditReducer — FixSkip", () => {
+  it("skips to next finding", () => {
+    const r = auditReducer(fixing(), { _tag: "FixSkip" });
+    expect(r.state._tag).toBe("Fixing");
+    if (r.state._tag === "Fixing") {
+      expect(r.state.currentFinding).toBe(1);
+      expect(r.state.phase).toBe("running");
+    }
+  });
+
+  it("skipping last finding → Idle", () => {
+    const r = auditReducer(fixing(FINDINGS, 2), { _tag: "FixSkip" });
+    expect(r.state._tag).toBe("Idle");
+  });
+});
+
+describe("auditReducer — FixGatePass", () => {
+  it("gating → counseling", () => {
+    const r = auditReducer(fixing(FINDINGS, 0, "gating"), { _tag: "FixGatePass" });
+    expect(r.state._tag).toBe("Fixing");
+    if (r.state._tag === "Fixing") {
+      expect(r.state.phase).toBe("counseling");
+    }
+  });
+
+  it("wrong phase → no-op", () => {
+    const state = fixing(FINDINGS, 0, "running");
+    const r = auditReducer(state, { _tag: "FixGatePass" });
+    expect(r.state).toBe(state);
+  });
+});
+
+describe("auditReducer — FixGateFail", () => {
+  it("gating → back to running", () => {
+    const r = auditReducer(fixing(FINDINGS, 0, "gating"), { _tag: "FixGateFail" });
+    expect(r.state._tag).toBe("Fixing");
+    if (r.state._tag === "Fixing") {
+      expect(r.state.phase).toBe("running");
+    }
+    expect(hasEffect(r.effects, "notify")).toBe(true);
+  });
+});
+
+describe("auditReducer — FixCounselPass", () => {
+  it("counseling → advances to next finding", () => {
+    const r = auditReducer(fixing(FINDINGS, 0, "counseling"), { _tag: "FixCounselPass" });
+    expect(r.state._tag).toBe("Fixing");
+    if (r.state._tag === "Fixing") {
+      expect(r.state.currentFinding).toBe(1);
+      expect(r.state.phase).toBe("running");
+    }
+  });
+
+  it("counseling last finding → Idle", () => {
+    const r = auditReducer(fixing(FINDINGS, 2, "counseling"), { _tag: "FixCounselPass" });
+    expect(r.state._tag).toBe("Idle");
+    expect(hasEffect(r.effects, "notify")).toBe(true);
+  });
+
+  it("wrong phase → no-op", () => {
+    const state = fixing(FINDINGS, 0, "running");
+    const r = auditReducer(state, { _tag: "FixCounselPass" });
+    expect(r.state).toBe(state);
+  });
+});
+
+describe("auditReducer — FixCounselFail", () => {
+  it("counseling → back to running", () => {
+    const r = auditReducer(fixing(FINDINGS, 0, "counseling"), { _tag: "FixCounselFail" });
+    expect(r.state._tag).toBe("Fixing");
+    if (r.state._tag === "Fixing") {
+      expect(r.state.phase).toBe("running");
+    }
+    expect(hasEffect(r.effects, "notify")).toBe(true);
   });
 });
 
@@ -222,6 +350,11 @@ describe("auditReducer — Cancel", () => {
     expect(r.state._tag).toBe("Idle");
   });
 
+  it("Fixing → Idle", () => {
+    const r = auditReducer(fixing(), { _tag: "Cancel" });
+    expect(r.state._tag).toBe("Idle");
+  });
+
   it("Idle + Cancel is no-op", () => {
     const state = idle();
     const r = auditReducer(state, { _tag: "Cancel" });
@@ -235,7 +368,7 @@ describe("auditReducer — Cancel", () => {
 
 describe("auditReducer — Reset", () => {
   it("any state → Idle", () => {
-    for (const state of [detecting(), auditing(), synthesizing()]) {
+    for (const state of [detecting(), auditing(), synthesizing(), fixing()]) {
       const r = auditReducer(state, { _tag: "Reset" });
       expect(r.state).toEqual({ _tag: "Idle" });
       expect(hasEffect(r.effects, "setStatus")).toBe(true);

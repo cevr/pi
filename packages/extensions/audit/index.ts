@@ -1,9 +1,8 @@
 /**
- * Audit Extension — skill-aware branch audit with parallel subagents.
+ * Audit Extension — skill-aware branch audit-loop.
  *
- * Detects relevant audit concerns from the branch diff, runs parallel
- * subagent audits per concern (each with attached skills), then synthesizes
- * findings. Phases: Detecting → Auditing → Synthesizing.
+ * Full loop: detect concerns → parallel audit → synthesize findings → fix each
+ * finding with gate + counsel between fixes.
  *
  * Usage:
  *   /audit                          — auto-detect concerns from diff
@@ -26,7 +25,7 @@ import {
   buildSkillCatalog,
 } from "@cvr/pi-diff-context";
 import { auditReducer, type AuditEffect, type AuditEvent, type AuditState } from "./machine";
-import { parseConcernsJson, PHASE_MARKERS } from "./utils";
+import { parseConcernsJson, parseFindingsJson, PHASE_MARKERS } from "./utils";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,7 +45,16 @@ function getLastAssistantText(messages: AgentMessage[]): string {
     .join("\n");
 }
 
-const AUDIT_CUSTOM_TYPES = new Set(["audit-context", "audit-trigger"]);
+const AUDIT_CUSTOM_TYPES = new Set([
+  "audit-context",
+  "audit-trigger",
+  "audit-fix",
+  "audit-gate",
+  "audit-gate-fix",
+  "audit-counsel",
+  "audit-counsel-fix",
+  "audit-commit",
+]);
 
 // ---------------------------------------------------------------------------
 // UI
@@ -58,6 +66,14 @@ function formatUI(state: AuditState, ctx: ExtensionContext): void {
       "audit-progress",
       state.concerns.map((c) => `  ○ ${c.name}`),
     );
+  } else if (state._tag === "Fixing") {
+    const lines = state.findings.map((f, i) => {
+      const marker = i < state.currentFinding ? "✓" : i === state.currentFinding ? "▸" : "○";
+      const phase =
+        i === state.currentFinding && state.phase !== "running" ? ` (${state.phase})` : "";
+      return `  ${marker} [${f.severity}] ${f.file}${phase}`;
+    });
+    ctx.ui.setWidget("audit-progress", lines);
   } else {
     ctx.ui.setWidget("audit-progress", undefined);
   }
@@ -89,6 +105,18 @@ export default function auditExtension(pi: ExtensionAPI): void {
       },
     },
     {
+      mode: "event",
+      name: "audit-skip",
+      description: "Skip the current finding",
+      toEvent: (state, _args, ctx): AuditEvent | null => {
+        if (state._tag !== "Fixing" || state.phase !== "running") {
+          ctx.ui.notify("Not currently fixing a finding", "info");
+          return null;
+        }
+        return { _tag: "FixSkip" };
+      },
+    },
+    {
       mode: "query",
       name: "audit-status",
       description: "Show audit status",
@@ -106,6 +134,16 @@ export default function auditExtension(pi: ExtensionAPI): void {
           case "Synthesizing":
             ctx.ui.notify("Audit: synthesizing findings...", "info");
             break;
+          case "Fixing": {
+            const done = state.currentFinding;
+            const total = state.findings.length;
+            const current = state.findings[state.currentFinding]!;
+            ctx.ui.notify(
+              `Audit: fixing ${done + 1}/${total} (${state.phase}) — [${current.severity}] ${current.file}: ${current.description}`,
+              "info",
+            );
+            break;
+          }
         }
       },
     },
@@ -129,14 +167,25 @@ export default function auditExtension(pi: ExtensionAPI): void {
           let content: string;
           switch (state._tag) {
             case "Detecting":
-              content = `[AUDIT MODE — DETECTION]\n\nYou are detecting which audit concerns apply to this branch's changes.\n\n${principlesBlock}`;
+              content = `[AUDIT MODE — DETECTION]\n\nYou are detecting which audit concerns apply to this branch's changes.${principlesBlock}`;
               break;
             case "Auditing":
-              content = `[AUDIT MODE — AUDITING ${state.concerns.length} concerns]\n\n${principlesBlock}`;
+              content = `[AUDIT MODE — AUDITING ${state.concerns.length} concerns]${principlesBlock}`;
               break;
             case "Synthesizing":
-              content = `[AUDIT MODE — SYNTHESIS]\n\n${principlesBlock}`;
+              content = `[AUDIT MODE — SYNTHESIS]\n\nSynthesize findings and output structured JSON.${principlesBlock}`;
               break;
+            case "Fixing": {
+              const f = state.findings[state.currentFinding]!;
+              const phaseLabel =
+                state.phase === "gating"
+                  ? "GATING"
+                  : state.phase === "counseling"
+                    ? "COUNSELING"
+                    : `FIXING ${state.currentFinding + 1}/${state.findings.length}`;
+              content = `[AUDIT MODE — ${phaseLabel}]\n\nCurrent finding: [${f.severity}] ${f.file} — ${f.description}${principlesBlock}`;
+              break;
+            }
           }
 
           return {
@@ -176,7 +225,26 @@ export default function auditExtension(pi: ExtensionAPI): void {
               return null;
             }
             case "Synthesizing": {
-              if (PHASE_MARKERS.synthesizing.test(text)) return { _tag: "SynthesisComplete" };
+              if (!PHASE_MARKERS.synthesizing.test(text)) return null;
+              const findings = parseFindingsJson(text) ?? [];
+              return { _tag: "SynthesisComplete", findings };
+            }
+            case "Fixing": {
+              if (state.phase === "running") {
+                if (PHASE_MARKERS.findingFixed.test(text)) return { _tag: "FindingFixed" };
+                if (PHASE_MARKERS.findingSkip.test(text)) return { _tag: "FixSkip" };
+                return null;
+              }
+              if (state.phase === "gating") {
+                if (PHASE_MARKERS.fixGatePass.test(text)) return { _tag: "FixGatePass" };
+                if (PHASE_MARKERS.fixGateFail.test(text)) return { _tag: "FixGateFail" };
+                return null;
+              }
+              if (state.phase === "counseling") {
+                if (PHASE_MARKERS.fixCounselPass.test(text)) return { _tag: "FixCounselPass" };
+                if (PHASE_MARKERS.fixCounselFail.test(text)) return { _tag: "FixCounselFail" };
+                return null;
+              }
               return null;
             }
           }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseConcernsJson, PHASE_MARKERS } from "./utils";
+import { parseConcernsJson, parseFindingsJson, PHASE_MARKERS } from "./utils";
 
 describe("parseConcernsJson", () => {
   it("parses fenced JSON block", () => {
@@ -64,12 +64,60 @@ CONCERNS_DETECTED`;
   });
 });
 
+describe("parseFindingsJson", () => {
+  it("parses fenced JSON block", () => {
+    const text = `Here are the findings:
+\`\`\`json
+{"findings": [{"file": "src/app.tsx", "description": "Missing null check", "severity": "critical"}]}
+\`\`\`
+AUDIT_COMPLETE`;
+    const result = parseFindingsJson(text);
+    expect(result).toEqual([
+      { file: "src/app.tsx", description: "Missing null check", severity: "critical" },
+    ]);
+  });
+
+  it("parses bare JSON", () => {
+    const text = `Found: {"findings": [{"file": "a.ts", "description": "unused import", "severity": "warning"}]} AUDIT_COMPLETE`;
+    const result = parseFindingsJson(text);
+    expect(result).toEqual([{ file: "a.ts", description: "unused import", severity: "warning" }]);
+  });
+
+  it("returns null for no JSON found", () => {
+    expect(parseFindingsJson("just text AUDIT_COMPLETE")).toBeNull();
+  });
+
+  it("returns empty array for empty findings", () => {
+    const text = '```json\n{"findings": []}\n```\nAUDIT_COMPLETE';
+    expect(parseFindingsJson(text)).toEqual([]);
+  });
+
+  it("defaults severity to warning for invalid values", () => {
+    const text =
+      '```json\n{"findings": [{"file": "a.ts", "description": "x", "severity": "invalid"}]}\n```';
+    const result = parseFindingsJson(text);
+    expect(result?.[0]?.severity).toBe("warning");
+  });
+
+  it("defaults severity to warning when missing", () => {
+    const text = '```json\n{"findings": [{"file": "a.ts", "description": "x"}]}\n```';
+    const result = parseFindingsJson(text);
+    expect(result?.[0]?.severity).toBe("warning");
+  });
+});
+
 describe("PHASE_MARKERS", () => {
   it("detects phase markers case-insensitively", () => {
     expect(PHASE_MARKERS.detecting.test("CONCERNS_DETECTED")).toBe(true);
     expect(PHASE_MARKERS.detecting.test("concerns_detected")).toBe(true);
     expect(PHASE_MARKERS.auditing.test("AUDITING_COMPLETE")).toBe(true);
     expect(PHASE_MARKERS.synthesizing.test("AUDIT_COMPLETE")).toBe(true);
+    expect(PHASE_MARKERS.findingFixed.test("FINDING_FIXED")).toBe(true);
+    expect(PHASE_MARKERS.findingSkip.test("FINDING_SKIP")).toBe(true);
+    expect(PHASE_MARKERS.fixGatePass.test("FIX_GATE_PASS")).toBe(true);
+    expect(PHASE_MARKERS.fixGateFail.test("FIX_GATE_FAIL")).toBe(true);
+    expect(PHASE_MARKERS.fixCounselPass.test("FIX_COUNSEL_PASS")).toBe(true);
+    expect(PHASE_MARKERS.fixCounselFail.test("FIX_COUNSEL_FAIL")).toBe(true);
   });
 
   it("does not match unrelated text", () => {
