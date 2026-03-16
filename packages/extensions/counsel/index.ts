@@ -89,7 +89,7 @@ export const COUNSEL_CONFIG_SCHEMA: ExtensionConfigSchema<CounselExtConfig> = {
 
 // --- model resolution ---
 
-const COUNSEL_DIR = path.join(os.homedir(), ".pi", "counsel");
+const SESSIONS_DIR = path.join(os.homedir(), ".pi", "agent", "sessions");
 
 type ModelFamily = "anthropic" | "openai";
 
@@ -128,19 +128,48 @@ function resolveOppositeModel(
   return family === "anthropic" ? config.oppositeModels.openai : config.oppositeModels.anthropic;
 }
 
-function ensureCounselDir(): void {
-  fs.mkdirSync(COUNSEL_DIR, { recursive: true });
+function generateCounselSessionId(): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `counsel-${rand}`;
 }
 
-function generateCounselPath(prompt: string): string {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const rand = Math.random().toString(36).slice(2, 8);
-  const slug = prompt
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 40);
-  return path.join(COUNSEL_DIR, `${timestamp}-${rand}-${slug || "review"}.md`);
+function writeCounselSession(
+  sessionId: string,
+  prompt: string,
+  output: string,
+  model: string,
+  cwd: string,
+): string {
+  const now = new Date();
+  const year = now.getFullYear().toString();
+  const dir = path.join(SESSIONS_DIR, year);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  const filePath = path.join(dir, `${timestamp}_${sessionId}.jsonl`);
+
+  const lines: string[] = [
+    JSON.stringify({ type: "session", id: sessionId, cwd, timestamp: now.toISOString() }),
+    JSON.stringify({ type: "session_info", name: `counsel: ${prompt.slice(0, 60)}` }),
+    JSON.stringify({
+      type: "message",
+      id: `${sessionId}-user`,
+      message: { role: "user", content: prompt },
+    }),
+    JSON.stringify({
+      type: "message",
+      id: `${sessionId}-assistant`,
+      parentId: `${sessionId}-user`,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: output }],
+        model,
+      },
+    }),
+  ];
+
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf-8");
+  return sessionId;
 }
 
 // --- tool ---
@@ -327,22 +356,22 @@ export function createCounselTool(
             result.stopReason === "aborted";
           const output = getFinalOutput(result.messages) || "(no output)";
 
-          // write review to ~/.pi/counsel/
+          // write review as a session file for read-session reference
           if (!isError && output !== "(no output)") {
             try {
-              ensureCounselDir();
-              const counselPath = generateCounselPath(p.prompt);
-              const fileContent =
-                `# Counsel Review\n\n` +
-                `**Model**: ${result.model ?? oppositeModel}\n` +
-                `**Prompt**: ${p.prompt}\n\n---\n\n${output}\n`;
-              fs.writeFileSync(counselPath, fileContent, "utf-8");
+              const counselSessionId = generateCounselSessionId();
+              writeCounselSession(
+                counselSessionId,
+                p.prompt,
+                output,
+                result.model ?? oppositeModel,
+                ctx.cwd,
+              );
 
-              // prepend file path to output so caller knows where to find it
-              const outputWithPath = `Review saved to: ${counselPath}\n\n${output}`;
-              return subAgentResult(outputWithPath, singleResult);
+              const outputWithRef = `Session: ${counselSessionId} (use read_session to reference)\n\n${output}`;
+              return subAgentResult(outputWithRef, singleResult);
             } catch {
-              // file write failed, return output without path
+              // session write failed, return output without ref
             }
           }
 
