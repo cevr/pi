@@ -43,9 +43,10 @@
   },
   "devDependencies": {
     "@effect/language-service": "^0.80.0",
+    "@effect/platform-node": "4.0.0-beta.34",
     "@types/bun": "latest",
     "concurrently": "^9.2.1",
-    "effect": "4.0.0-beta.31",
+    "effect": "4.0.0-beta.34",
     "effect-bun-test": "^0.2.1",
     "oxfmt": "^0.35.0",
     "oxlint": "^1.50.0",

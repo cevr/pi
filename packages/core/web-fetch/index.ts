@@ -151,14 +151,14 @@ function isImageMime(mimeType: string): boolean {
 }
 
 function normalizeMimeType(headers: Headers.Headers): string {
-  const contentType = Option.fromNullishOr(Headers.get(headers, "content-type"));
+  const contentType = Headers.get(headers, "content-type");
   if (Option.isNone(contentType)) return "";
   const [mimeType] = contentType.value.split(";");
   return (mimeType ?? "").trim().toLowerCase();
 }
 
 function parseContentLength(headers: Headers.Headers): Option.Option<number> {
-  const contentLength = Option.fromNullishOr(Headers.get(headers, "content-length"));
+  const contentLength = Headers.get(headers, "content-length");
   if (Option.isNone(contentLength)) return Option.none();
 
   const parsed = Number.parseInt(contentLength.value, 10);
@@ -346,7 +346,7 @@ const fetchResource = (config: WebFetchCoreConfig) =>
       DEFAULT_USER_AGENT,
     );
 
-    const mitigated = Option.fromNullishOr(Headers.get(initialResponse.headers, "cf-mitigated"));
+    const mitigated = Headers.get(initialResponse.headers, "cf-mitigated");
     const response =
       initialResponse.status === 403 && Option.isSome(mitigated) && mitigated.value === "challenge"
         ? yield* requestWithUserAgent(url, request.format, request.timeoutSecs, CLOUDFLARE_RETRY_USER_AGENT)
