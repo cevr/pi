@@ -2,13 +2,13 @@
  * librarian tool — cross-repo codebase understanding via gemini flash sub-agent.
  *
  * replaces the generic subagent pattern with a dedicated tool. the model
- * calls librarian(query: "...", context?: "...")
+ * calls librarian(query: "...", repo?: "...", context?: "...")
  * directly.
  *
- * spawns `pi --mode json` with gemini flash, constrained to the 7
- * github tools (read_github, search_github, list_directory_github,
- * list_repositories, glob_github, commit_search, diff). the librarian
- * explores repos thoroughly before providing comprehensive answers.
+ * fetches repos locally via `repo fetch` CLI, then spawns a sub-agent
+ * with file tools (read, grep, glob, ls) to explore the source code.
+ * the `repo` param is required — supports "owner/repo", "npm:pkg",
+ * "pypi:pkg", "crates:crate" spec formats.
  *
  * system prompt loaded from sops-decrypted prompts at init time.
  */
@@ -44,17 +44,8 @@ type LibrarianExtensionDeps = {
 
 export const CONFIG_DEFAULTS: LibrarianExtConfig = {
   model: "openrouter/google/gemini-3-flash-preview",
-  extensionTools: [
-    "read_github",
-    "search_github",
-    "list_directory_github",
-    "list_repositories",
-    "glob_github",
-    "commit_search",
-    "diff",
-    "web_search",
-  ],
-  builtinTools: [],
+  extensionTools: ["web_search"],
+  builtinTools: ["read", "bash", "grep", "find", "ls"],
   promptFile: "",
   promptString: "",
 };
@@ -125,7 +116,7 @@ export interface LibrarianConfig {
 
 interface LibrarianParams {
   query: string;
-  repo?: string;
+  repo: string;
   context?: string;
 }
 
@@ -138,41 +129,29 @@ export function createLibrarianTool(
     label: "Librarian",
     description:
       "The Librarian — a specialized codebase understanding agent for exploring " +
-      "third-party libraries and complex codebases.\n\n" +
-      "When given a `repo` spec (e.g., 'effect-ts/effect', 'npm:@effect/cli'), " +
-      "the Librarian auto-fetches the source code locally and explores it with " +
-      "file tools (read, grep, glob, ls). Falls back to GitHub API tools when " +
-      "no repo spec is given.\n\n" +
-      "WHEN TO USE THE LIBRARIAN:\n" +
+      "third-party libraries and external codebases.\n\n" +
+      "Fetches repos locally via `repo fetch` and explores source code with " +
+      "file tools (read, grep, glob, ls).\n\n" +
+      "WHEN TO USE:\n" +
       "- Understanding how a third-party library works\n" +
       "- Exploring API surface, patterns, and internals of external packages\n" +
-      "- Analyzing architectural patterns across projects\n" +
-      "- Finding specific implementations in external codebases\n" +
-      "- Understanding code evolution and commit history\n\n" +
-      "WHEN NOT TO USE THE LIBRARIAN:\n" +
-      "- Simple local file reading (use Read directly)\n" +
-      "- Local codebase searches (use finder)\n" +
-      "- Code modifications (use other tools)\n\n" +
-      "USAGE GUIDELINES:\n" +
-      "- Provide a `repo` spec when exploring a specific library\n" +
-      "- Be specific about what you want to understand\n" +
-      "- The Librarian explores thoroughly before providing comprehensive answers\n" +
-      "- When getting an answer from the Librarian, show it to the user in full, do not summarize it.",
+      "- Finding specific implementations in external codebases\n\n" +
+      "WHEN NOT TO USE:\n" +
+      "- Local file reading (use Read directly)\n" +
+      "- Local codebase searches (use finder)\n\n" +
+      "Always provide a `repo` spec. Show the Librarian's answer in full.",
 
     parameters: Type.Object({
       query: Type.String({
         description:
           "Your question about the codebase. Be specific about what you want to understand.",
       }),
-      repo: Type.Optional(
-        Type.String({
-          description:
-            "Repo spec to fetch and explore locally. Formats: 'owner/repo', " +
-            "'owner/repo@tag', 'npm:package', 'npm:@scope/pkg@version', " +
-            "'pypi:package', 'crates:crate'. When provided, the librarian " +
-            "fetches the source locally and explores with file tools.",
-        }),
-      ),
+      repo: Type.String({
+        description:
+          "Repo spec to fetch and explore locally. Formats: 'owner/repo', " +
+          "'owner/repo@tag', 'npm:package', 'npm:@scope/pkg@version', " +
+          "'pypi:package', 'crates:crate'.",
+      }),
       context: Type.Optional(
         Type.String({
           description:
@@ -191,30 +170,28 @@ export function createLibrarianTool(
 
       const p = params as LibrarianParams;
 
-      // If a repo spec is given, fetch it locally
+      // Fetch repo locally
       let localRepoPath: string | null = null;
-      if (p.repo && runtime) {
+      if (runtime) {
         localRepoPath = await repoFetch(p.repo, runtime, signal);
       }
-
-      const parts: string[] = [p.query];
-      if (p.context) parts.push(`\nContext: ${p.context}`);
-      if (localRepoPath) {
-        parts.push(
-          `\nThe source code for ${p.repo} is available locally at: ${localRepoPath}`,
-          `Explore it using file tools (read, grep, glob, ls). Start with package.json or README.md to understand the structure, then drill into specific files.`,
-        );
+      if (!localRepoPath) {
+        return {
+          content: [{ type: "text" as const, text: `Failed to fetch repo: ${p.repo}` }],
+          isError: true,
+        } as any;
       }
+
+      const parts: string[] = [
+        p.query,
+        `\nThe source code for ${p.repo} is available locally at: ${localRepoPath}`,
+        `Explore it using file tools (read, grep, glob, ls). Start with package.json or README.md to understand the structure, then drill into specific files.`,
+      ];
+      if (p.context) parts.push(`\nContext: ${p.context}`);
       const fullTask = parts.join("\n");
 
-      // When exploring locally, use file tools; otherwise use GitHub tools
-      const useLocalTools = localRepoPath != null;
-      const extensionTools = useLocalTools
-        ? []
-        : (config.extensionTools ?? CONFIG_DEFAULTS.extensionTools);
-      const builtinTools = useLocalTools
-        ? ["read", "bash", "grep", "find", "ls"]
-        : (config.builtinTools ?? CONFIG_DEFAULTS.builtinTools);
+      const extensionTools = config.extensionTools ?? CONFIG_DEFAULTS.extensionTools;
+      const builtinTools = config.builtinTools ?? CONFIG_DEFAULTS.builtinTools;
 
       const singleResult: SingleResult = {
         agent: "librarian",
@@ -228,7 +205,7 @@ export function createLibrarianTool(
         Effect.gen(function* () {
           const svc = yield* PiSpawnService;
           const result = yield* svc.spawn({
-            cwd: localRepoPath ?? ctx.cwd,
+            cwd: localRepoPath,
             task: fullTask,
             model: config.model ?? CONFIG_DEFAULTS.model,
             builtinTools,
