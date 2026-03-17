@@ -1,9 +1,9 @@
 /**
  * web_search tool — direct HTTP call to Parallel AI's Search API.
  *
- * uses curl (not fetch/SDK) because pi extensions run in a nix-built
- * environment where adding npm deps requires a rebuild. curl is always
- * available and the single-endpoint usage doesn't justify the SDK.
+ * uses curl (not fetch/SDK) because the extension already shells out,
+ * curl is available, and the single-endpoint usage doesn't justify a
+ * heavier client dependency.
  *
  * cost is derived from the response's usage array, not hardcoded —
  * the API returns UsageItem[] with SKU counts, we multiply by known
@@ -16,13 +16,22 @@
 
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
-import { withPromptPatch } from "@cvr/pi-prompt-patch";
+import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { boxRendererWindowed, osc8Link, type BoxSection, type Excerpt } from "@cvr/pi-box-format";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 import { ProcessRunner } from "@cvr/pi-process-runner";
-import { Effect, ManagedRuntime } from "effect";
+import { withPromptPatch } from "@cvr/pi-prompt-patch";
+import { layerRepoEnv } from "@cvr/pi-repo-env";
 import { Type } from "@sinclair/typebox";
 import type { ToolCostDetails } from "@cvr/pi-tool-cost";
+import { Config, Effect, Layer, ManagedRuntime, Redacted, ServiceMap } from "effect";
+import type { BadArgument, PlatformError } from "effect/PlatformError";
+
+type WebSearchRuntimeError = Config.ConfigError | BadArgument | PlatformError;
+type WebSearchRuntime = ManagedRuntime.ManagedRuntime<ProcessRunner | WebSearchSecrets, WebSearchRuntimeError>;
+type SearchParallelRuntime =
+  | ManagedRuntime.ManagedRuntime<ProcessRunner, never>
+  | WebSearchRuntime;
 
 type WebSearchExtConfig = {
   defaultMaxResults: number;
@@ -45,6 +54,69 @@ export const DEFAULT_DEPS: WebSearchExtensionDeps = {
   getEnabledExtensionConfig,
   withPromptPatch,
 };
+
+const MISSING_API_KEY_MESSAGE = "PARALLEL_API_KEY not set. add it to your environment or the repo .env file.";
+
+export class WebSearchSecrets extends ServiceMap.Service<
+  WebSearchSecrets,
+  {
+    readonly parallelApiKey: Redacted.Redacted<string>;
+  }
+>()("@cvr/pi-web-search/index/WebSearchSecrets") {
+  static layer = Layer.effect(
+    WebSearchSecrets,
+    Effect.gen(function* () {
+      return {
+        parallelApiKey: yield* Config.redacted("PARALLEL_API_KEY"),
+      };
+    }),
+  );
+
+  static layerTest = (parallelApiKey: string) =>
+    Layer.succeed(WebSearchSecrets, {
+      parallelApiKey: Redacted.make(parallelApiKey),
+    });
+}
+
+function configErrorToMessage(error: Config.ConfigError): string {
+  return error.message.includes('["PARALLEL_API_KEY"]')
+    ? MISSING_API_KEY_MESSAGE
+    : `failed to load PARALLEL_API_KEY: ${error.message}`;
+}
+
+type ResolveParallelApiKeyResult =
+  | { readonly _tag: "Success"; readonly apiKey: string }
+  | { readonly _tag: "Failure"; readonly message: string };
+
+async function resolveParallelApiKey(
+  runtime: WebSearchRuntime,
+  signal?: AbortSignal,
+): Promise<ResolveParallelApiKeyResult> {
+  try {
+    const apiKey = await runtime.runPromise(
+      Effect.gen(function* () {
+        const { parallelApiKey } = yield* WebSearchSecrets;
+        return Redacted.value(parallelApiKey);
+      }),
+      { signal },
+    );
+
+    return {
+      _tag: "Success",
+      apiKey,
+    };
+  } catch (error) {
+    return {
+      _tag: "Failure",
+      message:
+        error instanceof Config.ConfigError
+          ? configErrorToMessage(error)
+          : error instanceof Error
+            ? error.message
+            : String(error),
+    };
+  }
+}
 
 function isWebSearchConfig(value: Record<string, unknown>): value is WebSearchExtConfig {
   return (
@@ -111,7 +183,7 @@ export async function searchParallel(
   endpoint: string,
   curlTimeoutSecs: number,
   signal?: AbortSignal,
-  runtime?: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
+  runtime?: SearchParallelRuntime,
 ): Promise<{ data?: SearchResponse; error?: string }> {
   const payload = JSON.stringify(body);
 
@@ -230,7 +302,7 @@ interface WebSearchParams {
 
 export function createWebSearchTool(
   config: WebSearchExtConfig = CONFIG_DEFAULTS,
-  runtime?: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
+  runtime?: WebSearchRuntime,
 ): ToolDefinition {
   return {
     name: "web_search",
@@ -267,15 +339,17 @@ export function createWebSearchTool(
 
     async execute(_toolCallId, params, signal) {
       const p = params as WebSearchParams;
-      const apiKey = process.env.PARALLEL_API_KEY;
-      if (!apiKey) {
+      if (!runtime) {
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: "PARALLEL_API_KEY not set. add it to secrets.yaml and export in shell.nix.",
-            },
-          ],
+          content: [{ type: "text" as const, text: "web search runtime not available" }],
+          isError: true,
+        } as any;
+      }
+
+      const apiKeyResult = await resolveParallelApiKey(runtime, signal);
+      if (apiKeyResult._tag === "Failure") {
+        return {
+          content: [{ type: "text" as const, text: apiKeyResult.message }],
           isError: true,
         } as any;
       }
@@ -290,7 +364,7 @@ export function createWebSearchTool(
       }
 
       const { data, error } = await searchParallel(
-        apiKey,
+        apiKeyResult.apiKey,
         body,
         config.endpoint,
         config.curlTimeoutSecs,
@@ -359,6 +433,22 @@ export function createWebSearchTool(
   };
 }
 
+export function createWebSearchRuntime(
+  start: string | URL = new URL(".", import.meta.url),
+  processRunnerLayer: Layer.Layer<ProcessRunner, never, never> = ProcessRunner.layer,
+): WebSearchRuntime {
+  return ManagedRuntime.make(
+    Layer.mergeAll(
+      processRunnerLayer,
+      WebSearchSecrets.layer.pipe(
+        Layer.provide(
+          layerRepoEnv(start).pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer))),
+        ),
+      ),
+    ),
+  );
+}
+
 export function createWebSearchExtension(
   deps: WebSearchExtensionDeps = DEFAULT_DEPS,
 ): (pi: ExtensionAPI) => void {
@@ -370,7 +460,7 @@ export function createWebSearchExtension(
     );
     if (!enabled) return;
 
-    const runtime = ManagedRuntime.make(ProcessRunner.layer);
+    const runtime = createWebSearchRuntime();
     pi.registerTool(deps.withPromptPatch(createWebSearchTool(cfg, runtime)));
     pi.on("session_shutdown", async () => {
       await runtime.dispose();

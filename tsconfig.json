@@ -79,6 +79,7 @@
       "@cvr/pi-mentions": ["./packages/core/mentions/index.ts"],
       "@cvr/pi-mutex": ["./packages/core/mutex/index.ts"],
       "@cvr/pi-process-runner": ["./packages/core/process-runner/index.ts"],
+      "@cvr/pi-repo-env": ["./packages/core/repo-env/index.ts"],
       "@cvr/pi-git-client": ["./packages/core/git-client/index.ts"],
       "@cvr/pi-output-buffer": ["./packages/core/output-buffer/index.ts"],
       "@cvr/pi-permissions": ["./packages/core/permissions/index.ts"],
