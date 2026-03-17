@@ -1,19 +1,19 @@
 /**
- * Task tool — delegate complex multi-step work to a sub-agent.
+ * Task tool — token-efficient sub-agent delegation.
  *
- * replaces the generic subagent(agent: "Task", task: ...) pattern
- * with a dedicated tool. the model calls
- * Task(prompt: "...", description: "...") directly.
+ * spawns a sub-agent to execute complex multi-step work, then collapses
+ * the full exchange into a compact summary (files read/modified, commands
+ * run, truncated outcome). the parent model sees ~500 chars instead of
+ * potentially 50k+ tokens of raw output.
  *
- * the Task sub-agent inherits the parent's default model (no --model
- * flag). it gets most tools: read/write, edit, grep, bash, finder,
- * format_file. the description is shown to the user in the
- * TUI; the prompt is the full instruction for the sub-agent.
- *
- * no custom system prompt — the sub-agent uses pi's default prompt.
- * the task prompt itself contains all necessary context and instructions.
+ * the sub-agent inherits the parent's default model and gets most tools:
+ * read/write, edit, grep, bash, finder. the full execution history is
+ * preserved in the TUI's expandable result view for inspection.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
@@ -21,6 +21,7 @@ import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-c
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { PiSpawnService, zeroUsage } from "@cvr/pi-spawn";
 import {
+  getDisplayItems,
   getFinalOutput,
   renderAgentTree,
   subAgentResult,
@@ -68,11 +69,92 @@ export const TASK_CONFIG_SCHEMA: ExtensionConfigSchema<TaskExtConfig> = {
 interface TaskParams {
   prompt: string;
   description: string;
+  model?: string;
 }
 
 export interface TaskConfig {
   builtinTools?: string[];
   extensionTools?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Session path
+// ---------------------------------------------------------------------------
+
+const SESSIONS_DIR = path.join(os.homedir(), ".pi", "agent", "sessions");
+
+function generateTaskSessionPath(): string {
+  const now = new Date();
+  const year = now.getFullYear().toString();
+  const dir = path.join(SESSIONS_DIR, year);
+  fs.mkdirSync(dir, { recursive: true });
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  const rand = Math.random().toString(36).slice(2, 8);
+  return path.join(dir, `${timestamp}_task-${rand}.jsonl`);
+}
+
+// ---------------------------------------------------------------------------
+// Context-collapsed summary
+// ---------------------------------------------------------------------------
+
+import type { Message } from "@mariozechner/pi-ai";
+
+function summarizeExecution(description: string, messages: Message[], finalOutput: string): string {
+  const items = getDisplayItems(messages);
+
+  const reads = new Set<string>();
+  const writes = new Set<string>();
+  const commands: string[] = [];
+
+  for (const item of items) {
+    if (item.type !== "toolCall") continue;
+    const args = item.args ?? {};
+    const filePath: string | undefined = args.file_path ?? args.path ?? args.filePath;
+
+    switch (item.name) {
+      case "read":
+      case "Read":
+        if (filePath) reads.add(filePath);
+        break;
+      case "edit":
+      case "Edit":
+      case "write":
+      case "Write":
+      case "create_file":
+        if (filePath) writes.add(filePath);
+        break;
+      case "bash":
+      case "Bash": {
+        const cmd = args.command ?? args.cmd;
+        if (typeof cmd === "string") {
+          commands.push(cmd.length > 80 ? cmd.slice(0, 80) + "…" : cmd);
+        }
+        break;
+      }
+      case "grep":
+      case "Grep":
+      case "find":
+      case "Find":
+      case "ls":
+        // search/nav — count as reads
+        break;
+    }
+  }
+
+  const parts: string[] = [`[TASK COMPLETE] "${description}"`];
+
+  const actions: string[] = [];
+  if (reads.size > 0) actions.push(`read ${reads.size} file(s)`);
+  if (writes.size > 0) actions.push(`modified ${[...writes].join(", ")}`);
+  if (commands.length > 0) actions.push(`ran ${commands.length} command(s)`);
+  if (actions.length > 0) parts.push(`Actions: ${actions.join(", ")}.`);
+
+  // truncate outcome to ~500 chars to keep context lean
+  const maxLen = 500;
+  const outcome = finalOutput.length > maxLen ? finalOutput.slice(0, maxLen) + "…" : finalOutput;
+  parts.push(`Outcome: ${outcome}`);
+
+  return parts.join("\n");
 }
 
 export function createTaskTool(
@@ -112,6 +194,14 @@ export function createTaskTool(
       description: Type.String({
         description: "A very short description of the task that can be displayed to the user.",
       }),
+      model: Type.Optional(
+        Type.String({
+          description:
+            "Optional model override for the sub-agent. Format: 'provider/model-id' " +
+            "(e.g. 'anthropic/claude-sonnet-4-6', 'openai-codex/gpt-5.4'). " +
+            "Defaults to the parent's current model.",
+        }),
+      ),
     }),
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -123,6 +213,7 @@ export function createTaskTool(
         /* graceful */
       }
 
+      const taskSessionPath = generateTaskSessionPath();
       const singleResult: SingleResult = {
         agent: "Task",
         task: p.description,
@@ -137,10 +228,12 @@ export function createTaskTool(
           const result = yield* svc.spawn({
             cwd: ctx.cwd,
             task: p.prompt,
+            model: p.model,
             builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
             extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
             signal,
             sessionId,
+            sessionPath: taskSessionPath,
             onUpdate: (partial) => {
               singleResult.messages = partial.messages;
               singleResult.usage = partial.usage;
@@ -182,7 +275,10 @@ export function createTaskTool(
             );
           }
 
-          return subAgentResult(output, singleResult);
+          // collapse context: return a compact summary instead of full output
+          const summary = summarizeExecution(p.description, result.messages, output);
+          const sessionRef = `Session: ${taskSessionPath}`;
+          return subAgentResult(`${sessionRef}\n${summary}`, singleResult);
         }),
       );
     },
