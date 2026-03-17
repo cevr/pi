@@ -89,7 +89,7 @@
       "@cvr/pi-sub-agent-render": ["./packages/core/sub-agent-render/index.ts"],
       "@cvr/pi-tool-cost": ["./packages/core/tool-cost/index.ts"],
       "@cvr/pi-tui": ["./packages/core/tui/index.ts"],
-      "@cvr/pi-auto-skills": ["./packages/extensions/auto-skills/index.ts"],
+      "@cvr/pi-skill-mentions": ["./packages/extensions/skill-mentions/index.ts"],
       "@cvr/pi-audit": ["./packages/extensions/audit/index.ts"],
       "@cvr/pi-breakout": ["./packages/extensions/breakout/index.ts"],
       "@cvr/pi-bash": ["./packages/extensions/bash/index.ts"],

@@ -164,15 +164,14 @@ export function buildRootView(pi: ExtensionAPI, ctx: ExtensionContext): PaletteV
     delegate("changelog", "Display version history"),
   );
 
-  // dynamic commands from pi.getCommands()
+  // dynamic commands from pi.getCommands() (skills excluded — use $ mentions instead)
   const commands = pi.getCommands();
   const sourceCategory: Record<string, string> = {
     extension: "ext",
-    skill: "skill",
     prompt: "tpl",
   };
   for (const cmd of commands) {
-    if (cmd.name === "palette") continue;
+    if (cmd.name === "palette" || cmd.source === "skill") continue;
     const cat = sourceCategory[cmd.source] ?? "ext";
     items.push({
       id: `${cmd.source}:${cmd.name}`,
@@ -186,13 +185,12 @@ export function buildRootView(pi: ExtensionAPI, ctx: ExtensionContext): PaletteV
     });
   }
 
-  // sort: builtin/setting first, then ext, then tpl, then skill. alphabetical within.
+  // sort: builtin/setting first, then ext, then tpl. alphabetical within.
   const order: Record<string, number> = {
     cmd: 0,
     setting: 0,
     ext: 1,
     tpl: 2,
-    skill: 3,
   };
   items.sort((a, b) => {
     const so = (order[a.category ?? ""] ?? 99) - (order[b.category ?? ""] ?? 99);

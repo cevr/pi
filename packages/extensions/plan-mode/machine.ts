@@ -12,7 +12,7 @@ import type { TodoItem } from "./utils";
 // Constants
 // ---------------------------------------------------------------------------
 
-export const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "skill", "interview"];
+export const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "interview"];
 
 // ---------------------------------------------------------------------------
 // State

@@ -1,6 +1,6 @@
 {
-  "defaultProvider": "anthropic",
-  "defaultModel": "claude-opus-4-6",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.4",
   "defaultThinkingLevel": "xhigh",
   "enabledModels": ["anthropic/claude-opus-4-6", "*/gpt-5.4"],
   "compaction": {
@@ -10,6 +10,7 @@
   "skills": ["~/Developer/personal/dotfiles/skills"],
   "quietStartup": true,
   "hideThinkingBlock": true,
+  "enableSkillCommands": false,
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
   "lastChangelogVersion": "0.58.4",

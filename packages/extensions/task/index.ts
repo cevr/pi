@@ -7,7 +7,7 @@
  *
  * the Task sub-agent inherits the parent's default model (no --model
  * flag). it gets most tools: read/write, edit, grep, bash, finder,
- * skill, format_file. the description is shown to the user in the
+ * format_file. the description is shown to the user in the
  * TUI; the prompt is the full instruction for the sub-agent.
  *
  * no custom system prompt — the sub-agent uses pi's default prompt.
@@ -44,18 +44,7 @@ type TaskExtensionDeps = {
 
 export const CONFIG_DEFAULTS: TaskExtConfig = {
   builtinTools: ["read", "grep", "find", "ls", "bash", "edit", "write"],
-  extensionTools: [
-    "read",
-    "grep",
-    "find",
-    "ls",
-    "bash",
-    "edit",
-    "write",
-    "format_file",
-    "skill",
-    "finder",
-  ],
+  extensionTools: ["read", "grep", "find", "ls", "bash", "edit", "write", "format_file", "finder"],
 };
 
 export const DEFAULT_DEPS: TaskExtensionDeps = {
