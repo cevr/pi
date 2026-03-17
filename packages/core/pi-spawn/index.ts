@@ -46,6 +46,7 @@ export interface PiSpawnConfig {
   cwd: string;
   task: string;
   model?: string;
+  thinking?: string;
   builtinTools?: string[];
   extensionTools?: string[];
   systemPromptBody?: string;
@@ -217,6 +218,7 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
     : ["--mode", "json", "-p", ...sessionArgs];
 
   if (config.model) args.push("--model", config.model);
+  if (config.thinking) args.push("--thinking", config.thinking);
   if (config.builtinTools !== undefined) {
     if (config.builtinTools.length === 0) {
       args.push("--no-tools");

@@ -70,6 +70,7 @@ interface TaskParams {
   prompt: string;
   description: string;
   model?: string;
+  thinking?: string;
 }
 
 export interface TaskConfig {
@@ -202,6 +203,13 @@ export function createTaskTool(
             "Defaults to the parent's current model.",
         }),
       ),
+      thinking: Type.Optional(
+        Type.String({
+          description:
+            "Optional thinking level for the sub-agent: off, minimal, low, medium, high, xhigh. " +
+            "Defaults to the parent's current thinking level.",
+        }),
+      ),
     }),
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -229,6 +237,7 @@ export function createTaskTool(
             cwd: ctx.cwd,
             task: p.prompt,
             model: p.model,
+            thinking: p.thinking,
             builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
             extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
             signal,
