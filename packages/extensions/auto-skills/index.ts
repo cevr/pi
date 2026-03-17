@@ -1,12 +1,12 @@
 /**
- * Auto-Skills Extension — project-aware skill loading.
+ * Auto-Skills Extension — project-aware skill hints.
  *
  * Scans the workspace once on session_start for dependency signals
- * (package.json deps, lock files, file patterns) and maps them to
- * skills that should be loaded. Injects a stable list of skill paths
- * into before_agent_start so the model loads them proactively.
+ * (package.json deps, lock files) and builds conditional hints that
+ * tell the model *when* to load each skill, not to load them all upfront.
  *
  * The injected message is identical every turn → cache-friendly.
+ * The model decides per-turn which skills to read based on what it's doing.
  */
 
 import * as fs from "node:fs";
@@ -15,51 +15,70 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { loadSkills } from "@mariozechner/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
-// Skill detection rules
+// Skill hint rules
 // ---------------------------------------------------------------------------
 
-interface SkillRule {
-  /** Skills to load when this rule matches */
-  skills: string[];
-  /** Check package.json dependencies (dependencies + devDependencies) */
+interface SkillHint {
+  /** Skill name (must match a loaded skill) */
+  skill: string;
+  /** Human-readable condition for when to load this skill */
+  when: string;
+  /** Check package.json dependencies */
   deps?: string[];
   /** Check if files exist (relative to cwd) */
   files?: string[];
-  /** Check if any files matching this glob pattern exist (shallow, dir-level) */
-  dirEntries?: { dir: string; ext: string };
+  /** Always include this hint (no signal check needed) */
+  always?: boolean;
 }
 
-const RULES: SkillRule[] = [
-  // Always
-  { skills: ["code-style"], files: [] },
-
-  // Effect — check version to pick v3 or v4 (handled specially below)
-  { skills: ["architecture"], deps: ["effect", "@effect/platform", "@effect/cli"] },
-
-  // React ecosystem
-  { skills: ["react", "ui"], deps: ["react"] },
-  { skills: ["react-native"], deps: ["react-native"] },
-
-  // Bun
-  { skills: ["bun"], files: ["bun.lock", "bun.lockb"] },
-
-  // Turborepo
-  { skills: ["turborepo"], files: ["turbo.json"] },
-
-  // CLI projects
-  { skills: ["cli"], deps: ["@effect/cli", "commander", "yargs", "meow", "cac"] },
+const HINTS: SkillHint[] = [
+  { skill: "code-style", when: "writing or reviewing any code", always: true },
+  {
+    skill: "effect-v4",
+    when: "working with effect imports, services, layers, or Effect.gen",
+    deps: ["effect"],
+  },
+  {
+    skill: "effect-v3",
+    when: "working with effect imports, services, layers, or Effect.gen",
+    deps: ["effect"],
+  },
+  {
+    skill: "architecture",
+    when: "designing module structure, service wiring, or domain modeling",
+    deps: ["effect", "@effect/platform", "@effect/cli"],
+  },
+  { skill: "react", when: "working with .tsx files or React components", deps: ["react"] },
+  {
+    skill: "ui",
+    when: "implementing UI components, animations, or visual design",
+    deps: ["react"],
+  },
+  {
+    skill: "react-native",
+    when: "working with React Native components or native APIs",
+    deps: ["react-native"],
+  },
+  {
+    skill: "bun",
+    when: "running scripts, tests, or using Bun APIs",
+    files: ["bun.lock", "bun.lockb"],
+  },
+  {
+    skill: "turborepo",
+    when: "configuring tasks, pipelines, or monorepo structure",
+    files: ["turbo.json"],
+  },
+  {
+    skill: "cli",
+    when: "building CLI commands, flags, or terminal output",
+    deps: ["@effect/cli", "commander", "yargs", "meow", "cac"],
+  },
 ];
 
 // ---------------------------------------------------------------------------
 // Detection
 // ---------------------------------------------------------------------------
-
-interface DetectedSkills {
-  /** Skill names to load */
-  names: string[];
-  /** Map of skill name → file path (resolved from loadSkills) */
-  paths: Map<string, string>;
-}
 
 function readPackageJsonDeps(cwd: string): Set<string> {
   const deps = new Set<string>();
@@ -73,6 +92,12 @@ function readPackageJsonDeps(cwd: string): Set<string> {
           deps.add(dep);
         }
       }
+    }
+    // Also check workspace catalog (monorepos)
+    const workspaces = pkg.workspaces as Record<string, unknown> | undefined;
+    const catalog = workspaces?.catalog as Record<string, string> | undefined;
+    if (catalog) {
+      for (const dep of Object.keys(catalog)) deps.add(dep);
     }
   } catch {
     /* no package.json or invalid */
@@ -89,7 +114,6 @@ function fileExists(cwd: string, relativePath: string): boolean {
 }
 
 function detectEffectVersion(cwd: string): "effect-v3" | "effect-v4" | null {
-  // Check package.json for effect version
   try {
     const raw = fs.readFileSync(path.join(cwd, "package.json"), "utf-8");
     const pkg = JSON.parse(raw) as Record<string, unknown>;
@@ -98,12 +122,10 @@ function detectEffectVersion(cwd: string): "effect-v3" | "effect-v4" | null {
       const section = pkg[key] as Record<string, string> | undefined;
       if (!section?.effect) continue;
       const version = section.effect;
-      // v4 uses 4.x or beta versions like 4.0.0-beta.*
       if (/^[~^]?4\./.test(version) || version.includes("4.0.0-beta")) return "effect-v4";
       if (/^[~^]?3\./.test(version)) return "effect-v3";
     }
 
-    // Check workspace catalog
     const workspaces = pkg.workspaces as Record<string, unknown> | undefined;
     const catalog = workspaces?.catalog as Record<string, string> | undefined;
     if (catalog?.effect) {
@@ -115,7 +137,6 @@ function detectEffectVersion(cwd: string): "effect-v3" | "effect-v4" | null {
     /* */
   }
 
-  // Check for effect in node_modules as fallback
   try {
     const nmPkg = fs.readFileSync(
       path.join(cwd, "node_modules", "effect", "package.json"),
@@ -131,52 +152,43 @@ function detectEffectVersion(cwd: string): "effect-v3" | "effect-v4" | null {
   return null;
 }
 
-function detectSkills(cwd: string): DetectedSkills {
-  const matched = new Set<string>();
+interface MatchedHint {
+  when: string;
+  skillPath: string;
+}
+
+function detectHints(cwd: string): MatchedHint[] {
   const deps = readPackageJsonDeps(cwd);
-
-  // Always include code-style
-  matched.add("code-style");
-
-  // Run rules
-  for (const rule of RULES) {
-    let hit = false;
-
-    if (rule.deps && rule.deps.some((d) => deps.has(d))) {
-      hit = true;
-    }
-
-    if (rule.files && rule.files.length > 0 && rule.files.some((f) => fileExists(cwd, f))) {
-      hit = true;
-    }
-
-    // Empty files array means "always match" (used by code-style)
-    if (rule.files && rule.files.length === 0) {
-      hit = true;
-    }
-
-    if (hit) {
-      for (const s of rule.skills) matched.add(s);
-    }
-  }
-
-  // Effect version detection
-  if (deps.has("effect") || deps.has("@effect/platform") || deps.has("@effect/cli")) {
-    const version = detectEffectVersion(cwd);
-    if (version) matched.add(version);
-    else matched.add("effect-v4"); // default to v4
-  }
+  const effectVersion = deps.has("effect") ? (detectEffectVersion(cwd) ?? "effect-v4") : null;
 
   // Build path map from loaded skills
   const { skills } = loadSkills({ cwd, includeDefaults: true });
   const pathMap = new Map<string, string>();
   for (const skill of skills) {
-    if (matched.has(skill.name)) {
-      pathMap.set(skill.name, skill.filePath);
+    pathMap.set(skill.name, skill.filePath);
+  }
+
+  const matched: MatchedHint[] = [];
+
+  for (const hint of HINTS) {
+    // Skip wrong effect version
+    if (hint.skill === "effect-v3" && effectVersion !== "effect-v3") continue;
+    if (hint.skill === "effect-v4" && effectVersion !== "effect-v4") continue;
+
+    const skillPath = pathMap.get(hint.skill);
+    if (!skillPath) continue;
+
+    let hit = hint.always ?? false;
+
+    if (hint.deps && hint.deps.some((d) => deps.has(d))) hit = true;
+    if (hint.files && hint.files.some((f) => fileExists(cwd, f))) hit = true;
+
+    if (hit) {
+      matched.push({ when: hint.when, skillPath });
     }
   }
 
-  return { names: [...matched].filter((n) => pathMap.has(n)), paths: pathMap };
+  return matched;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,12 +199,12 @@ export default function autoSkillsExtension(pi: ExtensionAPI): void {
   let cachedMessage: string | null = null;
 
   function buildMessage(cwd: string): string | null {
-    const detected = detectSkills(cwd);
-    if (detected.names.length === 0) return null;
+    const hints = detectHints(cwd);
+    if (hints.length === 0) return null;
 
-    const lines = detected.names.sort().map((name) => `- ${detected.paths.get(name)!}`);
+    const lines = hints.map((h) => `- When ${h.when} → read ${h.skillPath}`);
 
-    return `[AUTO-SKILLS] For this workspace, always load these skills before responding:\n${lines.join("\n")}`;
+    return `[AUTO-SKILLS] Load the relevant skill before responding:\n${lines.join("\n")}`;
   }
 
   pi.on("session_start" as any, (_event: any, ctx: any) => {
