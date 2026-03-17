@@ -1,6 +1,6 @@
-// Extracted from index.ts — review imports
+// Extracted from index.ts - review imports
 import { describe, expect, it } from "bun:test";
-import { isHtml, htmlToMarkdown } from "./index";
+import { htmlToMarkdown, htmlToText, isHtml } from "./index";
 
 describe("isHtml", () => {
   it("returns true for doctype", () => {
@@ -196,8 +196,36 @@ describe("htmlToMarkdown", () => {
         </ul>
       </body></html>`;
     const md = htmlToMarkdown(html);
-
+ 
     expect(md).toContain("- **Bold item**");
     expect(md).toContain("- *Italic item*");
+  });
+});
+
+describe("htmlToText", () => {
+  it("returns null for non-HTML content", () => {
+    expect(htmlToText("plain text")).toBeNull();
+  });
+
+  it("extracts readable text from main content", () => {
+    const html = `<!DOCTYPE html><html><body>
+        <nav>Skip me</nav>
+        <main>
+          <h1>Title</h1>
+          <p>Hello <strong>world</strong>.</p>
+        </main>
+      </body></html>`;
+
+    expect(htmlToText(html)).toBe("Title\n\nHello world.");
+  });
+
+  it("removes script and style content", () => {
+    const html = `<!DOCTYPE html><html><body>
+        <script>console.log('hidden')</script>
+        <style>.hidden { display: none; }</style>
+        <article>Visible text</article>
+      </body></html>`;
+
+    expect(htmlToText(html)).toBe("Visible text");
   });
 });

@@ -48,6 +48,26 @@ const MAIN_SELECTORS = [
   ".entry-content",
 ];
 
+function loadContentRoot(html: string): { $: any; root: any } | null {
+  if (!cheerioLoad) return null;
+  if (!isHtml(html)) return null;
+
+  const $ = cheerioLoad(html);
+  $(REMOVE_SELECTORS).remove();
+
+  let root = null;
+  for (const sel of MAIN_SELECTORS) {
+    const found = $(sel);
+    if (found.length > 0) {
+      root = found.first();
+      break;
+    }
+  }
+  if (!root) root = $("body");
+
+  return { $, root };
+}
+
 export function isHtml(text: string): boolean {
   const trimmed = text.trimStart().slice(0, 200).toLowerCase();
   return (
@@ -179,37 +199,95 @@ function nodeToMd($: any, node: any): string {
   return inner();
 }
 
+function nodeToText($: any, node: any): string {
+  if (node.type === "text") {
+    return (node.data || "").replace(/[ \t]+/g, " ");
+  }
+  if (node.type !== "tag") return "";
+
+  const tag = node.name?.toLowerCase();
+  if (!tag) return "";
+
+  const el = $(node);
+  const children = el.contents().toArray();
+  const inner = () => children.map((c: any) => nodeToText($, c)).join("");
+
+  if (/^h[1-6]$/.test(tag) || ["p", "pre", "blockquote"].includes(tag)) {
+    const text = inner().trim();
+    return text ? `\n\n${text}\n\n` : "";
+  }
+
+  if (tag === "br") return "\n";
+  if (tag === "hr") return "\n\n";
+
+  if (tag === "li") {
+    const text = inner().trim();
+    return text ? `\n- ${text}` : "";
+  }
+
+  if (tag === "ul" || tag === "ol") {
+    const text = inner().trim();
+    return text ? `\n\n${text}\n\n` : "";
+  }
+
+  if (tag === "tr") {
+    const cells = el
+      .children("th, td")
+      .toArray()
+      .map((c: any) => $(c).text().trim())
+      .filter(Boolean);
+    return cells.length > 0 ? `\n${cells.join(" | ")}` : "";
+  }
+
+  if (tag === "table") {
+    const text = inner().trim();
+    return text ? `\n\n${text}\n\n` : "";
+  }
+
+  if (tag === "img") {
+    return (el.attr("alt") || "").trim();
+  }
+
+  if (["div", "section", "article", "main", "figure", "figcaption", "details", "summary"].includes(tag)) {
+    const text = inner().trim();
+    return text ? `\n\n${text}\n\n` : "";
+  }
+
+  return inner();
+}
+
 function collapseWhitespace(text: string): string {
   return text
+    .replace(/\n[ \t]+\n/g, "\n\n")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+\n/g, "\n")
     .trim();
 }
 
 export function htmlToMarkdown(html: string): string | null {
-  if (!cheerioLoad) return null;
-  if (!isHtml(html)) return null;
+  const content = loadContentRoot(html);
+  if (!content) return null;
 
-  const $ = cheerioLoad(html);
-  $(REMOVE_SELECTORS).remove();
-
-  // find main content area
-  let root = null;
-  for (const sel of MAIN_SELECTORS) {
-    const found = $(sel);
-    if (found.length > 0) {
-      root = found.first();
-      break;
-    }
-  }
-  if (!root) root = $("body");
-
+  const { $, root } = content;
   const md = root
     .contents()
     .toArray()
     .map((n: any) => nodeToMd($, n))
     .join("");
   return collapseWhitespace(md);
+}
+
+export function htmlToText(html: string): string | null {
+  const content = loadContentRoot(html);
+  if (!content) return null;
+
+  const { $, root } = content;
+  const text = root
+    .contents()
+    .toArray()
+    .map((n: any) => nodeToText($, n))
+    .join("");
+  return collapseWhitespace(text);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,18 +1,29 @@
 {
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.4",
-  "defaultThinkingLevel": "xhigh",
-  "enabledModels": ["anthropic/claude-opus-4-6", "*/gpt-5.4"],
+  "defaultThinkingLevel": "medium",
+  "enabledModels": [
+    "anthropic/claude-opus-4-6",
+    "*/gpt-5.4"
+  ],
   "compaction": {
     "enabled": false
   },
-  "extensions": ["~/Developer/personal/dotfiles/pi/dist/extensions"],
-  "skills": ["~/Developer/personal/dotfiles/skills"],
+  "extensions": [
+    "~/Developer/personal/dotfiles/pi/dist/extensions"
+  ],
+  "skills": [
+    "~/Developer/personal/dotfiles/skills"
+  ],
   "quietStartup": true,
   "hideThinkingBlock": true,
   "enableSkillCommands": false,
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
-  "lastChangelogVersion": "0.58.4",
-  "packages": ["npm:pi-subagents", "npm:pi-interview", "npm:glimpseui"]
+  "lastChangelogVersion": "0.59.0",
+  "packages": [
+    "npm:pi-subagents",
+    "npm:pi-interview",
+    "npm:glimpseui"
+  ]
 }

@@ -1,3 +1,7 @@
+import { loadRootEnv } from "./load-root-env";
+
+loadRootEnv();
+
 export { default as audit } from "../packages/extensions/audit/index";
 export { default as autoSkills } from "../packages/extensions/auto-skills/index";
 export { default as skillMentions } from "../packages/extensions/skill-mentions/index";
