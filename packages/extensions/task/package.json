@@ -10,7 +10,6 @@
     "@cvr/pi-create-file": "workspace:*",
     "@cvr/pi-edit-file": "workspace:*",
     "@cvr/pi-finder": "workspace:*",
-    "@cvr/pi-format-file": "workspace:*",
     "@cvr/pi-glob": "workspace:*",
     "@cvr/pi-grep": "workspace:*",
     "@cvr/pi-ls": "workspace:*",
