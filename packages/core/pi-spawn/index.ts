@@ -73,15 +73,14 @@ export interface PiSpawnConfig {
    */
   followUp?: string;
   /**
-   * persist the sub-agent's session to disk.
+   * persist the sub-agent's session to a file.
    *
-   * when true, omits `--no-session` so pi creates a session file in its
-   * default sessions directory. the session is then introspectable via
-   * read_session or the sessions UI.
+   * when set, omits `--no-session` and passes `--session <path>`.
+   * pi writes the session natively at the given path.
    *
-   * default: false (in-memory only via `--no-session`).
+   * when unset (default), `--no-session` is used — in-memory only.
    */
-  persistSession?: boolean;
+  sessionPath?: string;
 }
 
 // --- helpers ---
@@ -212,10 +211,10 @@ export function processNdjsonLine(
 
 export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
   const useRpc = !!config.followUp;
-  const noSession = !config.persistSession;
+  const sessionArgs = config.sessionPath ? ["--session", config.sessionPath] : ["--no-session"];
   const args: string[] = useRpc
-    ? ["--mode", "rpc", ...(noSession ? ["--no-session"] : [])]
-    : ["--mode", "json", "-p", ...(noSession ? ["--no-session"] : [])];
+    ? ["--mode", "rpc", ...sessionArgs]
+    : ["--mode", "json", "-p", ...sessionArgs];
 
   if (config.model) args.push("--model", config.model);
   if (config.builtinTools !== undefined) {

@@ -87,6 +87,20 @@ export const COUNSEL_CONFIG_SCHEMA: ExtensionConfigSchema<CounselExtConfig> = {
   validate: isCounselConfig,
 };
 
+// --- session path ---
+
+const SESSIONS_DIR = path.join(os.homedir(), ".pi", "agent", "sessions");
+
+function generateCounselSessionPath(): string {
+  const now = new Date();
+  const year = now.getFullYear().toString();
+  const dir = path.join(SESSIONS_DIR, year);
+  fs.mkdirSync(dir, { recursive: true });
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  const rand = Math.random().toString(36).slice(2, 8);
+  return path.join(dir, `${timestamp}_counsel-${rand}.jsonl`);
+}
+
 // --- model resolution ---
 
 type ModelFamily = "anthropic" | "openai";
@@ -265,6 +279,8 @@ export function createCounselTool(
         usage: zeroUsage(),
       };
 
+      const counselSessionPath = generateCounselSessionPath();
+
       return runtime.runPromise(
         Effect.gen(function* () {
           const svc = yield* PiSpawnService;
@@ -277,7 +293,7 @@ export function createCounselTool(
             systemPromptBody: systemPrompt,
             signal,
             sessionId,
-            persistSession: true,
+            sessionPath: counselSessionPath,
             onUpdate: (partial) => {
               singleResult.messages = partial.messages;
               singleResult.usage = partial.usage;
@@ -319,7 +335,8 @@ export function createCounselTool(
             );
           }
 
-          return subAgentResult(output, singleResult);
+          const sessionRef = `Session: ${counselSessionPath}`;
+          return subAgentResult(`${sessionRef}\n\n${output}`, singleResult);
         }),
       );
     },
