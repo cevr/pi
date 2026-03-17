@@ -78,7 +78,6 @@
       "./dist/extensions/mermaid.js",
       "./dist/extensions/oracle.js",
       "./dist/extensions/plan-mode.js",
-      "./dist/extensions/pr-config.js",
       "./dist/extensions/read.js",
       "./dist/extensions/read-session.js",
       "./dist/extensions/review-loop.js",

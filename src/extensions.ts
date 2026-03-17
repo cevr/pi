@@ -17,7 +17,6 @@ export { default as mentions } from "../packages/extensions/mentions/index";
 export { default as mermaid } from "../packages/extensions/mermaid/index";
 export { default as oracle } from "../packages/extensions/oracle/index";
 export { default as planMode } from "../packages/extensions/plan-mode/index";
-export { default as prConfig } from "../packages/extensions/pr-config/index";
 export { default as read } from "../packages/extensions/read/index";
 export { default as readSession } from "../packages/extensions/read-session/index";
 export { default as reviewLoop } from "../packages/extensions/review-loop/index";
