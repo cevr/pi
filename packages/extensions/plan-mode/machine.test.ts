@@ -32,7 +32,7 @@ function awaitingChoice(savedTools = ["read", "bash", "edit"]): PlanState {
 
 function executing(
   items?: TodoItem[],
-  opts?: { gated?: boolean; phase?: "running" | "gating" | "counseling" },
+  opts?: { phase?: "running" | "gating" | "counseling" },
 ): PlanState {
   return {
     _tag: "Executing",
@@ -42,7 +42,6 @@ function executing(
       { step: 3, text: "Third step", completed: false },
     ],
     planFilePath: "/tmp/plan.md",
-    gated: opts?.gated ?? false,
     phase: opts?.phase ?? "running",
   };
 }
@@ -328,23 +327,21 @@ describe("planReducer — Hydrate", () => {
       executing: true,
       todoItems: items,
       planFilePath: "/tmp/plan.md",
-      gated: true,
     });
     expect(r.state._tag).toBe("Executing");
     if (r.state._tag === "Executing") {
-      expect(r.state.gated).toBe(true);
       expect(r.state.phase).toBe("running");
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// Gated execution
+// Gated execution (always on)
 // ---------------------------------------------------------------------------
 
 describe("planReducer — Gated execution", () => {
-  it("TaskDone in gated running → gating with gate prompt", () => {
-    const r = planReducer(executing(undefined, { gated: true }), { _tag: "TaskDone" });
+  it("TaskDone in running → gating with gate prompt", () => {
+    const r = planReducer(executing(), { _tag: "TaskDone" });
     expect(r.state._tag).toBe("Executing");
     if (r.state._tag === "Executing") {
       expect(r.state.phase).toBe("gating");
@@ -353,20 +350,14 @@ describe("planReducer — Gated execution", () => {
     expect(hasEffect(r.effects, "updateUI")).toBe(true);
   });
 
-  it("TaskDone in non-gated → no-op", () => {
-    const state = executing();
-    const r = planReducer(state, { _tag: "TaskDone" });
-    expect(r.state).toBe(state);
-  });
-
   it("TaskDone in gating phase → no-op", () => {
-    const state = executing(undefined, { gated: true, phase: "gating" });
+    const state = executing(undefined, { phase: "gating" });
     const r = planReducer(state, { _tag: "TaskDone" });
     expect(r.state).toBe(state);
   });
 
   it("GatePass → counseling with counsel prompt", () => {
-    const r = planReducer(executing(undefined, { gated: true, phase: "gating" }), {
+    const r = planReducer(executing(undefined, { phase: "gating" }), {
       _tag: "GatePass",
     });
     expect(r.state._tag).toBe("Executing");
@@ -377,13 +368,13 @@ describe("planReducer — Gated execution", () => {
   });
 
   it("GatePass in wrong phase → no-op", () => {
-    const state = executing(undefined, { gated: true, phase: "running" });
+    const state = executing(undefined, { phase: "running" });
     const r = planReducer(state, { _tag: "GatePass" });
     expect(r.state).toBe(state);
   });
 
   it("GateFail → back to running with fix prompt", () => {
-    const r = planReducer(executing(undefined, { gated: true, phase: "gating" }), {
+    const r = planReducer(executing(undefined, { phase: "gating" }), {
       _tag: "GateFail",
     });
     expect(r.state._tag).toBe("Executing");
@@ -395,7 +386,7 @@ describe("planReducer — Gated execution", () => {
   });
 
   it("CounselPass → back to running with commit prompt", () => {
-    const r = planReducer(executing(undefined, { gated: true, phase: "counseling" }), {
+    const r = planReducer(executing(undefined, { phase: "counseling" }), {
       _tag: "CounselPass",
     });
     expect(r.state._tag).toBe("Executing");
@@ -407,7 +398,7 @@ describe("planReducer — Gated execution", () => {
   });
 
   it("CounselFail → back to running with fix prompt", () => {
-    const r = planReducer(executing(undefined, { gated: true, phase: "counseling" }), {
+    const r = planReducer(executing(undefined, { phase: "counseling" }), {
       _tag: "CounselFail",
     });
     expect(r.state._tag).toBe("Executing");
@@ -418,20 +409,11 @@ describe("planReducer — Gated execution", () => {
     expect(hasEffect(r.effects, "sendMessage")).toBe(true);
   });
 
-  it("ChooseExecute with gated flag sets gated state", () => {
-    const r = planReducer(awaitingChoice(), { _tag: "ChooseExecute", gated: true });
-    expect(r.state._tag).toBe("Executing");
-    if (r.state._tag === "Executing") {
-      expect(r.state.gated).toBe(true);
-      expect(r.state.phase).toBe("running");
-    }
-  });
-
-  it("ChooseExecute without gated flag defaults to false", () => {
+  it("ChooseExecute always enables gating", () => {
     const r = planReducer(awaitingChoice(), { _tag: "ChooseExecute" });
     expect(r.state._tag).toBe("Executing");
     if (r.state._tag === "Executing") {
-      expect(r.state.gated).toBe(false);
+      expect(r.state.phase).toBe("running");
     }
   });
 });

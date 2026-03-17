@@ -35,7 +35,6 @@ export type PlanState =
       _tag: "Executing";
       todoItems: TodoItem[];
       planFilePath: string | null;
-      gated: boolean;
       phase: ExecutionPhase;
     };
 
@@ -48,7 +47,7 @@ export type PlanEvent =
   | { _tag: "PlanWithPrompt"; prompt: string; currentTools: string[]; diffContext?: DiffContext }
   | { _tag: "AgentEnd"; todoItems: TodoItem[]; planText: string; planFilePath: string }
   | { _tag: "TurnEnd"; todoItems: TodoItem[] }
-  | { _tag: "ChooseExecute"; gated?: boolean }
+  | { _tag: "ChooseExecute" }
   | { _tag: "ChooseStay" }
   | { _tag: "ChooseRefine"; refinement: string }
   | { _tag: "Reset" }
@@ -61,7 +60,6 @@ export type PlanEvent =
       savedTools: string[] | null;
       flagPlan: boolean;
       currentTools: string[];
-      gated?: boolean;
     }
   | { _tag: "ExecutionComplete" }
   | { _tag: "TaskDone" }
@@ -86,7 +84,6 @@ export interface PersistPayload {
   executing: boolean;
   planFilePath: string | null;
   savedTools: string[] | null;
-  gated?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,7 +127,6 @@ function persist(s: PlanState): PlanEffect {
           executing: true,
           planFilePath: s.planFilePath,
           savedTools: null,
-          gated: s.gated || undefined,
         };
     }
   })();
@@ -252,7 +248,6 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
         _tag: "Executing",
         todoItems: pending.todoItems,
         planFilePath: pending.planFilePath,
-        gated: event.gated ?? false,
         phase: "running",
       };
       const execMessage =
@@ -300,7 +295,6 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
         _tag: "Executing",
         todoItems: event.todoItems,
         planFilePath: state.planFilePath,
-        gated: state.gated,
         phase: state.phase,
       };
       const effects: Effect[] = [UI, persist(next)];
@@ -342,7 +336,7 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
 
     // ----- Gated execution events -----
     case "TaskDone": {
-      if (state._tag !== "Executing" || !state.gated || state.phase !== "running") return { state };
+      if (state._tag !== "Executing" || state.phase !== "running") return { state };
       const next: PlanState = { ...state, phase: "gating" };
       return {
         state: next,
@@ -459,7 +453,6 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
           _tag: "Executing",
           todoItems: event.todoItems,
           planFilePath: event.planFilePath,
-          gated: event.gated ?? false,
           phase: "running",
         };
         effects.push(UI);

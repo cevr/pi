@@ -99,9 +99,7 @@ function formatUI(state: PlanState, ctx: ExtensionContext): void {
       if (state.todoItems.length > 0) {
         const completed = state.todoItems.filter((t) => t.completed).length;
         const phaseSuffix =
-          state.gated && state.phase !== "running"
-            ? ` ${state.phase === "gating" ? "⚙ gate" : "🔍 counsel"}`
-            : "";
+          state.phase !== "running" ? ` ${state.phase === "gating" ? "⚙ gate" : "🔍 counsel"}` : "";
         ctx.ui.setStatus(
           "plan-mode",
           ctx.ui.theme.fg("accent", `📋 ${completed}/${state.todoItems.length}${phaseSuffix}`),
@@ -218,15 +216,12 @@ export default function planModeExtension(pi: ExtensionAPI): void {
         return;
       }
       const choice = await ctx.ui.select("Plan mode - what next?", [
-        "Execute the plan (track progress)",
-        "Execute with gating (gate + counsel after each step)",
+        "Execute the plan",
         "Stay in plan mode",
         "Refine the plan",
       ]);
 
-      if (choice?.startsWith("Execute with gating")) {
-        sendIfCurrent({ _tag: "ChooseExecute", gated: true });
-      } else if (choice?.startsWith("Execute")) {
+      if (choice?.startsWith("Execute")) {
         sendIfCurrent({ _tag: "ChooseExecute" });
       } else if (choice === "Refine the plan") {
         const refinement = await ctx.ui.editor("Refine the plan:", "");
@@ -363,11 +358,9 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
             const updatedItems = state.todoItems.map((t) => ({ ...t }));
             const marked = markCompletedSteps(text, updatedItems);
             if (marked > 0) {
-              // In gated mode, fire TaskDone after updating todo state
-              // The TurnEnd will update items, then agent_end triggers gating on the next cycle
-              // Actually we fire TurnEnd first, then TaskDone triggers gating
+              // Fire TaskDone after updating todo state to trigger gating
               queueMicrotask(() => {
-                if (state.gated && state.phase === "running") {
+                if (state.phase === "running") {
                   machine.send({ _tag: "TaskDone" });
                 }
               });
@@ -385,17 +378,15 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
               const text = lastAssistant ? getTextContent(lastAssistant) : "";
 
               // Gated sub-phase detection
-              if (state.gated) {
-                if (state.phase === "gating") {
-                  if (/GATE_PASS/i.test(text)) return { _tag: "GatePass" };
-                  if (/GATE_FAIL/i.test(text)) return { _tag: "GateFail" };
-                  return null;
-                }
-                if (state.phase === "counseling") {
-                  if (/COUNSEL_PASS/i.test(text)) return { _tag: "CounselPass" };
-                  if (/COUNSEL_FAIL/i.test(text)) return { _tag: "CounselFail" };
-                  return null;
-                }
+              if (state.phase === "gating") {
+                if (/GATE_PASS/i.test(text)) return { _tag: "GatePass" };
+                if (/GATE_FAIL/i.test(text)) return { _tag: "GateFail" };
+                return null;
+              }
+              if (state.phase === "counseling") {
+                if (/COUNSEL_PASS/i.test(text)) return { _tag: "CounselPass" };
+                if (/COUNSEL_FAIL/i.test(text)) return { _tag: "CounselFail" };
+                return null;
               }
 
               return state.todoItems.every((t) => t.completed)
@@ -440,7 +431,6 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
             const planFilePath = data?.planFilePath ?? null;
             const savedTools = data?.savedTools ?? null;
             const enabled = data?.enabled ?? false;
-            const gated = data?.gated ?? false;
             const flagPlan = pi.getFlag("plan") === true;
 
             // Re-scan messages for completion markers on resume
@@ -475,7 +465,6 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
               planFilePath,
               savedTools,
               flagPlan,
-              gated,
               currentTools: pi.getActiveTools(),
             };
           },
