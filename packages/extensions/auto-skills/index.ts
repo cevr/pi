@@ -13,7 +13,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, Skill } from "@mariozechner/pi-coding-agent";
 import { loadSkills } from "@mariozechner/pi-coding-agent";
 import { PiSpawnService } from "@cvr/pi-spawn";
 import { getFinalOutput } from "@cvr/pi-sub-agent-render";
@@ -78,17 +78,45 @@ function hashSignals(signals: ProjectSignals): string {
 // Skill catalog
 // ---------------------------------------------------------------------------
 
+function getAgentDir(): string {
+  const envDir = process.env.PI_CODING_AGENT_DIR;
+  if (envDir) {
+    if (envDir === "~") return os.homedir();
+    if (envDir.startsWith("~/")) return os.homedir() + envDir.slice(1);
+    return envDir;
+  }
+  return path.join(os.homedir(), ".pi", "agent");
+}
+
+function getSkillPathsFromSettings(): string[] {
+  const settingsPath = path.join(getAgentDir(), "settings.json");
+  if (!fs.existsSync(settingsPath)) return [];
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+    if (Array.isArray(settings.skills)) {
+      return settings.skills.map((p: string) => {
+        if (p === "~") return os.homedir();
+        if (p.startsWith("~/")) return os.homedir() + p.slice(1);
+        return p;
+      });
+    }
+  } catch {
+    /* unreadable */
+  }
+  return [];
+}
+
 interface SkillEntry {
   name: string;
   description: string;
-  filePath: string;
 }
 
 function getSkillCatalog(cwd: string): SkillEntry[] {
-  const { skills } = loadSkills({ cwd, includeDefaults: true });
+  const skillPaths = getSkillPathsFromSettings();
+  const { skills } = loadSkills({ cwd, skillPaths, includeDefaults: true });
   return skills
-    .filter((s) => s.description.length > 0)
-    .map((s) => ({ name: s.name, description: s.description, filePath: s.filePath }));
+    .filter((s: Skill) => s.description.length > 0)
+    .map((s: Skill) => ({ name: s.name, description: s.description }));
 }
 
 // ---------------------------------------------------------------------------
@@ -165,26 +193,25 @@ Rules:
 function parseSkillHints(
   output: string,
   catalog: SkillEntry[],
-): Array<{ name: string; when: string; filePath: string }> {
-  const pathMap = new Map(catalog.map((s) => [s.name, s.filePath]));
-  const hints: Array<{ name: string; when: string; filePath: string }> = [];
+): Array<{ name: string; when: string }> {
+  const nameSet = new Set(catalog.map((s) => s.name));
+  const hints: Array<{ name: string; when: string }> = [];
 
   for (const line of output.split("\n")) {
     const match = line.match(/^([a-z0-9-]+)\s*\|\s*(.+)$/);
     if (!match) continue;
     const [, name, when] = match;
-    const filePath = pathMap.get(name!);
-    if (filePath && when) {
-      hints.push({ name: name!, when: when.trim(), filePath });
+    if (name && nameSet.has(name) && when) {
+      hints.push({ name, when: when.trim() });
     }
   }
 
   return hints;
 }
 
-function formatHints(hints: Array<{ when: string; filePath: string }>): string {
-  const lines = hints.map((h) => `- When ${h.when} → read ${h.filePath}`);
-  return `[AUTO-SKILLS] Load the relevant skill before responding:\n${lines.join("\n")}`;
+function formatHints(hints: Array<{ name: string; when: string }>): string {
+  const lines = hints.map((h) => `- When ${h.when} → user types $${h.name} to load`);
+  return `[AUTO-SKILLS] Suggest the user load relevant skills with $skill-name:\n${lines.join("\n")}`;
 }
 
 // ---------------------------------------------------------------------------
