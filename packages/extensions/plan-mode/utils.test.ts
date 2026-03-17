@@ -134,10 +134,10 @@ Plan:
 `;
     const items = extractTodoItems(message);
     expect(items).toHaveLength(4);
-    expect(items[0].step).toBe(1);
-    expect(items[0].text).toBe("Set up the project structure");
-    expect(items[0].completed).toBe(false);
-    expect(items[3].step).toBe(4);
+    expect(items[0]!.step).toBe(1);
+    expect(items[0]!.text).toBe("Set up the project structure");
+    expect(items[0]!.completed).toBe(false);
+    expect(items[3]!.step).toBe(4);
   });
 
   it("handles **Plan:** bold header", () => {
@@ -147,6 +147,28 @@ Plan:
 `;
     const items = extractTodoItems(message);
     expect(items).toHaveLength(2);
+  });
+
+  it("handles markdown headings like ## Implementation Plan", () => {
+    const message = `## Implementation Plan
+1. **Audit** the current flow
+2. Add a resume-safe choice state
+`;
+    const items = extractTodoItems(message);
+    expect(items).toHaveLength(2);
+    expect(items[0]!.text).toBe("Audit the current flow");
+    expect(items[1]!.text).toBe("A resume-safe choice state");
+  });
+
+  it("handles bold item text", () => {
+    const message = `Plan
+1. **First step here**
+2. **Second** step here
+`;
+    const items = extractTodoItems(message);
+    expect(items).toHaveLength(2);
+    expect(items[0]!.text).toBe("First step here");
+    expect(items[1]!.text).toBe("Second step here");
   });
 
   it("returns empty for no Plan: header", () => {
@@ -161,7 +183,7 @@ Plan:
 `;
     const items = extractTodoItems(message);
     expect(items).toHaveLength(1);
-    expect(items[0].text).toContain("real step");
+    expect(items[0]!.text).toContain("real step");
   });
 
   it("skips items starting with backtick, slash, or dash", () => {
@@ -210,16 +232,16 @@ describe("markCompletedSteps", () => {
     ];
     const count = markCompletedSteps("[DONE:1] [DONE:3]", items);
     expect(count).toBe(2);
-    expect(items[0].completed).toBe(true);
-    expect(items[1].completed).toBe(false);
-    expect(items[2].completed).toBe(true);
+    expect(items[0]!.completed).toBe(true);
+    expect(items[1]!.completed).toBe(false);
+    expect(items[2]!.completed).toBe(true);
   });
 
   it("ignores non-existent step numbers", () => {
     const items: TodoItem[] = [{ step: 1, text: "First", completed: false }];
     const count = markCompletedSteps("[DONE:99]", items);
     expect(count).toBe(1); // 1 marker found, even though no item matched
-    expect(items[0].completed).toBe(false);
+    expect(items[0]!.completed).toBe(false);
   });
 
   it("returns 0 for no markers", () => {

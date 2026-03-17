@@ -372,7 +372,7 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
 
         agent_end: {
           mode: "fire",
-          toEvent: (state, event, ctx): PlanEvent | null => {
+          toEvent: (state, event, _ctx): PlanEvent | null => {
             if (state._tag === "Executing" && state.todoItems.length > 0) {
               const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
               const text = lastAssistant ? getTextContent(lastAssistant) : "";
@@ -394,7 +394,7 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
                 : null;
             }
 
-            if (state._tag !== "Planning" || !ctx.hasUI) return null;
+            if (state._tag !== "Planning") return null;
 
             const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
             if (!lastAssistant) return null;
@@ -426,11 +426,13 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
               .pop() as { data?: PersistPayload } | undefined;
 
             const data = planModeEntry?.data;
-            let todoItems = data?.todos ?? [];
-            const executing = data?.executing ?? false;
-            const planFilePath = data?.planFilePath ?? null;
+            const mode = data?.mode;
+            const pending = data?.pending;
+            let todoItems = pending?.todoItems ?? data?.todos ?? [];
+            const executing = data?.executing ?? mode === "Executing";
+            const planFilePath = pending?.planFilePath ?? data?.planFilePath ?? null;
             const savedTools = data?.savedTools ?? null;
-            const enabled = data?.enabled ?? false;
+            const enabled = data?.enabled ?? (mode === "Planning" || mode === "AwaitingChoice");
             const flagPlan = pi.getFlag("plan") === true;
 
             // Re-scan messages for completion markers on resume
@@ -459,11 +461,13 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
 
             return {
               _tag: "Hydrate",
+              mode,
               enabled,
               todoItems,
               executing,
               planFilePath,
               savedTools,
+              pending,
               flagPlan,
               currentTools: pi.getActiveTools(),
             };

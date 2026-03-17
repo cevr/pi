@@ -53,11 +53,13 @@ export type PlanEvent =
   | { _tag: "Reset" }
   | {
       _tag: "Hydrate";
+      mode?: PlanState["_tag"];
       enabled: boolean;
       todoItems: TodoItem[];
       executing: boolean;
       planFilePath: string | null;
       savedTools: string[] | null;
+      pending?: PendingPlan;
       flagPlan: boolean;
       currentTools: string[];
     }
@@ -79,11 +81,13 @@ export type PlanEffect =
   | { type: "updateUI" };
 
 export interface PersistPayload {
+  mode: PlanState["_tag"];
   enabled: boolean;
   todos: TodoItem[];
   executing: boolean;
   planFilePath: string | null;
   savedTools: string[] | null;
+  pending?: PendingPlan;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +102,7 @@ function persist(s: PlanState): PlanEffect {
     switch (s._tag) {
       case "Inactive":
         return {
+          mode: "Inactive",
           enabled: false,
           todos: [],
           executing: false,
@@ -106,22 +111,27 @@ function persist(s: PlanState): PlanEffect {
         };
       case "Planning":
         return {
+          mode: "Planning",
           enabled: true,
           todos: s.pending?.todoItems ?? [],
           executing: false,
           planFilePath: s.pending?.planFilePath ?? null,
           savedTools: s.savedTools,
+          pending: s.pending,
         };
       case "AwaitingChoice":
         return {
+          mode: "AwaitingChoice",
           enabled: true,
           todos: s.pending.todoItems,
           executing: false,
           planFilePath: s.pending.planFilePath,
           savedTools: s.savedTools,
+          pending: s.pending,
         };
       case "Executing":
         return {
+          mode: "Executing",
           enabled: false,
           todos: s.todoItems,
           executing: true,
@@ -275,15 +285,20 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
     // ----- ChooseStay -----
     case "ChooseStay": {
       if (state._tag !== "AwaitingChoice") return { state };
-      return { state: { _tag: "Planning", savedTools: state.savedTools, pending: state.pending } };
+      const next: PlanState = { _tag: "Planning", savedTools: state.savedTools, pending: state.pending };
+      return {
+        state: next,
+        effects: [UI, persist(next)],
+      };
     }
 
     // ----- ChooseRefine -----
     case "ChooseRefine": {
       if (state._tag !== "AwaitingChoice") return { state };
+      const next: PlanState = { _tag: "Planning", savedTools: state.savedTools, pending: state.pending };
       return {
-        state: { _tag: "Planning", savedTools: state.savedTools, pending: state.pending },
-        effects: [{ type: "sendUserMessage", content: event.refinement }],
+        state: next,
+        effects: [UI, { type: "sendUserMessage", content: event.refinement }, persist(next)],
       };
     }
 
@@ -448,6 +463,16 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
       const enabled = event.enabled || event.flagPlan;
       const savedTools = event.savedTools ?? event.currentTools;
 
+      if (event.mode === "AwaitingChoice" && event.pending) {
+        const next: PlanState = {
+          _tag: "AwaitingChoice",
+          savedTools,
+          pending: event.pending,
+        };
+        effects.push({ type: "setActiveTools", tools: PLAN_MODE_TOOLS }, UI);
+        return { state: next, effects };
+      }
+
       if (event.executing && event.todoItems.length > 0) {
         const next: PlanState = {
           _tag: "Executing",
@@ -467,7 +492,7 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
       }
 
       if (enabled) {
-        const next: PlanState = { _tag: "Planning", savedTools };
+        const next: PlanState = { _tag: "Planning", savedTools, pending: event.pending };
         effects.push({ type: "setActiveTools", tools: PLAN_MODE_TOOLS }, UI);
         return { state: next, effects };
       }

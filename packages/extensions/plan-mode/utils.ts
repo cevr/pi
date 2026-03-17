@@ -139,33 +139,58 @@ export function cleanStepText(text: string): string {
 
 /**
  * Extract numbered plan steps from an assistant message.
- * Looks for a `Plan:` header and parses numbered items below it.
+ * Looks for a plan heading and parses numbered items below it.
  */
+function isPlanHeader(line: string): boolean {
+  const normalized = line
+    .trim()
+    .replace(/^#{1,6}\s*/, "")
+    .replace(/^\*{1,2}/, "")
+    .replace(/\*{1,2}$/, "")
+    .replace(/:$/, "")
+    .trim()
+    .toLowerCase();
+
+  return normalized === "plan" || normalized === "implementation plan" || normalized === "proposed plan";
+}
+
 export function extractTodoItems(message: string): TodoItem[] {
+  const lines = message.split(/\r?\n/);
+  const headerIndex = lines.findIndex(isPlanHeader);
+  if (headerIndex === -1) return [];
+
   const items: TodoItem[] = [];
-  const headerMatch = message.match(/\*{0,2}Plan:\*{0,2}\s*\n/i);
-  if (!headerMatch) return items;
 
-  const planSection = message.slice(message.indexOf(headerMatch[0]) + headerMatch[0].length);
-  const numberedPattern = /^\s*(\d+)[.)]\s+\*{0,2}([^*\n]+)/gm;
+  for (let i = headerIndex + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
 
-  for (const match of planSection.matchAll(numberedPattern)) {
-    const text = match[2]
-      .trim()
-      .replace(/\*{1,2}$/, "")
-      .trim();
+    if (items.length > 0 && /^\s*#{1,6}\s+/.test(line)) {
+      break;
+    }
+
+    const match = line.match(/^\s*(\d+)[.)]\s+(.+?)\s*$/);
+    if (!match) continue;
+
+    const rawText = match[2];
+    if (!rawText) continue;
+
+    const text = rawText.trim();
     if (
-      text.length > 5 &&
-      !text.startsWith("`") &&
-      !text.startsWith("/") &&
-      !text.startsWith("-")
+      text.length <= 5 ||
+      text.startsWith("`") ||
+      text.startsWith("/") ||
+      text.startsWith("-")
     ) {
-      const cleaned = cleanStepText(text);
-      if (cleaned.length > 3) {
-        items.push({ step: items.length + 1, text: cleaned, completed: false });
-      }
+      continue;
+    }
+
+    const cleaned = cleanStepText(text);
+    if (cleaned.length > 3) {
+      items.push({ step: items.length + 1, text: cleaned, completed: false });
     }
   }
+
   return items;
 }
 

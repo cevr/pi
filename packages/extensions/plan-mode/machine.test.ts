@@ -203,6 +203,8 @@ describe("planReducer — Choice transitions", () => {
     if (r.state._tag === "Planning" && state._tag === "AwaitingChoice") {
       expect(r.state.pending).toBe(state.pending);
     }
+    expect(hasEffect(r.effects, "persistState")).toBe(true);
+    expect(hasEffect(r.effects, "updateUI")).toBe(true);
   });
 
   it("ChooseRefine → Planning (sends refinement)", () => {
@@ -211,6 +213,8 @@ describe("planReducer — Choice transitions", () => {
     expect(getEffect<BuiltinEffect>(r.effects, "sendUserMessage")).toMatchObject({
       content: "add tests",
     });
+    expect(hasEffect(r.effects, "persistState")).toBe(true);
+    expect(hasEffect(r.effects, "updateUI")).toBe(true);
   });
 
   it("ChooseExecute from non-AwaitingChoice is no-op", () => {
@@ -290,11 +294,32 @@ describe("planReducer — Hydrate", () => {
     currentTools: ["read", "bash"],
   };
 
+  it("hydrates to AwaitingChoice when a pending choice was persisted", () => {
+    const pending = {
+      todoItems: [{ step: 1, text: "Do it", completed: false }],
+      planFilePath: "/tmp/plan.md",
+      planText: "Plan:\n1. Do it",
+    };
+    const r = planReducer(inactive(), {
+      _tag: "Hydrate",
+      ...base,
+      mode: "AwaitingChoice",
+      enabled: true,
+      todoItems: pending.todoItems,
+      planFilePath: pending.planFilePath,
+      pending,
+    });
+    expect(r.state._tag).toBe("AwaitingChoice");
+    expect(hasEffect(r.effects, "setActiveTools")).toBe(true);
+    expect(hasEffect(r.effects, "updateUI")).toBe(true);
+  });
+
   it("hydrates to Executing when persisted executing state", () => {
     const items: TodoItem[] = [{ step: 1, text: "Do it", completed: false }];
     const r = planReducer(inactive(), {
       _tag: "Hydrate",
       ...base,
+      mode: "Executing",
       executing: true,
       todoItems: items,
       planFilePath: "/tmp/plan.md",
