@@ -1,4 +1,5 @@
 export { default as audit } from "../packages/extensions/audit/index";
+export { default as autoSkills } from "../packages/extensions/auto-skills/index";
 export { default as bash } from "../packages/extensions/bash/index";
 export { default as breakout } from "../packages/extensions/breakout/index";
 export { default as ci } from "../packages/extensions/ci/index";

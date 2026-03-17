@@ -61,6 +61,7 @@
   "pi": {
     "extensions": [
       "./dist/extensions/audit.js",
+      "./dist/extensions/auto-skills.js",
       "./dist/extensions/bash.js",
       "./dist/extensions/breakout.js",
       "./dist/extensions/ci.js",
