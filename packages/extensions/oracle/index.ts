@@ -43,7 +43,7 @@ type OracleExtensionDeps = {
 };
 
 export const CONFIG_DEFAULTS: OracleExtConfig = {
-  model: "openrouter/openai/gpt-5.2",
+  model: "openai-codex/gpt-5.4",
   extensionTools: ["read", "grep", "find", "ls", "bash"],
   builtinTools: ["read", "grep", "find", "ls", "bash"],
   promptFile: "",

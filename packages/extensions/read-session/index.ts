@@ -2,7 +2,7 @@
  * read_session tool — extract relevant context from a pi session via sub-agent.
  *
  * loads a full session tree (all branches), renders it as structured markdown,
- * then spawns a gemini flash sub-agent to extract only the information
+ * then spawns a haiku sub-agent to extract only the information
  * relevant to the stated goal. the agent sees the complete tree — including
  * abandoned branches — so it can understand decision points and context.
  *
@@ -36,7 +36,7 @@ type ReadSessionExtConfig = {
 };
 
 export const CONFIG_DEFAULTS: ReadSessionExtConfig = {
-  model: "openrouter/google/gemini-3-flash-preview",
+  model: "anthropic/claude-haiku-4-5-20251001",
   sessionsDir: path.join(os.homedir(), ".pi", "agent", "sessions"),
   maxChars: 120_000,
 };

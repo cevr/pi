@@ -48,7 +48,7 @@ type CounselExtensionDeps = {
 export const CONFIG_DEFAULTS: CounselExtConfig = {
   model: "",
   oppositeModels: {
-    anthropic: "openrouter/openai/gpt-5.4",
+    anthropic: "openai-codex/gpt-5.4",
     openai: "anthropic/claude-opus-4-6",
   },
   extensionTools: ["read", "grep", "find", "ls", "bash"],

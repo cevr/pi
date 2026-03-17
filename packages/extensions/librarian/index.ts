@@ -1,5 +1,5 @@
 /**
- * librarian tool — cross-repo codebase understanding via gemini flash sub-agent.
+ * librarian tool — cross-repo codebase understanding via sonnet sub-agent.
  *
  * replaces the generic subagent pattern with a dedicated tool. the model
  * calls librarian(query: "...", repo?: "...", context?: "...")
@@ -43,7 +43,7 @@ type LibrarianExtensionDeps = {
 };
 
 export const CONFIG_DEFAULTS: LibrarianExtConfig = {
-  model: "openrouter/google/gemini-3-flash-preview",
+  model: "anthropic/claude-sonnet-4-6",
   extensionTools: ["web_search"],
   builtinTools: ["read", "bash", "grep", "find", "ls"],
   promptFile: "",

@@ -1,11 +1,11 @@
 /**
- * finder tool — fast parallel code search via gemini flash sub-agent.
+ * finder tool — fast parallel code search via haiku sub-agent.
  *
  * replaces the generic subagent(agent: "finder", task: ...) pattern
  * with a dedicated tool. the model calls
  * finder(query: "...") instead of routing through the dispatcher.
  *
- * spawns `pi --mode json` with gemini flash, constrained to
+ * spawns `pi --mode json` with haiku, constrained to
  * read-only tools (read, grep, find, ls, glob). the finder agent
  * maximizes parallelism (8+ tool calls per turn) and completes
  * within ~3 turns.
@@ -42,7 +42,7 @@ type FinderExtensionDeps = {
 };
 
 export const CONFIG_DEFAULTS: FinderExtConfig = {
-  model: "openrouter/google/gemini-3-flash-preview",
+  model: "anthropic/claude-haiku-4-5-20251001",
   extensionTools: ["read", "grep", "find", "ls"],
   builtinTools: ["read", "grep", "find", "ls"],
   promptFile: "",

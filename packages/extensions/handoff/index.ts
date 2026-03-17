@@ -55,8 +55,8 @@ type HandoffExtConfig = {
 export const CONFIG_DEFAULTS: HandoffExtConfig = {
   threshold: 0.85,
   model: {
-    provider: "openrouter",
-    id: "google/gemini-3-flash-preview",
+    provider: "anthropic",
+    id: "claude-sonnet-4-6",
   },
   promptFile: "",
   promptString: "",
