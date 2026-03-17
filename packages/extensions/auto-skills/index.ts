@@ -1,194 +1,190 @@
 /**
- * Auto-Skills Extension — project-aware skill hints.
+ * Auto-Skills Extension — model-pruned skill hints.
  *
- * Scans the workspace once on session_start for dependency signals
- * (package.json deps, lock files) and builds conditional hints that
- * tell the model *when* to load each skill, not to load them all upfront.
+ * On session_start, gathers project signals (package.json deps, file markers)
+ * and the full skill catalog. Spawns a cheap model (haiku) in the background
+ * to select which skills are relevant. Caches the result by project hash.
  *
- * The injected message is identical every turn → cache-friendly.
- * The model decides per-turn which skills to read based on what it's doing.
+ * The pruned hint list is injected via before_agent_start — identical every
+ * turn for cache stability. The model decides per-turn which to read.
  */
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { loadSkills } from "@mariozechner/pi-coding-agent";
+import { PiSpawnService } from "@cvr/pi-spawn";
+import { getFinalOutput } from "@cvr/pi-sub-agent-render";
+import { Effect, ManagedRuntime } from "effect";
 
 // ---------------------------------------------------------------------------
-// Skill hint rules
+// Constants
 // ---------------------------------------------------------------------------
 
-interface SkillHint {
-  /** Skill name (must match a loaded skill) */
-  skill: string;
-  /** Human-readable condition for when to load this skill */
-  when: string;
-  /** Check package.json dependencies */
-  deps?: string[];
-  /** Check if files exist (relative to cwd) */
-  files?: string[];
-  /** Always include this hint (no signal check needed) */
-  always?: boolean;
+const CACHE_DIR = path.join(os.homedir(), ".pi", "auto-skills");
+const PRUNER_MODEL = "anthropic/claude-haiku-4-5-20251001";
+
+// ---------------------------------------------------------------------------
+// Project signal gathering
+// ---------------------------------------------------------------------------
+
+interface ProjectSignals {
+  deps: string[];
+  files: string[];
 }
 
-const HINTS: SkillHint[] = [
-  { skill: "code-style", when: "writing or reviewing any code", always: true },
-  {
-    skill: "effect-v4",
-    when: "working with effect imports, services, layers, or Effect.gen",
-    deps: ["effect"],
-  },
-  {
-    skill: "effect-v3",
-    when: "working with effect imports, services, layers, or Effect.gen",
-    deps: ["effect"],
-  },
-  {
-    skill: "architecture",
-    when: "designing module structure, service wiring, or domain modeling",
-    deps: ["effect", "@effect/platform", "@effect/cli"],
-  },
-  { skill: "react", when: "working with .tsx files or React components", deps: ["react"] },
-  {
-    skill: "ui",
-    when: "implementing UI components, animations, or visual design",
-    deps: ["react"],
-  },
-  {
-    skill: "react-native",
-    when: "working with React Native components or native APIs",
-    deps: ["react-native"],
-  },
-  {
-    skill: "bun",
-    when: "running scripts, tests, or using Bun APIs",
-    files: ["bun.lock", "bun.lockb"],
-  },
-  {
-    skill: "turborepo",
-    when: "configuring tasks, pipelines, or monorepo structure",
-    files: ["turbo.json"],
-  },
-  {
-    skill: "cli",
-    when: "building CLI commands, flags, or terminal output",
-    deps: ["@effect/cli", "commander", "yargs", "meow", "cac"],
-  },
-];
+function gatherSignals(cwd: string): ProjectSignals {
+  const deps: string[] = [];
+  const files: string[] = [];
 
-// ---------------------------------------------------------------------------
-// Detection
-// ---------------------------------------------------------------------------
-
-function readPackageJsonDeps(cwd: string): Set<string> {
-  const deps = new Set<string>();
+  // Read package.json deps
   try {
     const raw = fs.readFileSync(path.join(cwd, "package.json"), "utf-8");
     const pkg = JSON.parse(raw) as Record<string, unknown>;
     for (const key of ["dependencies", "devDependencies", "peerDependencies"]) {
       const section = pkg[key];
       if (section && typeof section === "object") {
-        for (const dep of Object.keys(section as Record<string, unknown>)) {
-          deps.add(dep);
-        }
+        deps.push(...Object.keys(section as Record<string, unknown>));
       }
     }
-    // Also check workspace catalog (monorepos)
     const workspaces = pkg.workspaces as Record<string, unknown> | undefined;
     const catalog = workspaces?.catalog as Record<string, string> | undefined;
-    if (catalog) {
-      for (const dep of Object.keys(catalog)) deps.add(dep);
-    }
-  } catch {
-    /* no package.json or invalid */
-  }
-  return deps;
-}
-
-function fileExists(cwd: string, relativePath: string): boolean {
-  try {
-    return fs.existsSync(path.join(cwd, relativePath));
-  } catch {
-    return false;
-  }
-}
-
-function detectEffectVersion(cwd: string): "effect-v3" | "effect-v4" | null {
-  try {
-    const raw = fs.readFileSync(path.join(cwd, "package.json"), "utf-8");
-    const pkg = JSON.parse(raw) as Record<string, unknown>;
-
-    for (const key of ["dependencies", "devDependencies"]) {
-      const section = pkg[key] as Record<string, string> | undefined;
-      if (!section?.effect) continue;
-      const version = section.effect;
-      if (/^[~^]?4\./.test(version) || version.includes("4.0.0-beta")) return "effect-v4";
-      if (/^[~^]?3\./.test(version)) return "effect-v3";
-    }
-
-    const workspaces = pkg.workspaces as Record<string, unknown> | undefined;
-    const catalog = workspaces?.catalog as Record<string, string> | undefined;
-    if (catalog?.effect) {
-      const version = catalog.effect;
-      if (/^[~^]?4\./.test(version) || version.includes("4.0.0-beta")) return "effect-v4";
-      if (/^[~^]?3\./.test(version)) return "effect-v3";
-    }
+    if (catalog) deps.push(...Object.keys(catalog));
   } catch {
     /* */
   }
 
+  // Check marker files
+  const markers = ["bun.lock", "bun.lockb", "turbo.json", "pnpm-lock.yaml", "yarn.lock"];
+  for (const m of markers) {
+    try {
+      if (fs.existsSync(path.join(cwd, m))) files.push(m);
+    } catch {
+      /* */
+    }
+  }
+
+  return { deps: [...new Set(deps)].sort(), files: files.sort() };
+}
+
+function hashSignals(signals: ProjectSignals): string {
+  const content = JSON.stringify(signals);
+  return crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+
+// ---------------------------------------------------------------------------
+// Skill catalog
+// ---------------------------------------------------------------------------
+
+interface SkillEntry {
+  name: string;
+  description: string;
+  filePath: string;
+}
+
+function getSkillCatalog(cwd: string): SkillEntry[] {
+  const { skills } = loadSkills({ cwd, includeDefaults: true });
+  return skills
+    .filter((s) => s.description.length > 0)
+    .map((s) => ({ name: s.name, description: s.description, filePath: s.filePath }));
+}
+
+// ---------------------------------------------------------------------------
+// Cache
+// ---------------------------------------------------------------------------
+
+interface CachedResult {
+  hash: string;
+  hints: string;
+}
+
+function readCache(hash: string): string | null {
   try {
-    const nmPkg = fs.readFileSync(
-      path.join(cwd, "node_modules", "effect", "package.json"),
-      "utf-8",
-    );
-    const parsed = JSON.parse(nmPkg) as { version?: string };
-    if (parsed.version?.startsWith("4.")) return "effect-v4";
-    if (parsed.version?.startsWith("3.")) return "effect-v3";
+    const filePath = path.join(CACHE_DIR, `${hash}.json`);
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const cached = JSON.parse(raw) as CachedResult;
+    if (cached.hash === hash) return cached.hints;
   } catch {
     /* */
   }
-
   return null;
 }
 
-interface MatchedHint {
-  when: string;
-  skillPath: string;
+function writeCache(hash: string, hints: string): void {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    const filePath = path.join(CACHE_DIR, `${hash}.json`);
+    fs.writeFileSync(filePath, JSON.stringify({ hash, hints }), "utf-8");
+  } catch {
+    /* */
+  }
 }
 
-function detectHints(cwd: string): MatchedHint[] {
-  const deps = readPackageJsonDeps(cwd);
-  const effectVersion = deps.has("effect") ? (detectEffectVersion(cwd) ?? "effect-v4") : null;
+// ---------------------------------------------------------------------------
+// Pruner prompt
+// ---------------------------------------------------------------------------
 
-  // Build path map from loaded skills
-  const { skills } = loadSkills({ cwd, includeDefaults: true });
-  const pathMap = new Map<string, string>();
-  for (const skill of skills) {
-    pathMap.set(skill.name, skill.filePath);
-  }
+function buildPrunerPrompt(signals: ProjectSignals, catalog: SkillEntry[]): string {
+  const depsBlock =
+    signals.deps.length > 0
+      ? `Dependencies: ${signals.deps.join(", ")}`
+      : "No dependencies detected.";
+  const filesBlock = signals.files.length > 0 ? `Marker files: ${signals.files.join(", ")}` : "";
 
-  const matched: MatchedHint[] = [];
+  const skillsList = catalog.map((s) => `- ${s.name}: ${s.description}`).join("\n");
 
-  for (const hint of HINTS) {
-    // Skip wrong effect version
-    if (hint.skill === "effect-v3" && effectVersion !== "effect-v3") continue;
-    if (hint.skill === "effect-v4" && effectVersion !== "effect-v4") continue;
+  return `You are selecting which skills are relevant for a software project.
 
-    const skillPath = pathMap.get(hint.skill);
-    if (!skillPath) continue;
+## Project Signals
+${depsBlock}
+${filesBlock}
 
-    let hit = hint.always ?? false;
+## Available Skills
+${skillsList}
 
-    if (hint.deps && hint.deps.some((d) => deps.has(d))) hit = true;
-    if (hint.files && hint.files.some((f) => fileExists(cwd, f))) hit = true;
+## Task
+Select ONLY the skills relevant to this project. For each selected skill, write a one-line hint describing when the developer should load it.
 
-    if (hit) {
-      matched.push({ when: hint.when, skillPath });
+Output format (one per line, no other text):
+SKILL_NAME | when to load hint
+
+Example:
+react | working with .tsx files or React components
+effect-v4 | working with Effect services, layers, or Effect.gen
+
+Rules:
+- Select 3-7 skills maximum
+- Always include "code-style"
+- Only include skills that match the project's dependencies or file markers
+- Be specific in hints — reference file types, import patterns, or task types
+- Do NOT include skills for technologies not present in the project`;
+}
+
+function parseSkillHints(
+  output: string,
+  catalog: SkillEntry[],
+): Array<{ name: string; when: string; filePath: string }> {
+  const pathMap = new Map(catalog.map((s) => [s.name, s.filePath]));
+  const hints: Array<{ name: string; when: string; filePath: string }> = [];
+
+  for (const line of output.split("\n")) {
+    const match = line.match(/^([a-z0-9-]+)\s*\|\s*(.+)$/);
+    if (!match) continue;
+    const [, name, when] = match;
+    const filePath = pathMap.get(name!);
+    if (filePath && when) {
+      hints.push({ name: name!, when: when.trim(), filePath });
     }
   }
 
-  return matched;
+  return hints;
+}
+
+function formatHints(hints: Array<{ when: string; filePath: string }>): string {
+  const lines = hints.map((h) => `- When ${h.when} → read ${h.filePath}`);
+  return `[AUTO-SKILLS] Load the relevant skill before responding:\n${lines.join("\n")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -196,19 +192,64 @@ function detectHints(cwd: string): MatchedHint[] {
 // ---------------------------------------------------------------------------
 
 export default function autoSkillsExtension(pi: ExtensionAPI): void {
+  const runtime = ManagedRuntime.make(PiSpawnService.layer);
+
+  pi.on("session_shutdown" as any, async () => {
+    await runtime.dispose();
+  });
+
   let cachedMessage: string | null = null;
 
-  function buildMessage(cwd: string): string | null {
-    const hints = detectHints(cwd);
-    if (hints.length === 0) return null;
-
-    const lines = hints.map((h) => `- When ${h.when} → read ${h.skillPath}`);
-
-    return `[AUTO-SKILLS] Load the relevant skill before responding:\n${lines.join("\n")}`;
-  }
-
   pi.on("session_start" as any, (_event: any, ctx: any) => {
-    cachedMessage = buildMessage(ctx.cwd);
+    const cwd: string = ctx.cwd;
+    const signals = gatherSignals(cwd);
+
+    // No deps at all — skip (not a JS/TS project)
+    if (signals.deps.length === 0 && signals.files.length === 0) return;
+
+    const hash = hashSignals(signals);
+
+    // Check cache first
+    const cached = readCache(hash);
+    if (cached) {
+      cachedMessage = cached;
+      return;
+    }
+
+    // Background: spawn haiku to prune skills
+    const catalog = getSkillCatalog(cwd);
+    if (catalog.length === 0) return;
+
+    const task = buildPrunerPrompt(signals, catalog);
+
+    runtime
+      .runPromise(
+        Effect.gen(function* () {
+          const svc = yield* PiSpawnService;
+          return yield* svc.spawn({
+            cwd,
+            task,
+            model: PRUNER_MODEL,
+            builtinTools: [],
+            extensionTools: [],
+          });
+        }),
+      )
+      .then((result) => {
+        if (result.exitCode !== 0) return;
+        const output = getFinalOutput(result.messages);
+        if (!output) return;
+
+        const hints = parseSkillHints(output, catalog);
+        if (hints.length === 0) return;
+
+        const message = formatHints(hints);
+        writeCache(hash, message);
+        cachedMessage = message;
+      })
+      .catch(() => {
+        /* background — don't crash */
+      });
   });
 
   pi.on("before_agent_start" as any, () => {
