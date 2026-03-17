@@ -6,7 +6,7 @@
  * directly.
  *
  * fetches repos locally via `repo fetch` CLI, then spawns a sub-agent
- * with file tools (read, grep, glob, ls) to explore the source code.
+ * with file tools (read, grep, find, ls) to explore the source code.
  * the `repo` param is required — supports "owner/repo", "npm:pkg",
  * "pypi:pkg", "crates:crate" spec formats.
  *
@@ -44,7 +44,7 @@ type LibrarianExtensionDeps = {
 
 export const CONFIG_DEFAULTS: LibrarianExtConfig = {
   model: "anthropic/claude-sonnet-4-6",
-  extensionTools: ["web_search"],
+  extensionTools: ["read", "grep", "find", "ls", "bash", "web_search", "web_fetch"],
   builtinTools: ["read", "bash", "grep", "find", "ls"],
   promptFile: "",
   promptString: "",
@@ -131,7 +131,7 @@ export function createLibrarianTool(
       "The Librarian — a specialized codebase understanding agent for exploring " +
       "third-party libraries and external codebases.\n\n" +
       "Fetches repos locally via `repo fetch` and explores source code with " +
-      "file tools (read, grep, glob, ls).\n\n" +
+      "file tools (read, grep, find, ls).\n\n" +
       "WHEN TO USE:\n" +
       "- Understanding how a third-party library works\n" +
       "- Exploring API surface, patterns, and internals of external packages\n" +
@@ -185,7 +185,7 @@ export function createLibrarianTool(
       const parts: string[] = [
         p.query,
         `\nThe source code for ${p.repo} is available locally at: ${localRepoPath}`,
-        `Explore it using file tools (read, grep, glob, ls). Start with package.json or README.md to understand the structure, then drill into specific files.`,
+        `Explore it using file tools (read, grep, find, ls). Start with package.json or README.md to understand the structure, then drill into specific files.`,
       ];
       if (p.context) parts.push(`\nContext: ${p.context}`);
       const fullTask = parts.join("\n");

@@ -48,6 +48,18 @@ afterEach(() => {
 });
 
 describe("librarian extension", () => {
+  it("exposes the full repo exploration toolset by default", () => {
+    expect(CONFIG_DEFAULTS.extensionTools).toEqual([
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "bash",
+      "web_search",
+      "web_fetch",
+    ]);
+  });
+
   it("registers the tool with default config when enabled", () => {
     const getEnabledExtensionConfigSpy = mock(
       <T extends Record<string, unknown>>(_namespace: string, defaults: T) => ({
