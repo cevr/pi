@@ -15,7 +15,7 @@ import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechn
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
-import { PiSpawnService, zeroUsage } from "@cvr/pi-spawn";
+import { PiSpawnService, zeroUsage, type PiSpawnConfig, type PiSpawnResult } from "@cvr/pi-spawn";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { readPrinciples } from "@cvr/pi-brain-principles";
 import {
@@ -105,6 +105,9 @@ function generateCounselSessionPath(): string {
 
 type ModelFamily = "anthropic" | "openai";
 
+const MISSING_INPUT_ERROR_RE =
+  /invalid_request_error[\s\S]*(input|previous_response_id|prompt|conversation_id)[\s\S]*must be provided/i;
+
 /**
  * detect model family from provider + id.
  * handles gateway providers like openrouter that carry models from both vendors.
@@ -138,6 +141,14 @@ function resolveOppositeModel(
   if (!family) return null;
 
   return family === "anthropic" ? config.oppositeModels.openai : config.oppositeModels.anthropic;
+}
+
+function getSpawnErrorText(result: PiSpawnResult): string {
+  return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "";
+}
+
+function shouldRetryCounsel(result: PiSpawnResult): boolean {
+  return MISSING_INPUT_ERROR_RE.test(getSpawnErrorText(result));
 }
 
 // --- tool ---
@@ -284,7 +295,7 @@ export function createCounselTool(
       return runtime.runPromise(
         Effect.gen(function* () {
           const svc = yield* PiSpawnService;
-          const result = yield* svc.spawn({
+          const spawnConfig: PiSpawnConfig = {
             cwd: ctx.cwd,
             task: fullTask,
             model: oppositeModel,
@@ -294,6 +305,7 @@ export function createCounselTool(
             signal,
             sessionId,
             sessionPath: counselSessionPath,
+            promptViaStdin: true,
             onUpdate: (partial) => {
               singleResult.messages = partial.messages;
               singleResult.usage = partial.usage;
@@ -312,7 +324,17 @@ export function createCounselTool(
                 } as any);
               }
             },
-          });
+          };
+
+          let result = yield* svc.spawn(spawnConfig);
+          let usedRetry = false;
+          if (shouldRetryCounsel(result)) {
+            usedRetry = true;
+            result = yield* svc.spawn({
+              ...spawnConfig,
+              sessionPath: undefined,
+            });
+          }
 
           singleResult.exitCode = result.exitCode;
           singleResult.messages = result.messages;
@@ -328,14 +350,12 @@ export function createCounselTool(
           const output = getFinalOutput(result.messages) || "(no output)";
 
           if (isError) {
-            return subAgentResult(
-              result.errorMessage || result.stderr || output,
-              singleResult,
-              true,
-            );
+            return subAgentResult(getSpawnErrorText(result) || output, singleResult, true);
           }
 
-          const sessionRef = `Session: ${counselSessionPath}`;
+          const sessionRef = usedRetry
+            ? "Session: ephemeral retry (session file unavailable)"
+            : `Session: ${counselSessionPath}`;
           return subAgentResult(`${sessionRef}\n\n${output}`, singleResult);
         }),
       );

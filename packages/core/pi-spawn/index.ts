@@ -55,6 +55,13 @@ export interface PiSpawnConfig {
   sessionId?: string;
   repo?: string;
   /**
+   * send the initial prompt through RPC stdin instead of argv.
+   *
+   * more robust for long prompts (large inlined file context) and avoids
+   * edge cases where positional prompt delivery gets dropped.
+   */
+  promptViaStdin?: boolean;
+  /**
    * override the global bds config path for the child process.
    *
    * when omitted, piSpawn propagates the parent's resolved global config path
@@ -142,7 +149,7 @@ export function readAgentPrompt(filename: string): string {
 export function processNdjsonLine(
   line: string,
   result: PiSpawnResult,
-  config: Pick<PiSpawnConfig, "followUp" | "onUpdate">,
+  config: Pick<PiSpawnConfig, "followUp" | "onUpdate" | "promptViaStdin">,
   rpcState: { endTurnCount: number },
   killProc: () => void,
 ): void {
@@ -163,7 +170,8 @@ export function processNdjsonLine(
 
     if (msg.role === "assistant") {
       result.usage.turns++;
-      const usage = (msg as Record<string, unknown>).usage as Record<string, unknown> | undefined;
+      const msgRecord = msg as unknown as Record<string, unknown>;
+      const usage = msgRecord.usage as Record<string, unknown> | undefined;
       if (usage) {
         result.usage.input += Number(usage.input) || 0;
         result.usage.output += Number(usage.output) || 0;
@@ -172,19 +180,19 @@ export function processNdjsonLine(
         result.usage.cost += Number((usage.cost as Record<string, unknown>)?.total) || 0;
         result.usage.contextTokens = Number(usage.totalTokens) || 0;
       }
-      if (!result.model && (msg as Record<string, unknown>).model) {
-        result.model = (msg as Record<string, unknown>).model as string;
+      if (!result.model && msgRecord.model) {
+        result.model = msgRecord.model as string;
       }
-      if ((msg as Record<string, unknown>).stopReason) {
-        result.stopReason = (msg as Record<string, unknown>).stopReason as string;
+      if (msgRecord.stopReason) {
+        result.stopReason = msgRecord.stopReason as string;
       }
-      if ((msg as Record<string, unknown>).errorMessage) {
-        result.errorMessage = (msg as Record<string, unknown>).errorMessage as string;
+      if (msgRecord.errorMessage) {
+        result.errorMessage = msgRecord.errorMessage as string;
       }
 
-      const stopReason = (msg as Record<string, unknown>).stopReason as string | undefined;
+      const stopReason = msgRecord.stopReason as string | undefined;
       const isTurnEnd = stopReason === "end_turn" || stopReason === "stop";
-      const useRpc = !!config.followUp;
+      const useRpc = !!config.followUp || config.promptViaStdin === true;
       const expectedTurns = config.followUp ? 2 : 1;
 
       if (useRpc && isTurnEnd) {
@@ -211,7 +219,7 @@ export function processNdjsonLine(
 // --- spawn ---
 
 export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
-  const useRpc = !!config.followUp;
+  const useRpc = !!config.followUp || config.promptViaStdin === true;
   const sessionArgs = config.sessionPath ? ["--session", config.sessionPath] : ["--no-session"];
   const args: string[] = useRpc
     ? ["--mode", "rpc", ...sessionArgs]

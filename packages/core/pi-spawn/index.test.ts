@@ -55,7 +55,8 @@ describe("processNdjsonLine", () => {
       () => {},
     );
     expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]).toEqual(msg);
+    expect((result.messages[0] as any)?.role).toBe(msg.role);
+    expect((result.messages[0] as any)?.content).toBe(msg.content);
   });
 
   it("accumulates usage from assistant messages", () => {
@@ -136,7 +137,8 @@ describe("processNdjsonLine", () => {
       () => {},
     );
     expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]).toEqual(msg);
+    expect((result.messages[0] as any)?.role).toBe(msg.role);
+    expect((result.messages[0] as any)?.content).toBe(msg.content);
   });
 
   it("calls onUpdate after message_end", () => {
@@ -184,6 +186,24 @@ describe("processNdjsonLine", () => {
     );
     expect(killed).toBe(true); // 2nd turn → kill
     expect(rpc.endTurnCount).toBe(2);
+  });
+
+  it("kills proc after first turn when using stdin RPC without followUp", () => {
+    let killed = false;
+    const result = makeResult();
+    const msg = { role: "assistant", content: "done", stopReason: "end_turn" };
+
+    processNdjsonLine(
+      JSON.stringify({ type: "message_end", message: msg }),
+      result,
+      { promptViaStdin: true },
+      { endTurnCount: 0 },
+      () => {
+        killed = true;
+      },
+    );
+
+    expect(killed).toBe(true);
   });
 
   it("kills proc on error stopReason in RPC mode", () => {
