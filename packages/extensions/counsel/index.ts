@@ -91,6 +91,16 @@ export const COUNSEL_CONFIG_SCHEMA: ExtensionConfigSchema<CounselExtConfig> = {
 
 const SESSIONS_DIR = path.join(os.homedir(), ".pi", "agent", "sessions");
 
+function generateCounselSessionPath(): string {
+  const now = new Date();
+  const year = now.getFullYear().toString();
+  const dir = path.join(SESSIONS_DIR, year);
+  fs.mkdirSync(dir, { recursive: true });
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  const rand = Math.random().toString(36).slice(2, 8);
+  return path.join(dir, `${timestamp}_counsel-${rand}.jsonl`);
+}
+
 type ModelFamily = "anthropic" | "openai";
 
 /**
@@ -126,50 +136,6 @@ function resolveOppositeModel(
   if (!family) return null;
 
   return family === "anthropic" ? config.oppositeModels.openai : config.oppositeModels.anthropic;
-}
-
-function generateCounselSessionId(): string {
-  const rand = Math.random().toString(36).slice(2, 10);
-  return `counsel-${rand}`;
-}
-
-function writeCounselSession(
-  sessionId: string,
-  prompt: string,
-  output: string,
-  model: string,
-  cwd: string,
-): string {
-  const now = new Date();
-  const year = now.getFullYear().toString();
-  const dir = path.join(SESSIONS_DIR, year);
-  fs.mkdirSync(dir, { recursive: true });
-
-  const timestamp = now.toISOString().replace(/[:.]/g, "-");
-  const filePath = path.join(dir, `${timestamp}_${sessionId}.jsonl`);
-
-  const lines: string[] = [
-    JSON.stringify({ type: "session", id: sessionId, cwd, timestamp: now.toISOString() }),
-    JSON.stringify({ type: "session_info", name: `counsel: ${prompt.slice(0, 60)}` }),
-    JSON.stringify({
-      type: "message",
-      id: `${sessionId}-user`,
-      message: { role: "user", content: prompt },
-    }),
-    JSON.stringify({
-      type: "message",
-      id: `${sessionId}-assistant`,
-      parentId: `${sessionId}-user`,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: output }],
-        model,
-      },
-    }),
-  ];
-
-  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf-8");
-  return sessionId;
 }
 
 // --- tool ---
@@ -311,6 +277,8 @@ export function createCounselTool(
         usage: zeroUsage(),
       };
 
+      const counselSessionPath = generateCounselSessionPath();
+
       return runtime.runPromise(
         Effect.gen(function* () {
           const svc = yield* PiSpawnService;
@@ -323,6 +291,7 @@ export function createCounselTool(
             systemPromptBody: systemPrompt,
             signal,
             sessionId,
+            session: counselSessionPath,
             onUpdate: (partial) => {
               singleResult.messages = partial.messages;
               singleResult.usage = partial.usage;
@@ -356,23 +325,11 @@ export function createCounselTool(
             result.stopReason === "aborted";
           const output = getFinalOutput(result.messages) || "(no output)";
 
-          // write review as a session file for read-session reference
-          if (!isError && output !== "(no output)") {
-            try {
-              const counselSessionId = generateCounselSessionId();
-              writeCounselSession(
-                counselSessionId,
-                p.prompt,
-                output,
-                result.model ?? oppositeModel,
-                ctx.cwd,
-              );
-
-              const outputWithRef = `Session: ${counselSessionId} (use read_session to reference)\n\n${output}`;
-              return subAgentResult(outputWithRef, singleResult);
-            } catch {
-              // session write failed, return output without ref
-            }
+          // reference the persisted session
+          if (!isError && output !== "(no output)" && result.sessionFile) {
+            const sessionRef = path.basename(result.sessionFile, ".jsonl");
+            const outputWithRef = `Session: ${sessionRef} (use read_session to reference)\n\n${output}`;
+            return subAgentResult(outputWithRef, singleResult);
           }
 
           if (isError) {

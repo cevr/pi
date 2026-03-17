@@ -40,6 +40,7 @@ export interface PiSpawnResult {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
+  sessionFile?: string;
 }
 
 export interface PiSpawnConfig {
@@ -72,6 +73,16 @@ export interface PiSpawnConfig {
    * then receives the report format instructions.
    */
   followUp?: string;
+  /**
+   * persist the sub-agent's session to disk.
+   *
+   * when set, omits `--no-session` and passes `--session <path>` so the
+   * child creates a referenceable session file. the path is returned in
+   * `PiSpawnResult.sessionFile`.
+   *
+   * when unset (default), `--no-session` is used — in-memory only.
+   */
+  session?: string;
 }
 
 // --- helpers ---
@@ -202,9 +213,10 @@ export function processNdjsonLine(
 
 export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
   const useRpc = !!config.followUp;
+  const hasSession = !!config.session;
   const args: string[] = useRpc
-    ? ["--mode", "rpc", "--no-session"]
-    : ["--mode", "json", "-p", "--no-session"];
+    ? ["--mode", "rpc", ...(hasSession ? ["--session", config.session!] : ["--no-session"])]
+    : ["--mode", "json", "-p", ...(hasSession ? ["--session", config.session!] : ["--no-session"])];
 
   if (config.model) args.push("--model", config.model);
   if (config.builtinTools !== undefined) {
@@ -342,6 +354,9 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
       (result.stopReason === "end_turn" || result.stopReason === "stop")
     ) {
       result.exitCode = 0;
+    }
+    if (hasSession) {
+      result.sessionFile = config.session;
     }
     return result;
   } finally {
