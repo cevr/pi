@@ -1,0 +1,27 @@
+{
+  "name": "@cvr/pi-web-fetch",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "dependencies": {
+    "@cvr/pi-box-format": "workspace:*",
+    "@cvr/pi-config": "workspace:*",
+    "@cvr/pi-prompt-patch": "workspace:*",
+    "@cvr/pi-web-fetch-core": "workspace:*",
+    "@sinclair/typebox": "^0.34.0"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "catalog:",
+    "@mariozechner/pi-tui": "catalog:",
+    "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

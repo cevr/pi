@@ -238,7 +238,7 @@ export function createWebSearchTool(
     description:
       "Search the web for information relevant to a research objective.\n\n" +
       "Use when you need up-to-date or precise documentation. " +
-      "Use `read_web_page` to fetch full content from a specific URL.\n\n" +
+      "Use `web_fetch` to fetch full content from a specific URL.\n\n" +
       "# Examples\n\n" +
       "Get API documentation for a specific provider\n" +
       '```json\n{"objective":"I want to know the request fields for the Stripe billing create customer API. Prefer Stripe\'s docs site."}\n```\n\n' +

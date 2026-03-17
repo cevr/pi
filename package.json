@@ -91,6 +91,7 @@
       "./dist/extensions/task.js",
       "./dist/extensions/tool-harness.js",
       "./dist/extensions/undo-edit.js",
+      "./dist/extensions/web-fetch.js",
       "./dist/extensions/web-search.js"
     ]
   }
