@@ -5,9 +5,12 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { Effect, Layer, ManagedRuntime } from "effect";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
+import { PiSpawnService, zeroUsage, type PiSpawnConfig, type PiSpawnResult } from "@cvr/pi-spawn";
 import {
   createFinderExtension,
+  createFinderTool,
   CONFIG_DEFAULTS,
   DEFAULT_DEPS,
   FINDER_CONFIG_SCHEMA,
@@ -36,6 +39,32 @@ function createMockExtensionApiHarness() {
   } as unknown as ExtensionAPI;
 
   return { pi, tools, listeners };
+}
+
+function createRuntime(spawnImpl: (config: PiSpawnConfig) => PiSpawnResult) {
+  return ManagedRuntime.make(
+    Layer.succeed(PiSpawnService, {
+      spawn: (config: PiSpawnConfig) => Effect.succeed(spawnImpl(config)),
+    }),
+  );
+}
+
+function makeAssistantResult(text: string): PiSpawnResult {
+  return {
+    exitCode: 0,
+    messages: [{ role: "assistant", content: [{ type: "text", text }] } as any],
+    stderr: "",
+    usage: zeroUsage(),
+    stopReason: "stop",
+  };
+}
+
+function makeCtx(overrides: Record<string, unknown> = {}) {
+  return {
+    cwd: "/tmp",
+    sessionManager: { getSessionId: () => "session-1" },
+    ...overrides,
+  } as any;
 }
 
 afterEach(() => {
@@ -132,5 +161,59 @@ describe("finder extension", () => {
     );
     expect(withPromptPatchSpy).toHaveBeenCalledTimes(1);
     expect(harness.tools).toHaveLength(1);
+  });
+});
+
+describe("createFinderTool", () => {
+  it("rejects empty queries before spawning", async () => {
+    const runtime = createRuntime(() => {
+      throw new Error("should not spawn for empty queries");
+    });
+
+    try {
+      const tool = createFinderTool({}, runtime);
+      const result = await (tool as any).execute(
+        "call-1",
+        { query: "   " },
+        undefined,
+        undefined,
+        makeCtx(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toBe("Finder query must be non-empty.");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("trims the query and includes bash in default search tools", async () => {
+    const calls: PiSpawnConfig[] = [];
+    const runtime = createRuntime((config) => {
+      calls.push(config);
+      return makeAssistantResult("Found matches.");
+    });
+
+    try {
+      const tool = createFinderTool({}, runtime);
+      const result = await (tool as any).execute(
+        "call-1",
+        { query: "  find JWT validation  " },
+        undefined,
+        undefined,
+        makeCtx(),
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.task).toBe("find JWT validation");
+      expect(calls[0]!.builtinTools).toEqual(CONFIG_DEFAULTS.builtinTools);
+      expect(calls[0]!.extensionTools).toEqual(CONFIG_DEFAULTS.extensionTools);
+      expect(CONFIG_DEFAULTS.builtinTools).toContain("bash");
+      expect(CONFIG_DEFAULTS.extensionTools).toContain("bash");
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).toBe("Found matches.");
+    } finally {
+      await runtime.dispose();
+    }
   });
 });

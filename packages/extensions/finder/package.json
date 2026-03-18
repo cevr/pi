@@ -5,6 +5,7 @@
   "main": "./index.ts",
   "types": "./index.ts",
   "dependencies": {
+    "@cvr/pi-bash": "workspace:*",
     "@cvr/pi-config": "workspace:*",
     "@cvr/pi-glob": "workspace:*",
     "@cvr/pi-grep": "workspace:*",

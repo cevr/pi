@@ -6,8 +6,9 @@
  * finder(query: "...") instead of routing through the dispatcher.
  *
  * spawns `pi --mode json` with a compact model, constrained to
- * read-only tools (read, grep, find, ls, glob). the finder agent
- * maximizes parallelism (8+ tool calls per turn) and completes
+ * search-oriented tools (read, grep, find, ls, bash). bash is for
+ * read-only shell search like rg/eza/git grep, not mutation. the
+ * finder agent maximizes parallelism (8+ tool calls per turn) and completes
  * within ~3 turns.
  *
  * system prompt loaded from sops-decrypted prompts at init time.
@@ -43,8 +44,8 @@ type FinderExtensionDeps = {
 
 export const CONFIG_DEFAULTS: FinderExtConfig = {
   model: "openai-codex/gpt-5.4-mini",
-  extensionTools: ["read", "grep", "find", "ls"],
-  builtinTools: ["read", "grep", "find", "ls"],
+  extensionTools: ["read", "grep", "find", "ls", "bash"],
+  builtinTools: ["read", "grep", "find", "ls", "bash"],
   promptFile: "",
   promptString: "",
 };
@@ -88,6 +89,10 @@ interface FinderParams {
   query: string;
 }
 
+function normalizeFinderQuery(query: string): string {
+  return query.trim();
+}
+
 export function createFinderTool(
   config: FinderConfig = {},
   runtime: ManagedRuntime.ManagedRuntime<PiSpawnService, never>,
@@ -108,13 +113,15 @@ export function createFinderTool(
       "WHEN NOT TO USE THIS TOOL:\n" +
       "- When you know the exact file path - use Read directly\n" +
       "- When looking for specific symbols or exact strings - use Find or Grep\n" +
-      "- When you need to create, modify files, or run terminal commands\n\n" +
+      "- When you need to create or modify files\n" +
+      "- When you need general shell workflows instead of search-oriented commands\n\n" +
       "USAGE GUIDELINES:\n" +
       "1. Always spawn multiple search agents in parallel to maximise speed.\n" +
       "2. Formulate your query as a precise engineering request.\n" +
       "3. Name concrete artifacts, patterns, or APIs to narrow scope.\n" +
       "4. State explicit success criteria so the agent knows when to stop.\n" +
-      "5. Never issue vague or exploratory commands.",
+      "5. If you use bash, keep it read-only (rg, git grep, eza, pwd, etc.).\n" +
+      "6. Never issue vague or exploratory commands.",
 
     parameters: Type.Object({
       query: Type.String({
@@ -126,6 +133,20 @@ export function createFinderTool(
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const p = params as FinderParams;
+      const query = normalizeFinderQuery(p.query);
+
+      const singleResult: SingleResult = {
+        agent: "finder",
+        task: query || p.query,
+        exitCode: -1,
+        messages: [],
+        usage: zeroUsage(),
+      };
+
+      if (!query) {
+        return subAgentResult("Finder query must be non-empty.", singleResult, true);
+      }
+
       let sessionId = "";
       try {
         sessionId = ctx.sessionManager?.getSessionId?.() ?? "";
@@ -133,20 +154,12 @@ export function createFinderTool(
         /* graceful */
       }
 
-      const singleResult: SingleResult = {
-        agent: "finder",
-        task: p.query,
-        exitCode: -1,
-        messages: [],
-        usage: zeroUsage(),
-      };
-
       return runtime.runPromise(
         Effect.gen(function* () {
           const svc = yield* PiSpawnService;
           const result = yield* svc.spawn({
             cwd: ctx.cwd,
-            task: p.query,
+            task: query,
             model: config.model ?? CONFIG_DEFAULTS.model,
             builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
             extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
