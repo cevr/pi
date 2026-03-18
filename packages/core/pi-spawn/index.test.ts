@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Effect } from "effect";
+import { Effect, ManagedRuntime } from "effect";
 import {
   processNdjsonLine,
   zeroUsage,
@@ -15,6 +15,18 @@ import {
 
 function makeResult(): PiSpawnResult {
   return { exitCode: 0, messages: [], stderr: "", usage: zeroUsage() };
+}
+
+async function runWithPiSpawnLayer<A, E>(
+  effect: Effect.Effect<A, E, PiSpawnService>,
+  results?: Map<string, PiSpawnResult>,
+): Promise<A> {
+  const runtime = ManagedRuntime.make(PiSpawnService.layerTest(results));
+  try {
+    return await runtime.runPromise(effect);
+  } finally {
+    await runtime.dispose();
+  }
 }
 
 describe("processNdjsonLine", () => {
@@ -259,11 +271,11 @@ describe("readAgentPrompt", () => {
 
 describe("PiSpawnService (layerTest)", () => {
   it("returns default result when no map provided", async () => {
-    const result = await Effect.runPromise(
+    const result = await runWithPiSpawnLayer(
       Effect.gen(function* () {
         const svc = yield* PiSpawnService;
         return yield* svc.spawn({ cwd: "/tmp", task: "test" });
-      }).pipe(Effect.provide(PiSpawnService.layerTest())),
+      }),
     );
     expect(result.exitCode).toBe(0);
     expect(result.messages).toEqual([]);
@@ -279,11 +291,12 @@ describe("PiSpawnService (layerTest)", () => {
     };
     const results = new Map([["test-model", canned]]);
 
-    const result = await Effect.runPromise(
+    const result = await runWithPiSpawnLayer(
       Effect.gen(function* () {
         const svc = yield* PiSpawnService;
         return yield* svc.spawn({ cwd: "/tmp", task: "test", model: "test-model" });
-      }).pipe(Effect.provide(PiSpawnService.layerTest(results))),
+      }),
+      results,
     );
     expect(result.messages).toHaveLength(1);
     expect(result.model).toBe("test");
