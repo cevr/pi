@@ -1,8 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   DEFAULT_MAX_ITERATIONS,
-  hasExitPhrase,
-  hasIssuesFixed,
+  REVIEW_LOOP_RESULT_TOOL,
   reviewReducer,
   type PersistPayload,
   type ReviewEffect,
@@ -40,32 +39,16 @@ function hasEffect(effects: readonly Effect[] | undefined, type: string): boolea
   return effects?.some((e) => e.type === type) ?? false;
 }
 
-function getEffect<T extends Effect>(effects: readonly Effect[] | undefined, type: string): T | undefined {
+function getEffect<T extends Effect>(
+  effects: readonly Effect[] | undefined,
+  type: string,
+): T | undefined {
   return effects?.find((e) => e.type === type) as T | undefined;
 }
 
 function getPersistPayload(effects: readonly Effect[] | undefined): PersistPayload | undefined {
   return getEffect<ReviewEffect & { type: "persistState" }>(effects, "persistState")?.state;
 }
-
-// ---------------------------------------------------------------------------
-// Exit phrase detection
-// ---------------------------------------------------------------------------
-
-describe("exit/fix phrase detection", () => {
-  it("detects exit phrases", () => {
-    expect(hasExitPhrase("No issues found.")).toBe(true);
-    expect(hasExitPhrase("LGTM")).toBe(true);
-    expect(hasExitPhrase("All good!")).toBe(true);
-    expect(hasExitPhrase("random text")).toBe(false);
-  });
-
-  it("detects fix phrases", () => {
-    expect(hasIssuesFixed("I fixed the bug")).toBe(true);
-    expect(hasIssuesFixed("Addressed all concerns")).toBe(true);
-    expect(hasIssuesFixed("random text")).toBe(false);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // Start
@@ -125,31 +108,20 @@ describe("reviewReducer — Start", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AgentEnd
+// IterationResult
 // ---------------------------------------------------------------------------
 
-describe("reviewReducer — AgentEnd", () => {
-  it("exit phrase without fixed → Inactive (done)", () => {
-    const r = reviewReducer(reviewing(), { _tag: "AgentEnd", text: "No issues found." });
+describe("reviewReducer — IterationResult", () => {
+  it("done → Inactive", () => {
+    const r = reviewReducer(reviewing(), { _tag: "IterationResult", outcome: "done" });
     expect(r.state._tag).toBe("Inactive");
     expect(getEffect(r.effects, "notify")!).toMatchObject({
-      message: expect.stringContaining("no issues"),
+      message: expect.stringContaining("no further issues"),
     });
   });
 
-  it("exit phrase WITH fixed → continues loop", () => {
-    const r = reviewReducer(reviewing(0), {
-      _tag: "AgentEnd",
-      text: "Fixed the bug. No issues found.",
-    });
-    expect(r.state._tag).toBe("Reviewing");
-    if (r.state._tag === "Reviewing") {
-      expect(r.state.iteration).toBe(1);
-    }
-  });
-
-  it("no exit phrase → continues loop", () => {
-    const r = reviewReducer(reviewing(0), { _tag: "AgentEnd", text: "I made some changes." });
+  it("continue → advances loop", () => {
+    const r = reviewReducer(reviewing(0), { _tag: "IterationResult", outcome: "continue" });
     expect(r.state._tag).toBe("Reviewing");
     if (r.state._tag === "Reviewing") {
       expect(r.state.iteration).toBe(1);
@@ -159,24 +131,25 @@ describe("reviewReducer — AgentEnd", () => {
   });
 
   it("max iterations → Inactive", () => {
-    const r = reviewReducer(reviewing(4, 5), { _tag: "AgentEnd", text: "Still working" });
+    const r = reviewReducer(reviewing(4, 5), { _tag: "IterationResult", outcome: "continue" });
     expect(r.state._tag).toBe("Inactive");
     expect(getEffect(r.effects, "notify")!).toMatchObject({
       message: expect.stringContaining("max iterations"),
     });
   });
 
-  it("empty text → Inactive (aborted)", () => {
-    const r = reviewReducer(reviewing(), { _tag: "AgentEnd", text: "" });
+  it("missing tool signal → Inactive error", () => {
+    const r = reviewReducer(reviewing(), { _tag: "IterationSignalMissing" });
     expect(r.state._tag).toBe("Inactive");
     expect(getEffect(r.effects, "notify")!).toMatchObject({
-      message: expect.stringContaining("aborted"),
+      level: "error",
+      message: expect.stringContaining(REVIEW_LOOP_RESULT_TOOL),
     });
   });
 
-  it("Inactive + AgentEnd is no-op", () => {
+  it("Inactive + IterationResult is no-op", () => {
     const state = inactive();
-    const r = reviewReducer(state, { _tag: "AgentEnd", text: "whatever" });
+    const r = reviewReducer(state, { _tag: "IterationResult", outcome: "done" });
     expect(r.state).toBe(state);
   });
 });

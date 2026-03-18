@@ -15,42 +15,44 @@ What are you doing?
 
 ## Topic Index
 
-| Topic | Section | When to Read |
-|---|---|---|
-| Custom extensions vs runtime | `§1 Repo Shape` | Starting work in this repo |
-| Local runtime fork | `§2 Local Runtime Fork` | API/runtime bugs, session control, handoff crashes |
-| Bun global link weirdness | `§3 Global Install Gotchas` | `pi` missing, relinking, global install drift |
-| Verification commands | `§4 Verification` | Before handoff, after runtime changes |
-| Common pitfalls | `§5 Gotchas` | If behavior or git state smells wrong |
+| Topic                        | Section                     | When to Read                                       |
+| ---------------------------- | --------------------------- | -------------------------------------------------- |
+| Custom extensions vs runtime | `§1 Repo Shape`             | Starting work in this repo                         |
+| Local runtime fork           | `§2 Local Runtime Fork`     | API/runtime bugs, session control, handoff crashes |
+| Bun global link weirdness    | `§3 Global Install Gotchas` | `pi` missing, relinking, global install drift      |
+| Verification commands        | `§4 Verification`           | Before handoff, after runtime changes              |
+| Common pitfalls              | `§5 Gotchas`                | If behavior or git state smells wrong              |
 
 ## 1. Repo Shape
 
 What lives here vs what belongs in the fork.
 
 ### When to Use
+
 - Working in `packages/extensions/*`
 - Changing custom tools, slash commands, prompts, or extension behavior
 - Building/testing the custom extension bundle
 
 ### Quick Reference
 
-| Area | Path | When to Read |
-|---|---|---|
-| Custom extensions | `~/Developer/personal/dotfiles/pi/packages/extensions/` | Most feature work |
-| Core helpers | `~/Developer/personal/dotfiles/pi/packages/core/` | Shared utilities |
-| Build entry | `~/Developer/personal/dotfiles/pi/package.json` | Build/test scripts |
-| Runtime fork | `~/Developer/personal/pi-mono` | Upstream runtime or API changes |
+| Area              | Path                                                    | When to Read                    |
+| ----------------- | ------------------------------------------------------- | ------------------------------- |
+| Custom extensions | `~/Developer/personal/dotfiles/pi/packages/extensions/` | Most feature work               |
+| Core helpers      | `~/Developer/personal/dotfiles/pi/packages/core/`       | Shared utilities                |
+| Build entry       | `~/Developer/personal/dotfiles/pi/package.json`         | Build/test scripts              |
+| Runtime fork      | `~/Developer/personal/pi-mono`                          | Upstream runtime or API changes |
 
 ### Commands
 
-| Task | Command |
-|---|---|
-| Build extensions | `bun run build` |
-| Test all | `bun test` |
-| Test one file | `bun test "packages/extensions/handoff/machine.test.ts"` |
-| Full gate | `bun run gate` |
+| Task             | Command                                                  |
+| ---------------- | -------------------------------------------------------- |
+| Build extensions | `bun run build`                                          |
+| Test all         | `bun test`                                               |
+| Test one file    | `bun test "packages/extensions/handoff/machine.test.ts"` |
+| Full gate        | `bun run gate`                                           |
 
 ### Gotchas
+
 - If the change needs a new runtime API surface, this repo is the wrong place.
 - Do not patch over missing runtime behavior in extension code unless it is clearly temporary and documented.
 
@@ -59,39 +61,45 @@ What lives here vs what belongs in the fork.
 Why the fork exists and when to leave this repo for runtime work.
 
 ### When to Use
+
 - Extension code needs runtime APIs not exposed upstream yet
 - Anything involving `ExtensionContext`, session switching, or runtime internals
 - Handoff/counsel/runtime bugs that reproduce in the CLI, not just this repo
 
 ### Quick Reference
 
-| Item | Value |
-|---|---|
-| Fork repo | `~/Developer/personal/pi-mono` |
-| Remote | `git@github.com:cevr/pi-mono.git` |
-| Upstream source | `badlogic/pi-mono` |
-| Linked package | `@mariozechner/pi-coding-agent` |
+| Item            | Value                             |
+| --------------- | --------------------------------- |
+| Fork repo       | `~/Developer/personal/pi-mono`    |
+| Remote          | `git@github.com:cevr/pi-mono.git` |
+| Upstream source | `badlogic/pi-mono`                |
+| Linked package  | `@mariozechner/pi-coding-agent`   |
 
 ### Patterns / Examples
+
 - `dotfiles/pi` = custom extension logic
 - `pi-mono` = runtime surfaces, extension context APIs, mode wiring
 
 BAD:
+
 - leave a permanent extension-side workaround for a missing runtime API
 - add repo-specific hacks to the fork for custom extension behavior
 
 GOOD:
+
 - patch the runtime surface once in `pi-mono`
 - remove the workaround in `dotfiles/pi`
 - keep the fork diff minimal and upstreamable
 
 ### Why this fork exists
+
 - `handoff` needed `ctx.newSession()` from normal `ExtensionContext`
 - upstream exposed `newSession()` only on `ExtensionCommandContext`
 - auto-triggered handoff paths use plain `ExtensionContext`
 - result was a runtime crash: `ctx.newSession is not a function`
 
 ### Files touched by the `newSession` fix
+
 - `~/Developer/personal/pi-mono/packages/coding-agent/src/core/extensions/types.ts`
 - `~/Developer/personal/pi-mono/packages/coding-agent/src/core/extensions/runner.ts`
 - `~/Developer/personal/pi-mono/packages/coding-agent/src/core/agent-session.ts`
@@ -99,6 +107,7 @@ GOOD:
 - `~/Developer/personal/pi-mono/packages/coding-agent/test/extensions-runner.test.ts`
 
 ### Gotchas
+
 - Type surface changes often require matching test scaffold updates.
 - Manual `ExtensionContext` object literals are easy to miss when widening the interface.
 - `npm run build` may regenerate unrelated `packages/ai/src/models.generated.ts`; inspect before committing.
@@ -108,30 +117,35 @@ GOOD:
 How to relink the local runtime without trusting Bun more than it deserves.
 
 ### When to Use
+
 - Rebuilding or relinking the local runtime
 - `pi` suddenly disappears from `$PATH`
 - Bun says a package is linked, but reality disagrees
 
 ### Quick Reference
 
-| Check | Expected |
-|---|---|
-| `which pi` | `/Users/cvr/.bun/bin/pi` |
-| `pi --version` | prints a version, not an error |
+| Check               | Expected                                                                                                                                |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `which pi`          | `/Users/cvr/.bun/bin/pi`                                                                                                                |
+| `pi --version`      | prints a version, not an error                                                                                                          |
 | global package path | `~/.bun/install/global/node_modules/@mariozechner/pi-coding-agent` is a symlink to `~/Developer/personal/pi-mono/packages/coding-agent` |
 
 ### Patterns / Examples
+
 Preferred relink flow:
+
 1. Build fork first: `npm run build` in `~/Developer/personal/pi-mono`
 2. Register package: `bun link` in `~/Developer/personal/pi-mono/packages/coding-agent`
 3. Try Bun global link if you want
 4. Verify with `which pi` and `pi --version`
 
 BAD:
+
 - trust `bun pm ls -g` as the source of truth
 - assume Bun global metadata is correct because the command succeeded
 
 GOOD:
+
 - trust the symlink target plus a working `pi` binary
 - verify with `which pi` and `pi --version`
 
@@ -154,6 +168,7 @@ Optional metadata repair in `~/.bun/install/global/package.json`:
 ```
 
 ### Gotchas
+
 - `bun link @mariozechner/pi-coding-agent --global` may fail with `FileNotFound: failed linking dependency/workspace to node_modules`.
 - In that failure mode, `~/.bun/bin/pi` may still exist while its target package link is missing or broken.
 - If `which pi` fails or `pi` stops launching, inspect both links:
@@ -167,21 +182,23 @@ Optional metadata repair in `~/.bun/install/global/package.json`:
 What to run before claiming the fork or extension repo is healthy.
 
 ### When to Use
+
 - After runtime fork edits
 - After handoff/session control changes
 - Before saying the local fork is healthy
 
 ### Quick Reference
 
-| Area | Command |
-|---|---|
-| Fork checks | `npm run check` |
-| Fork build | `npm run build` |
-| Handoff test | `bun test "packages/extensions/handoff/machine.test.ts"` |
-| Extension build | `bun run build` |
-| Binary sanity | `which pi` + `pi --version` |
+| Area            | Command                                                  |
+| --------------- | -------------------------------------------------------- |
+| Fork checks     | `npm run check`                                          |
+| Fork build      | `npm run build`                                          |
+| Handoff test    | `bun test "packages/extensions/handoff/machine.test.ts"` |
+| Extension build | `bun run build`                                          |
+| Binary sanity   | `which pi` + `pi --version`                              |
 
 ### Patterns / Examples
+
 Runtime fork, in `~/Developer/personal/pi-mono`:
 
 ```bash
@@ -197,40 +214,74 @@ bun run build
 ```
 
 End-to-end sanity:
+
 - `which pi`
 - `pi --version`
 - manually exercise `/handoff <goal>` if the change touched session switching
 
 ### Gotchas
+
 - A successful build is not enough if `pi` no longer resolves from `$PATH`.
 - Runtime changes that touch session switching deserve a manual `/handoff` sanity pass.
 
 ## 5. Gotchas
 
 ### 5.1 Runtime vs extension bug
+
 If the bug only reproduces inside the actual `pi` process, suspect the fork/runtime boundary first.
 
 ### 5.2 Do not paper over runtime API gaps in the extension repo
+
 BAD:
+
 - staging editor state
 - fallback-only behavior kept forever
 - extension-side type guards around runtime omissions that should be fixed upstream/in fork
 
 GOOD:
+
 - patch runtime surface once
 - remove workaround from extension code
 - keep extension flow simple
 
 ### 5.3 Build noise in the fork
+
 `npm run build` in `pi-mono` may regenerate:
+
 - `~/Developer/personal/pi-mono/packages/ai/src/models.generated.ts`
 
 That file is often unrelated noise. Inspect before committing.
 
 ### 5.4 Commit hygiene
+
 - Fork commits: runtime/API only
 - `dotfiles/pi` commits: custom extension behavior only
 - Do not mix the two unless there is a very good reason
 
 ### 5.5 Existing unrelated changes
+
 This repo often has parallel work in flight. Check `git status` before edits. Do not sweep unrelated diffs into a “quick docs” commit.
+
+### 5.6 Signal tools over prose markers
+
+If an extension state machine needs to know that the agent is done, approved, skipped, passed gate, failed gate, or produced structured results, prefer a typed `pi.registerTool(...)` signal over scraping assistant prose.
+
+BAD:
+
+- regexing assistant text for markers like `AUDIT_COMPLETE`, `FINDING_FIXED`, `SESSION_COMPLETE`, `LGTM`
+- scraping JSON blocks from assistant prose to drive transitions
+- treating narration as the source of truth for control flow
+
+GOOD:
+
+- register a typed signal tool and have the agent call it explicitly
+- validate tool usage against current machine state in `execute`
+- on `agent_end`, fail closed when the expected tool signal was not called
+- for spawned subagents, parse tool calls from the child transcript rather than inventing prose markers
+
+Current prior art:
+
+- `packages/extensions/audit/` — detection, synthesis, fix, gate, counsel, and spawned concern completion all use signal tools
+- `packages/extensions/review-loop/` — iteration outcome uses `review_loop_result`
+- `packages/extensions/session-closer/` — wrap-up completion uses `session_closer_complete`
+- `packages/extensions/modes/` — execution/spec flow uses `modes_*` signal tools; keep it that way and delete legacy prose parsers instead of reviving them

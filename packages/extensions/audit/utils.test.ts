@@ -1,126 +1,136 @@
 import { describe, expect, it } from "bun:test";
-import { parseConcernsJson, parseFindingsJson, PHASE_MARKERS } from "./utils";
+import type { AssistantMessage, Message, ToolResultMessage } from "@mariozechner/pi-ai";
+import {
+  AUDIT_SIGNAL_TOOLS,
+  hasToolCall,
+  parseConcernCompletion,
+  parseCounselResult,
+  parseFindingResult,
+  parseGateResult,
+  parseSynthesisComplete,
+} from "./utils";
 
-describe("parseConcernsJson", () => {
-  it("parses fenced JSON block", () => {
-    const text = `Here are the concerns:
-\`\`\`json
-{"concerns": [{"name": "correctness", "description": "Bug audit", "skills": ["code-review"]}]}
-\`\`\`
-CONCERNS_DETECTED`;
-    const result = parseConcernsJson(text);
-    expect(result).toEqual([
-      { name: "correctness", description: "Bug audit", skills: ["code-review"] },
-    ]);
+function assistantMessage(...content: AssistantMessage["content"]): Message {
+  return { role: "assistant", content } as AssistantMessage;
+}
+
+function toolResult(toolCallId: string, isError = false): Message {
+  return {
+    role: "toolResult",
+    toolCallId,
+    isError,
+    content: [{ type: "text", text: isError ? "error" : "ok" }],
+  } as ToolResultMessage;
+}
+
+describe("audit transcript signal parsing", () => {
+  it("detects concern completion tool calls", () => {
+    const messages: Message[] = [
+      assistantMessage({ type: "text", text: "Concern notes" }, {
+        type: "toolCall",
+        id: "tc-1",
+        name: AUDIT_SIGNAL_TOOLS.concernComplete,
+        arguments: {},
+      } as any),
+      toolResult("tc-1"),
+    ];
+
+    expect(hasToolCall(messages, AUDIT_SIGNAL_TOOLS.concernComplete)).toBe(true);
+    expect(parseConcernCompletion(messages)).toBe(true);
   });
 
-  it("parses bare JSON", () => {
-    const text = `I found these: {"concerns": [{"name": "frontend", "description": "React patterns", "skills": []}]} CONCERNS_DETECTED`;
-    const result = parseConcernsJson(text);
-    expect(result).toEqual([{ name: "frontend", description: "React patterns", skills: [] }]);
-  });
+  it("parses synthesis findings from the typed tool call", () => {
+    const messages: Message[] = [
+      assistantMessage({ type: "text", text: "Audit report" }, {
+        type: "toolCall",
+        id: "tc-2",
+        name: AUDIT_SIGNAL_TOOLS.synthesisComplete,
+        arguments: {
+          findings: [
+            { file: "src/app.tsx", description: "Missing null check", severity: "critical" },
+          ],
+        },
+      } as any),
+      toolResult("tc-2"),
+    ];
 
-  it("returns null for no JSON found", () => {
-    expect(parseConcernsJson("just some text CONCERNS_DETECTED")).toBeNull();
-  });
-
-  it("returns null for malformed JSON", () => {
-    const text = '```json\n{"concerns": [invalid]}\n```\nCONCERNS_DETECTED';
-    expect(parseConcernsJson(text)).toBeNull();
-  });
-
-  it("returns empty array for empty concerns list", () => {
-    const text = '```json\n{"concerns": []}\n```\nCONCERNS_DETECTED';
-    expect(parseConcernsJson(text)).toEqual([]);
-  });
-
-  it("filters out entries with missing name/description", () => {
-    const text = `\`\`\`json
-{"concerns": [
-  {"name": "valid", "description": "ok", "skills": ["a"]},
-  {"name": "no-desc"},
-  {"description": "no-name"},
-  {"name": "also-valid", "description": "yep"}
-]}
-\`\`\``;
-    const result = parseConcernsJson(text);
-    expect(result).toEqual([
-      { name: "valid", description: "ok", skills: ["a"] },
-      { name: "also-valid", description: "yep", skills: [] },
-    ]);
-  });
-
-  it("handles missing skills field gracefully", () => {
-    const text = '```json\n{"concerns": [{"name": "x", "description": "y"}]}\n```';
-    const result = parseConcernsJson(text);
-    expect(result).toEqual([{ name: "x", description: "y", skills: [] }]);
-  });
-
-  it("filters non-string skills", () => {
-    const text =
-      '```json\n{"concerns": [{"name": "x", "description": "y", "skills": ["a", 123, "b"]}]}\n```';
-    const result = parseConcernsJson(text);
-    expect(result?.[0]?.skills).toEqual(["a", "b"]);
-  });
-});
-
-describe("parseFindingsJson", () => {
-  it("parses fenced JSON block", () => {
-    const text = `Here are the findings:
-\`\`\`json
-{"findings": [{"file": "src/app.tsx", "description": "Missing null check", "severity": "critical"}]}
-\`\`\`
-AUDIT_COMPLETE`;
-    const result = parseFindingsJson(text);
-    expect(result).toEqual([
+    expect(parseSynthesisComplete(messages)).toEqual([
       { file: "src/app.tsx", description: "Missing null check", severity: "critical" },
     ]);
   });
 
-  it("parses bare JSON", () => {
-    const text = `Found: {"findings": [{"file": "a.ts", "description": "unused import", "severity": "warning"}]} AUDIT_COMPLETE`;
-    const result = parseFindingsJson(text);
-    expect(result).toEqual([{ file: "a.ts", description: "unused import", severity: "warning" }]);
+  it("defaults invalid synthesis severities to warning", () => {
+    const messages: Message[] = [
+      assistantMessage({
+        type: "toolCall",
+        id: "tc-3",
+        name: AUDIT_SIGNAL_TOOLS.synthesisComplete,
+        arguments: { findings: [{ file: "a.ts", description: "x", severity: "invalid" }] },
+      } as any),
+      toolResult("tc-3"),
+    ];
+
+    expect(parseSynthesisComplete(messages)?.[0]?.severity).toBe("warning");
   });
 
-  it("returns null for no JSON found", () => {
-    expect(parseFindingsJson("just text AUDIT_COMPLETE")).toBeNull();
+  it("returns null for malformed synthesis payloads", () => {
+    const messages: Message[] = [
+      assistantMessage({
+        type: "toolCall",
+        id: "tc-4",
+        name: AUDIT_SIGNAL_TOOLS.synthesisComplete,
+        arguments: { findings: [{ file: "a.ts" }] },
+      } as any),
+      toolResult("tc-4"),
+    ];
+
+    expect(parseSynthesisComplete(messages)).toBeNull();
   });
 
-  it("returns empty array for empty findings", () => {
-    const text = '```json\n{"findings": []}\n```\nAUDIT_COMPLETE';
-    expect(parseFindingsJson(text)).toEqual([]);
+  it("parses finding, gate, and counsel outcomes", () => {
+    const messages: Message[] = [
+      assistantMessage(
+        {
+          type: "toolCall",
+          id: "tc-5",
+          name: AUDIT_SIGNAL_TOOLS.findingResult,
+          arguments: { outcome: "skip" },
+        } as any,
+        {
+          type: "toolCall",
+          id: "tc-6",
+          name: AUDIT_SIGNAL_TOOLS.fixGateResult,
+          arguments: { status: "pass" },
+        } as any,
+        {
+          type: "toolCall",
+          id: "tc-7",
+          name: AUDIT_SIGNAL_TOOLS.fixCounselResult,
+          arguments: { status: "fail" },
+        } as any,
+      ),
+      toolResult("tc-5"),
+      toolResult("tc-6"),
+      toolResult("tc-7"),
+    ];
+
+    expect(parseFindingResult(messages)).toBe("skip");
+    expect(parseGateResult(messages)).toBe("pass");
+    expect(parseCounselResult(messages)).toBe("fail");
   });
 
-  it("defaults severity to warning for invalid values", () => {
-    const text =
-      '```json\n{"findings": [{"file": "a.ts", "description": "x", "severity": "invalid"}]}\n```';
-    const result = parseFindingsJson(text);
-    expect(result?.[0]?.severity).toBe("warning");
-  });
+  it("ignores tool calls whose result errored", () => {
+    const messages: Message[] = [
+      assistantMessage({
+        type: "toolCall",
+        id: "tc-8",
+        name: AUDIT_SIGNAL_TOOLS.findingResult,
+        arguments: { outcome: "fixed" },
+      } as any),
+      toolResult("tc-8", true),
+    ];
 
-  it("defaults severity to warning when missing", () => {
-    const text = '```json\n{"findings": [{"file": "a.ts", "description": "x"}]}\n```';
-    const result = parseFindingsJson(text);
-    expect(result?.[0]?.severity).toBe("warning");
-  });
-});
-
-describe("PHASE_MARKERS", () => {
-  it("detects phase markers case-insensitively", () => {
-    expect(PHASE_MARKERS.detecting.test("CONCERNS_DETECTED")).toBe(true);
-    expect(PHASE_MARKERS.detecting.test("concerns_detected")).toBe(true);
-    expect(PHASE_MARKERS.auditing.test("CONCERN_AUDITED")).toBe(true);
-    expect(PHASE_MARKERS.synthesizing.test("AUDIT_COMPLETE")).toBe(true);
-    expect(PHASE_MARKERS.findingFixed.test("FINDING_FIXED")).toBe(true);
-    expect(PHASE_MARKERS.findingSkip.test("FINDING_SKIP")).toBe(true);
-    expect(PHASE_MARKERS.fixGatePass.test("FIX_GATE_PASS")).toBe(true);
-    expect(PHASE_MARKERS.fixGateFail.test("FIX_GATE_FAIL")).toBe(true);
-    expect(PHASE_MARKERS.fixCounselPass.test("FIX_COUNSEL_PASS")).toBe(true);
-    expect(PHASE_MARKERS.fixCounselFail.test("FIX_COUNSEL_FAIL")).toBe(true);
-  });
-
-  it("does not match unrelated text", () => {
-    expect(PHASE_MARKERS.detecting.test("no match here")).toBe(false);
+    expect(hasToolCall(messages, AUDIT_SIGNAL_TOOLS.findingResult)).toBe(false);
+    expect(parseFindingResult(messages)).toBeNull();
   });
 });

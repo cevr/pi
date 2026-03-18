@@ -3,13 +3,16 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import reviewLoopExtension from "./index";
 
 function createMockExtensionApiHarness() {
+  const tools: Array<{ name: string; tool: any }> = [];
   const commands: Array<{ name: string; command: any }> = [];
   const listeners: Array<{ event: string; handler: Function }> = [];
   const appendedEntries: Array<{ customType: string; data: unknown }> = [];
   const sessionEntries: unknown[] = [];
 
   const pi = {
-    registerTool() {},
+    registerTool(tool: any) {
+      tools.push({ name: tool.name, tool });
+    },
     registerCommand(name: string, command: any) {
       commands.push({ name, command });
     },
@@ -25,6 +28,7 @@ function createMockExtensionApiHarness() {
 
   return {
     pi,
+    tools,
     commands,
     listeners,
     appendedEntries,
@@ -74,12 +78,10 @@ describe("review-loop extension", () => {
     expect(events).toContain("session_start");
   });
 
-  it("does not register any tools (review loop is commands only)", () => {
+  it("registers the review loop result tool", () => {
     const h = createMockExtensionApiHarness();
-    const tools: unknown[] = [];
-    (h.pi as any).registerTool = (tool: unknown) => tools.push(tool);
     reviewLoopExtension(h.pi);
-    expect(tools).toHaveLength(0);
+    expect(h.tools.map((tool) => tool.name)).toEqual(["review_loop_result"]);
   });
 
   it("restores persisted Reviewing state on session start", () => {

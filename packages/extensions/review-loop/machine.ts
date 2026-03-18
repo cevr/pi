@@ -12,35 +12,14 @@ import type { BuiltinEffect, Reducer, TransitionResult } from "@cvr/pi-state-mac
 
 export const DEFAULT_MAX_ITERATIONS = 5;
 
+export const REVIEW_LOOP_RESULT_TOOL = "review_loop_result" as const;
+
 export const DEFAULT_REVIEW_PROMPT = `Review your changes. Use the counsel tool to get a cross-vendor second opinion.
-Address any issues counsel raises. If counsel approves or you're confident the changes are correct, say "No issues found."`;
-
-export const EXIT_PATTERNS = [
-  /no issues found/i,
-  /no bugs found/i,
-  /no problems found/i,
-  /looks good/i,
-  /lgtm/i,
-  /all good/i,
-  /changes are correct/i,
-  /approved/i,
-];
-
-export const ISSUES_FIXED_PATTERNS = [
-  /fixed/i,
-  /addressed/i,
-  /resolved/i,
-  /corrected/i,
-  /updated/i,
-];
-
-export function hasExitPhrase(text: string): boolean {
-  return EXIT_PATTERNS.some((p) => p.test(text));
-}
-
-export function hasIssuesFixed(text: string): boolean {
-  return ISSUES_FIXED_PATTERNS.some((p) => p.test(text));
-}
+Address any issues counsel raises.
+When this review iteration is complete, call ${REVIEW_LOOP_RESULT_TOOL} with:
+- outcome: "done" if there are no further issues
+- outcome: "continue" if another review iteration is needed
+Do not use prose markers as control signals.`;
 
 // ---------------------------------------------------------------------------
 // State
@@ -72,7 +51,8 @@ export type ReviewEvent =
       diffStat: string;
       targetPaths: string[];
     }
-  | { _tag: "AgentEnd"; text: string }
+  | { _tag: "IterationResult"; outcome: "done" | "continue" }
+  | { _tag: "IterationSignalMissing" }
   | { _tag: "UserInterrupt" }
   | { _tag: "Exit" }
   | { _tag: "SetMax"; max: number }
@@ -122,7 +102,9 @@ function buildScopePrompt(state: Extract<ReviewState, { _tag: "Reviewing" }>): s
 }
 
 export function getReviewStatusText(state: ReviewState): string | undefined {
-  return state._tag === "Reviewing" ? `🔄 review ${state.iteration + 1}/${state.maxIterations}` : undefined;
+  return state._tag === "Reviewing"
+    ? `🔄 review ${state.iteration + 1}/${state.maxIterations}`
+    : undefined;
 }
 
 function persist(state: ReviewState): ReviewEffect {
@@ -154,7 +136,10 @@ function persist(state: ReviewState): ReviewEffect {
 // Reducer
 // ---------------------------------------------------------------------------
 
-export const reviewReducer: Reducer<ReviewState, ReviewEvent, ReviewEffect> = (state, event): Result => {
+export const reviewReducer: Reducer<ReviewState, ReviewEvent, ReviewEffect> = (
+  state,
+  event,
+): Result => {
   switch (event._tag) {
     // ----- Start -----
     case "Start": {
@@ -184,40 +169,22 @@ export const reviewReducer: Reducer<ReviewState, ReviewEvent, ReviewEffect> = (s
       };
     }
 
-    // ----- AgentEnd -----
-    case "AgentEnd": {
+    // ----- IterationResult -----
+    case "IterationResult": {
       if (state._tag !== "Reviewing") return { state };
 
-      // Empty/aborted
-      if (!event.text.trim()) {
+      if (event.outcome === "done") {
         const next: ReviewState = { _tag: "Inactive", maxIterations: state.maxIterations };
         return {
           state: next,
           effects: [
-            { type: "notify", message: "Review mode ended: aborted", level: "info" },
+            { type: "notify", message: "Review mode ended: no further issues", level: "info" },
             { type: "setStatus", key: "review-loop" },
             persist(next),
           ],
         };
       }
 
-      const exit = hasExitPhrase(event.text);
-      const fixed = hasIssuesFixed(event.text);
-
-      // Clean exit: "no issues" without "fixed"
-      if (exit && !fixed) {
-        const next: ReviewState = { _tag: "Inactive", maxIterations: state.maxIterations };
-        return {
-          state: next,
-          effects: [
-            { type: "notify", message: "Review mode ended: no issues found", level: "info" },
-            { type: "setStatus", key: "review-loop" },
-            persist(next),
-          ],
-        };
-      }
-
-      // Continue loop
       const nextIteration = state.iteration + 1;
       if (nextIteration >= state.maxIterations) {
         const next: ReviewState = { _tag: "Inactive", maxIterations: state.maxIterations };
@@ -249,6 +216,24 @@ export const reviewReducer: Reducer<ReviewState, ReviewEvent, ReviewEffect> = (s
             content: buildFullPrompt(next),
             deliverAs: "followUp",
           },
+          persist(next),
+        ],
+      };
+    }
+
+    // ----- IterationSignalMissing -----
+    case "IterationSignalMissing": {
+      if (state._tag !== "Reviewing") return { state };
+      const next: ReviewState = { _tag: "Inactive", maxIterations: state.maxIterations };
+      return {
+        state: next,
+        effects: [
+          {
+            type: "notify",
+            message: `Review mode ended: ${REVIEW_LOOP_RESULT_TOOL} was not called`,
+            level: "error",
+          },
+          { type: "setStatus", key: "review-loop" },
           persist(next),
         ],
       };
@@ -301,7 +286,8 @@ export const reviewReducer: Reducer<ReviewState, ReviewEvent, ReviewEffect> = (s
         const next: ReviewState = {
           _tag: "Reviewing",
           maxIterations,
-          iteration: typeof event.iteration === "number" && event.iteration >= 0 ? event.iteration : 0,
+          iteration:
+            typeof event.iteration === "number" && event.iteration >= 0 ? event.iteration : 0,
           userPrompt: event.userPrompt ?? "",
           scope: event.scope,
           diffStat: event.diffStat ?? "",

@@ -1,118 +1,85 @@
 /**
- * Audit utilities — concern/findings JSON parsing from agent output.
+ * Audit utilities — typed signal names + transcript helpers.
  */
 
-import type { AuditConcern, AuditFinding } from "./machine";
+import type { Message } from "@mariozechner/pi-ai";
+import { getDisplayItems } from "@cvr/pi-sub-agent-render";
+import type { AuditFinding } from "./machine";
 
-/**
- * Extract concerns JSON from agent text output.
- *
- * Returns:
- * - `AuditConcern[]` on success (may be empty if agent found no concerns)
- * - `null` if the JSON block is present but malformed (→ DetectionFailed)
- *
- * Looks for ```json { ... } ``` fenced blocks first, then bare JSON.
- */
-export function parseConcernsJson(text: string): AuditConcern[] | null {
-  const fenced = text.match(/```json\s*(\{[\s\S]*?\})\s*```/);
-  const raw = fenced?.[1] ?? extractBareJson(text, '{"concerns"');
+export const AUDIT_SIGNAL_TOOLS = {
+  detectConcerns: "audit_detected_concerns",
+  concernComplete: "audit_concern_complete",
+  synthesisComplete: "audit_synthesis_complete",
+  findingResult: "audit_finding_result",
+  fixGateResult: "audit_fix_gate_result",
+  fixCounselResult: "audit_fix_counsel_result",
+} as const;
 
-  if (!raw) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-
-  if (!parsed || typeof parsed !== "object" || !("concerns" in parsed)) return null;
-  const concerns = (parsed as { concerns: unknown }).concerns;
-  if (!Array.isArray(concerns)) return null;
-
-  return concerns
-    .filter(
-      (c: unknown): c is { name: string; description: string; skills?: unknown } =>
-        typeof c === "object" &&
-        c !== null &&
-        typeof (c as any).name === "string" &&
-        typeof (c as any).description === "string",
-    )
-    .map((c) => ({
-      name: c.name,
-      description: c.description,
-      skills: Array.isArray(c.skills) ? c.skills.filter((s: unknown) => typeof s === "string") : [],
-    }));
+function getLastToolCallArgs(
+  messages: readonly Message[],
+  toolName: string,
+): Record<string, unknown> | null {
+  const toolCalls = getDisplayItems([...messages]).filter(
+    (item): item is Extract<ReturnType<typeof getDisplayItems>[number], { type: "toolCall" }> =>
+      item.type === "toolCall" && item.name === toolName && !item.isError,
+  );
+  return toolCalls.at(-1)?.args ?? null;
 }
 
-/**
- * Extract findings JSON from synthesis output.
- *
- * Returns:
- * - `AuditFinding[]` on success (may be empty)
- * - `null` if no parseable findings block found
- */
-export function parseFindingsJson(text: string): AuditFinding[] | null {
-  const fenced = text.match(/```json\s*(\{[\s\S]*?\})\s*```/);
-  const raw = fenced?.[1] ?? extractBareJson(text, '{"findings"');
+export function hasToolCall(messages: readonly Message[], toolName: string): boolean {
+  return getLastToolCallArgs(messages, toolName) !== null;
+}
 
-  if (!raw) return null;
+export function parseConcernCompletion(messages: readonly Message[]): boolean {
+  return hasToolCall(messages, AUDIT_SIGNAL_TOOLS.concernComplete);
+}
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
+export function parseSynthesisComplete(messages: readonly Message[]): AuditFinding[] | null {
+  const args = getLastToolCallArgs(messages, AUDIT_SIGNAL_TOOLS.synthesisComplete);
+  if (!args) return null;
+  return normalizeFindings(args.findings);
+}
 
-  if (!parsed || typeof parsed !== "object" || !("findings" in parsed)) return null;
-  const findings = (parsed as { findings: unknown }).findings;
-  if (!Array.isArray(findings)) return null;
+export function parseFindingResult(messages: readonly Message[]): "fixed" | "skip" | null {
+  const args = getLastToolCallArgs(messages, AUDIT_SIGNAL_TOOLS.findingResult);
+  return args?.outcome === "fixed" || args?.outcome === "skip" ? args.outcome : null;
+}
+
+export function parseGateResult(messages: readonly Message[]): "pass" | "fail" | null {
+  const args = getLastToolCallArgs(messages, AUDIT_SIGNAL_TOOLS.fixGateResult);
+  return args?.status === "pass" || args?.status === "fail" ? args.status : null;
+}
+
+export function parseCounselResult(messages: readonly Message[]): "pass" | "fail" | null {
+  const args = getLastToolCallArgs(messages, AUDIT_SIGNAL_TOOLS.fixCounselResult);
+  return args?.status === "pass" || args?.status === "fail" ? args.status : null;
+}
+
+function normalizeFindings(value: unknown): AuditFinding[] | null {
+  if (!Array.isArray(value)) return null;
 
   const validSeverities = new Set(["critical", "warning", "suggestion"]);
+  const findings: AuditFinding[] = [];
 
-  return findings
-    .filter(
-      (f: unknown): f is { file: string; description: string; severity?: string } =>
-        typeof f === "object" &&
-        f !== null &&
-        typeof (f as any).file === "string" &&
-        typeof (f as any).description === "string",
-    )
-    .map((f) => ({
-      file: f.file,
-      description: f.description,
-      severity: (validSeverities.has(f.severity ?? "")
-        ? f.severity
-        : "warning") as AuditFinding["severity"],
-    }));
-}
-
-/** Extract bare JSON by finding a key prefix and matching braces. */
-function extractBareJson(text: string, prefix: string): string | null {
-  const start = text.indexOf(prefix);
-  if (start === -1) return null;
-
-  let depth = 0;
-  for (let i = start; i < text.length; i++) {
-    if (text[i] === "{") depth++;
-    else if (text[i] === "}") {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
+  for (const finding of value) {
+    if (
+      typeof finding !== "object" ||
+      finding === null ||
+      typeof (finding as { file?: unknown }).file !== "string" ||
+      typeof (finding as { description?: unknown }).description !== "string"
+    ) {
+      return null;
     }
-  }
-  return null;
-}
 
-/** Phase exit marker patterns. */
-export const PHASE_MARKERS = {
-  detecting: /CONCERNS_DETECTED/i,
-  auditing: /CONCERN_AUDITED/i,
-  synthesizing: /AUDIT_COMPLETE/i,
-  findingFixed: /FINDING_FIXED/i,
-  findingSkip: /FINDING_SKIP/i,
-  fixGatePass: /FIX_GATE_PASS/i,
-  fixGateFail: /FIX_GATE_FAIL/i,
-  fixCounselPass: /FIX_COUNSEL_PASS/i,
-  fixCounselFail: /FIX_COUNSEL_FAIL/i,
-} as const;
+    const severity = (finding as { severity?: unknown }).severity;
+    findings.push({
+      file: (finding as { file: string }).file,
+      description: (finding as { description: string }).description,
+      severity: (validSeverities.has(typeof severity === "string" ? severity : "")
+        ? severity
+        : "warning") as AuditFinding["severity"],
+    });
+  }
+
+  return findings;
+}

@@ -3,8 +3,6 @@
  * Extracted for testability.
  */
 
-import { createTaskList, setTaskStatus, type TaskListItem } from "@cvr/pi-task-list";
-
 /** Destructive commands blocked in plan mode. */
 const DESTRUCTIVE_PATTERNS = [
   /\brm\b/i,
@@ -112,8 +110,6 @@ export function isSafeCommand(command: string): boolean {
   return !isDestructive && isSafe;
 }
 
-export type PlanTask = TaskListItem;
-
 /** Clean a plan step's text for display in the todo widget. */
 export function cleanStepText(text: string): string {
   let cleaned = text
@@ -135,122 +131,4 @@ export function cleanStepText(text: string): string {
     cleaned = `${cleaned.slice(0, 47)}...`;
   }
   return cleaned;
-}
-
-function appendTaskSubject(subjects: string[], rawText: string): void {
-  const text = rawText.trim();
-  if (text.length <= 5 || text.startsWith("`") || text.startsWith("/") || text.startsWith("-")) {
-    return;
-  }
-
-  const cleaned = cleanStepText(text);
-  if (cleaned.length > 3) {
-    subjects.push(cleaned);
-  }
-}
-
-/**
- * Extract plan steps from an assistant message.
- * Looks for a plan heading and parses numbered lists, bullets, or checklists below it.
- */
-function isPlanHeader(line: string): boolean {
-  const normalized = line
-    .trim()
-    .replace(/^#{1,6}\s*/, "")
-    .replace(/^\*{1,2}/, "")
-    .replace(/\*{1,2}$/, "")
-    .replace(/:$/, "")
-    .trim()
-    .toLowerCase();
-
-  return (
-    normalized === "plan" || normalized === "implementation plan" || normalized === "proposed plan"
-  );
-}
-
-function parsePlanListLine(line: string): { indent: number; text: string } | null {
-  const match = line.match(/^([ \t]*)(?:(?:\d+[.)])|[-*+])\s+(?:\[(?: |x|X)\]\s+)?(.+?)\s*$/);
-  if (!match?.[2]) return null;
-  return {
-    indent: match[1]?.length ?? 0,
-    text: match[2].trim(),
-  };
-}
-
-export function extractTodoItems(message: string): PlanTask[] {
-  const lines = message.split(/\r?\n/);
-  const headerIndex = lines.findIndex(isPlanHeader);
-  if (headerIndex === -1) return [];
-
-  const subjects: string[] = [];
-  let currentLines: string[] = [];
-  let listIndent: number | null = null;
-
-  const flushCurrentItem = () => {
-    if (currentLines.length === 0) return;
-    appendTaskSubject(subjects, currentLines.join(" "));
-    currentLines = [];
-  };
-
-  for (let i = headerIndex + 1; i < lines.length; i++) {
-    const line = lines[i] ?? "";
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    if ((subjects.length > 0 || currentLines.length > 0) && /^\s*#{1,6}\s+/.test(line)) {
-      flushCurrentItem();
-      break;
-    }
-
-    const parsed = parsePlanListLine(line);
-    if (parsed) {
-      if (listIndent === null) listIndent = parsed.indent;
-
-      if (parsed.indent === listIndent) {
-        flushCurrentItem();
-        currentLines = [parsed.text];
-        continue;
-      }
-
-      if (currentLines.length > 0 && listIndent !== null && parsed.indent > listIndent) {
-        continue;
-      }
-    }
-
-    if (currentLines.length > 0 && listIndent !== null) {
-      const indent = line.length - line.trimStart().length;
-      if (indent > listIndent) {
-        currentLines.push(trimmed);
-        continue;
-      }
-
-      flushCurrentItem();
-      break;
-    }
-  }
-
-  flushCurrentItem();
-  return createTaskList(subjects);
-}
-
-/** Extract [DONE:n] step numbers from text. */
-export function extractDoneSteps(message: string): number[] {
-  const steps: number[] = [];
-  for (const match of message.matchAll(/\[DONE:(\d+)\]/gi)) {
-    const step = Number(match[1]);
-    if (Number.isFinite(step)) steps.push(step);
-  }
-  return steps;
-}
-
-/** Mark task-list items as completed based on [DONE:n] markers in text. Returns count marked. */
-export function markCompletedSteps(text: string, items: PlanTask[]): number {
-  const doneSteps = extractDoneSteps(text);
-  let nextItems = items;
-  for (const step of doneSteps) {
-    nextItems = setTaskStatus(nextItems, step, "completed");
-  }
-
-  items.splice(0, items.length, ...nextItems);
-  return doneSteps.length;
 }

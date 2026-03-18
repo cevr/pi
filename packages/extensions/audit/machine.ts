@@ -100,7 +100,7 @@ export type AuditState =
     }
   | {
       _tag: "Failed";
-      failedPhase: "auditing";
+      failedPhase: "auditing" | "synthesizing" | "fixing";
       concerns: AuditConcernTask[];
       message: string;
     };
@@ -127,12 +127,14 @@ export type AuditEvent =
   | { _tag: "ConcernAudited"; taskId: string; notes: string; sessionPath: string }
   | { _tag: "ConcernAuditFailed"; message: string }
   | { _tag: "SynthesisComplete"; findings: AuditFinding[] }
+  | { _tag: "SynthesisFailed" }
   | { _tag: "FindingFixed" }
   | { _tag: "FixGatePass" }
   | { _tag: "FixGateFail" }
   | { _tag: "FixCounselPass" }
   | { _tag: "FixCounselFail" }
   | { _tag: "FixSkip" }
+  | { _tag: "FixSignalMissing"; phase: FixPhase }
   | { _tag: "Cancel" }
   | {
       _tag: "Hydrate";
@@ -147,7 +149,7 @@ export type AuditEvent =
       findings?: AuditFinding[];
       currentFinding?: number;
       phase?: FixPhase;
-      failedPhase?: "auditing";
+      failedPhase?: "auditing" | "synthesizing" | "fixing";
       message?: string;
     }
   | { _tag: "Reset" };
@@ -174,7 +176,7 @@ export interface PersistPayload {
   findings?: AuditFinding[];
   currentFinding?: number;
   phase?: FixPhase;
-  failedPhase?: "auditing";
+  failedPhase?: "auditing" | "synthesizing" | "fixing";
   message?: string;
 }
 
@@ -202,12 +204,11 @@ A concern is a review category (e.g., "correctness", "frontend-patterns", "type-
 
 Consider: file extensions, import patterns, directory structure, and the instructions above for explicit skill mentions.
 
-Output a JSON block:
-\`\`\`json
-{"concerns": [{"name": "...", "description": "...", "skills": ["..."]}]}
-\`\`\`
-
-Say "CONCERNS_DETECTED" when done.`;
+You must get explicit user approval before starting concern audits.
+- If anything is ambiguous, use the interview tool to ask the user to confirm or refine the concerns.
+- Even if the concerns seem obvious, show them to the user and get approval.
+- Once the user has approved the final concern list, call the audit_detected_concerns tool with the approved concerns.
+- Do not continue to auditing until that tool has been called.`;
 }
 
 export function buildConcernAuditPrompt(
@@ -238,7 +239,9 @@ ${scopeBlock}
 
 ${scopeRule}
 
-Produce the concern-specific audit notes in plain text with concrete file references. When this concern audit is complete, say "CONCERN_AUDITED".`;
+Produce the concern-specific audit notes in plain text with concrete file references.
+After the notes are complete, call the audit_concern_complete tool.
+Do not use prose completion markers.`;
 }
 
 export function buildSynthesisPrompt(state: Extract<AuditState, { _tag: "Synthesizing" }>): string {
@@ -260,15 +263,11 @@ ${concernNotes}
 3. Group by file with specific line references
 4. Optionally use the \`counsel\` tool for a cross-vendor review
 
-Present the actionable report, then output a structured JSON block of findings to fix:
-
-\`\`\`json
-{"findings": [{"file": "path/to/file.ts", "description": "what to fix", "severity": "critical|warning|suggestion"}]}
-\`\`\`
-
-If there are no actionable findings, output an empty array: \`{"findings": []}\`
-
-Say "AUDIT_COMPLETE" when done.`;
+Present the actionable report.
+Then call the audit_synthesis_complete tool with the ordered findings to fix:
+- findings: [{ file, description, severity }]
+- Use an empty array when there are no actionable findings.
+Do not output JSON blocks or prose completion markers.`;
 }
 
 export function buildFixPrompt(finding: AuditFinding, index: number, total: number): string {
@@ -278,22 +277,33 @@ ${finding.description}
 
 Read the file, understand the context, and apply the fix. Only change what's necessary.
 
-Say "FINDING_FIXED" when the fix is applied.
-Say "FINDING_SKIP" if the finding doesn't apply or is already resolved.`;
+When the fix is applied, call audit_finding_result with outcome: "fixed".
+If the finding doesn't apply or is already resolved, call audit_finding_result with outcome: "skip".
+Do not use prose completion markers.`;
 }
 
 export function buildFixGatePrompt(): string {
-  return `Run the full gate (typecheck, lint, format check, test). Report FIX_GATE_PASS if all pass, FIX_GATE_FAIL if any fail.`;
+  return `Run the full gate (typecheck, lint, format check, test).
+Call audit_fix_gate_result with status: "pass" if everything passes.
+Call audit_fix_gate_result with status: "fail" if anything fails.
+Do not use prose completion markers.`;
 }
 
 export function buildFixCounselPrompt(): string {
-  return `Gate passed. Run counsel for a cross-vendor review of the fix. Report FIX_COUNSEL_PASS if approved, FIX_COUNSEL_FAIL if issues found.`;
+  return `Gate passed. Run counsel for a cross-vendor review of the fix.
+Call audit_fix_counsel_result with status: "pass" if approved.
+Call audit_fix_counsel_result with status: "fail" if issues are found.
+Do not use prose completion markers.`;
 }
 
 function formatConcernList(concerns: readonly AuditConcernTask[]): string {
   return concerns
     .map((concern) => `- ${concern.order}. ${concern.subject} — ${concern.metadata.description}`)
     .join("\n");
+}
+
+function formatFocusBlock(userPrompt: string): string {
+  return userPrompt.trim().length > 0 ? `\n\nFocus: ${userPrompt.trim()}` : "";
 }
 
 function summarizeAuditTargets(targetPaths: readonly string[]): string {
@@ -310,9 +320,9 @@ export function buildAuditPhaseMessage(
 ): string {
   switch (state._tag) {
     case "Detecting":
-      return `Audit started. Detecting concerns for ${summarizeAuditTargets(state.targetPaths)}.`;
+      return `Audit started. Developing concerns for ${summarizeAuditTargets(state.targetPaths)}.${formatFocusBlock(state.userPrompt)}`;
     case "Auditing":
-      return `Detected ${state.concerns.length} audit concern${state.concerns.length === 1 ? "" : "s"}. Launching concern audits.\n\n${formatConcernList(state.concerns)}`;
+      return `Confirmed ${state.concerns.length} audit concern${state.concerns.length === 1 ? "" : "s"}. Launching concern audits.${formatFocusBlock(state.userPrompt)}\n\n${formatConcernList(state.concerns)}`;
     case "Synthesizing":
       return `Concern audits complete. Synthesizing findings from ${state.concerns.length} concern${state.concerns.length === 1 ? "" : "s"}.`;
     case "Fixing": {
@@ -406,7 +416,7 @@ export function getAuditStatusText(state: AuditState): string | undefined {
     case "Idle":
       return undefined;
     case "Detecting":
-      return "audit: detecting...";
+      return "audit: detecting concerns...";
     case "Auditing": {
       const activeConcerns = getActiveAuditConcerns(state);
       if (activeConcerns.length <= 1) {
@@ -624,6 +634,51 @@ export function getCurrentAuditConcern(
   return getConcernForCursor(state.concerns, state.cursor);
 }
 
+function transitionToAuditing(
+  state: Extract<AuditState, { _tag: "Detecting" }>,
+  concerns: readonly AuditConcern[],
+): Result {
+  const concernExecution = startConcernExecution(
+    createConcernTasks(concerns.slice(0, MAX_CONCERNS)),
+  );
+  if (!concernExecution) {
+    const next: AuditState = { _tag: "Idle" };
+    return {
+      state: next,
+      effects: [
+        {
+          type: "notify",
+          message: "audit: couldn't start concern execution",
+          level: "error",
+        },
+        statusEffectForState(next),
+        UI,
+        persist(next),
+      ],
+    };
+  }
+
+  const next: AuditState = {
+    _tag: "Auditing",
+    scope: state.scope,
+    concerns: concernExecution.concerns,
+    diffStat: state.diffStat,
+    targetPaths: state.targetPaths,
+    userPrompt: state.userPrompt,
+    cursor: concernExecution.cursor,
+  };
+  return {
+    state: next,
+    effects: [
+      statusEffectForState(next),
+      visibleMessage(buildAuditPhaseMessage(next)),
+      runConcernBatch(next),
+      UI,
+      persist(next),
+    ],
+  };
+}
+
 function completeFindingSequence(state: Extract<AuditState, { _tag: "Fixing" }>): Result {
   const prevFile = state.findings[state.currentFinding]!.file;
   const next: AuditState = { _tag: "Idle" };
@@ -726,45 +781,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         };
       }
 
-      const concernExecution = startConcernExecution(
-        createConcernTasks(event.concerns.slice(0, MAX_CONCERNS)),
-      );
-      if (!concernExecution) {
-        const next: AuditState = { _tag: "Idle" };
-        return {
-          state: next,
-          effects: [
-            {
-              type: "notify",
-              message: "audit: couldn't start concern execution",
-              level: "error",
-            },
-            statusEffectForState(next),
-            UI,
-            persist(next),
-          ],
-        };
-      }
-
-      const next: AuditState = {
-        _tag: "Auditing",
-        scope: state.scope,
-        concerns: concernExecution.concerns,
-        diffStat: state.diffStat,
-        targetPaths: state.targetPaths,
-        userPrompt: state.userPrompt,
-        cursor: concernExecution.cursor,
-      };
-      return {
-        state: next,
-        effects: [
-          statusEffectForState(next),
-          visibleMessage(buildAuditPhaseMessage(next)),
-          runConcernBatch(next),
-          UI,
-          persist(next),
-        ],
-      };
+      return transitionToAuditing(state, event.concerns);
     }
 
     // ----- DetectionFailed -----
@@ -776,7 +793,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         effects: [
           {
             type: "notify",
-            message: "audit: couldn't parse concerns from agent output",
+            message: "audit: concern detection ended before audit_detected_concerns was called",
             level: "error",
           },
           statusEffectForState(next),
@@ -916,6 +933,27 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       };
     }
 
+    // ----- SynthesisFailed -----
+    case "SynthesisFailed": {
+      if (state._tag !== "Synthesizing") return { state };
+      const next: AuditState = {
+        _tag: "Failed",
+        failedPhase: "synthesizing",
+        concerns: state.concerns,
+        message: "audit synthesis ended before audit_synthesis_complete was called",
+      };
+      return {
+        state: next,
+        effects: [
+          { type: "notify", message: next.message, level: "error" },
+          visibleMessage(buildAuditPhaseMessage(next), "audit-error"),
+          statusEffectForState(next),
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
     // ----- FindingFixed -----
     case "FindingFixed": {
       if (state._tag !== "Fixing" || state.phase !== "running") return { state };
@@ -945,6 +983,32 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
     case "FixSkip": {
       if (state._tag !== "Fixing" || state.phase !== "running") return { state };
       return advanceToNextFinding(state);
+    }
+
+    // ----- FixSignalMissing -----
+    case "FixSignalMissing": {
+      if (state._tag !== "Fixing" || state.phase !== event.phase) return { state };
+      const next: AuditState = {
+        _tag: "Failed",
+        failedPhase: "fixing",
+        concerns: state.concerns,
+        message:
+          event.phase === "running"
+            ? "audit fix ended before audit_finding_result was called"
+            : event.phase === "gating"
+              ? "audit gate ended before audit_fix_gate_result was called"
+              : "audit counsel ended before audit_fix_counsel_result was called",
+      };
+      return {
+        state: next,
+        effects: [
+          { type: "notify", message: next.message, level: "error" },
+          visibleMessage(buildAuditPhaseMessage(next), "audit-error"),
+          statusEffectForState(next),
+          UI,
+          persist(next),
+        ],
+      };
     }
 
     // ----- FixGatePass -----
@@ -992,7 +1056,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           { type: "notify", message: "gate failed — fix and retry", level: "warning" },
           statusEffectForState(next),
           triggerMessage(
-            "Gate failed. Fix the failures, then say FINDING_FIXED again.",
+            'Gate failed. Fix the failures, then call audit_finding_result with outcome: "fixed" again.',
             "audit-gate-fix",
           ),
           UI,
@@ -1038,7 +1102,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           { type: "notify", message: "counsel found issues — address feedback", level: "warning" },
           statusEffectForState(next),
           triggerMessage(
-            "Counsel found issues. Address the feedback, then say FINDING_FIXED again.",
+            'Counsel found issues. Address the feedback, then call audit_finding_result with outcome: "fixed" again.',
             "audit-counsel-fix",
           ),
           UI,

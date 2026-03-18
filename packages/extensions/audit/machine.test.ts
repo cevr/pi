@@ -180,7 +180,10 @@ describe("auditReducer — Start", () => {
 
 describe("auditReducer — ConcernsDetected", () => {
   it("Detecting + concerns → Auditing", () => {
-    const r = auditReducer(detecting(), { _tag: "ConcernsDetected", concerns: CONCERNS });
+    const r = auditReducer(detecting("check react"), {
+      _tag: "ConcernsDetected",
+      concerns: CONCERNS,
+    });
     expect(r.state._tag).toBe("Auditing");
     if (r.state._tag === "Auditing") {
       expect(r.state.concerns.map((concern) => concern.subject)).toEqual([
@@ -188,6 +191,7 @@ describe("auditReducer — ConcernsDetected", () => {
         "frontend",
       ]);
       expect(r.state.concerns.every((concern) => concern.status === "in_progress")).toBe(true);
+      expect(r.state.userPrompt).toBe("check react");
       expect(r.state.cursor).toEqual({
         phase: "running",
         frontierTaskIds: ["1", "2"],
@@ -200,19 +204,15 @@ describe("auditReducer — ConcernsDetected", () => {
       "runConcernBatch",
     );
     expect(batch?.state._tag).toBe("Auditing");
-    expect(batch?.state.cursor).toEqual({
-      phase: "running",
-      frontierTaskIds: ["1", "2"],
-      activeTaskIds: ["1", "2"],
-      total: 2,
-    });
     const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
     expect(turns).toHaveLength(1);
     expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
-    expect(turns[0]?.request.content).toContain("Detected 2 audit concerns");
+    expect(turns[0]?.request.content).toContain("Confirmed 2 audit concerns");
+    expect(turns[0]?.request.content).toContain("Focus: check react");
     expect(hasEffect(r.effects, "updateUI")).toBe(true);
     expect(getPersistPayload(r.effects)).toMatchObject({
       mode: "Auditing",
+      userPrompt: "check react",
       concernCursor: {
         phase: "running",
         frontierTaskIds: ["1", "2"],
@@ -236,6 +236,7 @@ describe("auditReducer — ConcernsDetected", () => {
       skills: [],
     }));
     const r = auditReducer(detecting(), { _tag: "ConcernsDetected", concerns: many });
+    expect(r.state._tag).toBe("Auditing");
     if (r.state._tag === "Auditing") {
       expect(r.state.concerns).toHaveLength(MAX_CONCERNS);
     }
@@ -416,6 +417,15 @@ describe("auditReducer — SynthesisComplete", () => {
     expect(notify).toMatchObject({ message: expect.stringContaining("no findings") });
   });
 
+  it("Synthesizing + missing tool signal → Failed", () => {
+    const r = auditReducer(synthesizing(), { _tag: "SynthesisFailed" });
+    expect(r.state._tag).toBe("Failed");
+    if (r.state._tag === "Failed") {
+      expect(r.state.failedPhase).toBe("synthesizing");
+      expect(r.state.message).toContain("audit_synthesis_complete");
+    }
+  });
+
   it("non-Synthesizing + SynthesisComplete is no-op", () => {
     const state = auditing();
     const r = auditReducer(state, { _tag: "SynthesisComplete", findings: FINDINGS });
@@ -476,6 +486,18 @@ describe("auditReducer — FixGatePass", () => {
     expect(r.state._tag).toBe("Fixing");
     if (r.state._tag === "Fixing") {
       expect(r.state.phase).toBe("counseling");
+    }
+  });
+
+  it("missing running signal → Failed", () => {
+    const r = auditReducer(fixing(FINDINGS, 0, "running"), {
+      _tag: "FixSignalMissing",
+      phase: "running",
+    });
+    expect(r.state._tag).toBe("Failed");
+    if (r.state._tag === "Failed") {
+      expect(r.state.failedPhase).toBe("fixing");
+      expect(r.state.message).toContain("audit_finding_result");
     }
   });
 

@@ -19,13 +19,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage, Message as PiMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import { readPrinciples } from "@cvr/pi-brain-principles";
 import { createInlineExecutionExecutor, isExecutionEffect } from "@cvr/pi-execution";
 import { GitClient } from "@cvr/pi-git-client";
 import { GraphRuntime } from "@cvr/pi-graph-runtime";
 import { ProcessRunner } from "@cvr/pi-process-runner";
 import { PiSpawnService } from "@cvr/pi-spawn";
-import { getFinalOutput } from "@cvr/pi-sub-agent-render";
 import { register, type MachineConfig } from "@cvr/pi-state-machine";
 import type { Command } from "@cvr/pi-state-machine";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
@@ -50,7 +50,7 @@ import {
 } from "./machine";
 import type { GraphExecutionCursor } from "@cvr/pi-graph-execution";
 import { parseAuditScopeArgs, toAuditDisplayPath } from "./scope";
-import { parseConcernsJson, parseFindingsJson, PHASE_MARKERS } from "./utils";
+import { AUDIT_SIGNAL_TOOLS, hasToolCall, parseConcernCompletion } from "./utils";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -236,7 +236,7 @@ function buildConcernAuditSystemPrompt(
 }
 
 function normalizeConcernAuditNotes(text: string): string {
-  return text.replace(PHASE_MARKERS.auditing, "").trim();
+  return text.trim();
 }
 
 export function runConcernBatch(
@@ -280,12 +280,12 @@ export function runConcernBatch(
             sessionId,
             sessionPath,
           });
-          const output = getFinalOutput(result.messages).trim();
+          const output = getLastAssistantText(result.messages).trim();
           const isError =
             result.exitCode !== 0 ||
             result.stopReason === "error" ||
             result.stopReason === "aborted" ||
-            !PHASE_MARKERS.auditing.test(output);
+            !parseConcernCompletion(result.messages);
 
           if (isError) {
             return yield* Effect.fail(
@@ -294,7 +294,7 @@ export function runConcernBatch(
                   result.errorMessage ||
                     result.stderr ||
                     output ||
-                    `audit: concern ${concern.subject} failed`,
+                    `audit: concern ${concern.subject} failed before ${AUDIT_SIGNAL_TOOLS.concernComplete} was called`,
                   sessionPath,
                 ),
               }),
@@ -336,8 +336,19 @@ function formatUI(state: AuditState, ctx: ExtensionContext): void {
 
   ctx.ui.setStatus("audit", getAuditStatusText(state));
 
-  if (state._tag === "Auditing") {
-    ctx.ui.setWidget("audit-progress", renderConcernLines(state.concerns));
+  if (state._tag === "Detecting") {
+    const lines = [
+      `scope: ${state.targetPaths[0] ?? "(none)"}${state.targetPaths.length > 1 ? ` +${state.targetPaths.length - 1} more` : ""}`,
+    ];
+    if (state.userPrompt.trim().length > 0) {
+      lines.push(`focus: ${state.userPrompt.trim()}`);
+    }
+    lines.push("status: developing concerns + awaiting approval");
+    ctx.ui.setWidget("audit-progress", lines);
+  } else if (state._tag === "Auditing") {
+    const focusLines =
+      state.userPrompt.trim().length > 0 ? [`focus: ${state.userPrompt.trim()}`, ""] : [];
+    ctx.ui.setWidget("audit-progress", [...focusLines, ...renderConcernLines(state.concerns)]);
   } else if (state._tag === "Fixing") {
     const lines = state.findings.map((finding, index) => {
       const marker =
@@ -413,7 +424,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
             ctx.ui.notify("No audit in progress", "info");
             break;
           case "Detecting":
-            ctx.ui.notify("Audit: detecting concerns...", "info");
+            ctx.ui.notify("Audit: detecting concerns and awaiting approval...", "info");
             break;
           case "Auditing":
             ctx.ui.notify(`Audit: running ${state.concerns.length} concern audits`, "info");
@@ -439,6 +450,212 @@ export default function auditExtension(pi: ExtensionAPI): void {
     },
   ];
 
+  const toolError = (text: string) => ({
+    content: [{ type: "text" as const, text }],
+    details: {},
+    isError: true,
+  });
+
+  pi.registerTool({
+    name: AUDIT_SIGNAL_TOOLS.detectConcerns,
+    label: "Audit Detected Concerns",
+    description: "Finalize the approved audit concerns detected for the current audit run.",
+    promptSnippet: "Call this tool once the user has explicitly approved the final audit concerns.",
+    promptGuidelines: [
+      "Use this only while the audit is in Detecting mode.",
+      "Always get explicit user approval before calling this tool.",
+      "Prefer using the interview tool to present the concerns and gather approval or edits.",
+    ],
+    parameters: Type.Object({
+      concerns: Type.Array(
+        Type.Object({
+          name: Type.String({ minLength: 1 }),
+          description: Type.String({ minLength: 1 }),
+          skills: Type.Array(Type.String({ minLength: 1 })),
+        }),
+        { minItems: 1 },
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const state = machine.getState();
+      if (state._tag !== "Detecting") {
+        return toolError("Audit detection is not currently active.");
+      }
+
+      const concerns = params.concerns.filter(
+        (concern) => concern.name.trim().length > 0 && concern.description.trim().length > 0,
+      );
+      if (concerns.length === 0) {
+        return toolError("At least one valid approved concern is required.");
+      }
+
+      machine.send({ _tag: "ConcernsDetected", concerns });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Captured ${concerns.length} approved audit concern${concerns.length === 1 ? "" : "s"}. Launching audits.`,
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: AUDIT_SIGNAL_TOOLS.concernComplete,
+    label: "Audit Concern Complete",
+    description: "Signal that a spawned concern-audit subagent has finished writing its notes.",
+    promptSnippet: "Use this from audit concern subagents after the notes are complete.",
+    promptGuidelines: [
+      "Only use this inside spawned audit concern subagents.",
+      "Write the concern notes first, then call this tool.",
+    ],
+    parameters: Type.Object({}),
+    async execute() {
+      return {
+        content: [{ type: "text" as const, text: "Concern completion captured." }],
+        details: {},
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: AUDIT_SIGNAL_TOOLS.synthesisComplete,
+    label: "Audit Synthesis Complete",
+    description: "Submit the synthesized audit findings for the current audit run.",
+    promptSnippet: "Call this tool when audit synthesis is complete.",
+    promptGuidelines: [
+      "Use this only while the audit is synthesizing findings.",
+      "Pass the ordered findings array. Use an empty array when there are no actionable findings.",
+    ],
+    parameters: Type.Object({
+      findings: Type.Array(
+        Type.Object({
+          file: Type.String({ minLength: 1 }),
+          description: Type.String({ minLength: 1 }),
+          severity: Type.Union([
+            Type.Literal("critical"),
+            Type.Literal("warning"),
+            Type.Literal("suggestion"),
+          ]),
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const state = machine.getState();
+      if (state._tag !== "Synthesizing") {
+        return toolError("Audit synthesis is not currently active.");
+      }
+
+      machine.send({ _tag: "SynthesisComplete", findings: params.findings });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Captured ${params.findings.length} audit finding${params.findings.length === 1 ? "" : "s"}.`,
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: AUDIT_SIGNAL_TOOLS.findingResult,
+    label: "Audit Finding Result",
+    description: "Signal whether the current audit finding was fixed or skipped.",
+    promptSnippet: "Call this tool after handling the current finding.",
+    promptGuidelines: ["Use this only while actively fixing an audit finding."],
+    parameters: Type.Object({
+      outcome: Type.Union([Type.Literal("fixed"), Type.Literal("skip")]),
+    }),
+    async execute(_toolCallId, params) {
+      const state = machine.getState();
+      if (state._tag !== "Fixing" || state.phase !== "running") {
+        return toolError("An audit finding is not currently being fixed.");
+      }
+
+      machine.send({ _tag: params.outcome === "fixed" ? "FindingFixed" : "FixSkip" });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              params.outcome === "fixed"
+                ? "Recorded finding as fixed. Run the gate next."
+                : "Recorded finding as skipped.",
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: AUDIT_SIGNAL_TOOLS.fixGateResult,
+    label: "Audit Fix Gate Result",
+    description: "Signal whether the validation gate passed for the current audit fix.",
+    promptSnippet: "Call this tool after running the audit fix gate.",
+    promptGuidelines: ["Use this only while the audit fix gate is active."],
+    parameters: Type.Object({
+      status: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
+      summary: Type.Optional(Type.String()),
+    }),
+    async execute(_toolCallId, params) {
+      const state = machine.getState();
+      if (state._tag !== "Fixing" || state.phase !== "gating") {
+        return toolError("The audit fix gate is not currently active.");
+      }
+
+      machine.send({ _tag: params.status === "pass" ? "FixGatePass" : "FixGateFail" });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              params.status === "pass"
+                ? "Gate passed. Run counsel next."
+                : "Gate failed. Fix the issues and retry.",
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: AUDIT_SIGNAL_TOOLS.fixCounselResult,
+    label: "Audit Fix Counsel Result",
+    description: "Signal whether counsel approved the current audit fix.",
+    promptSnippet: "Call this tool after counsel reviews the audit fix.",
+    promptGuidelines: ["Use this only while audit counsel is active."],
+    parameters: Type.Object({
+      status: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
+      summary: Type.Optional(Type.String()),
+    }),
+    async execute(_toolCallId, params) {
+      const state = machine.getState();
+      if (state._tag !== "Fixing" || state.phase !== "counseling") {
+        return toolError("Audit counsel is not currently active.");
+      }
+
+      machine.send({ _tag: params.status === "pass" ? "FixCounselPass" : "FixCounselFail" });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              params.status === "pass"
+                ? "Counsel approved the fix."
+                : "Counsel found issues. Address them before continuing.",
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
   // ----- Machine config -----
   const machineConfig: MachineConfig<AuditState, AuditEvent, AuditEffect> = {
     id: "audit",
@@ -457,13 +674,13 @@ export default function auditExtension(pi: ExtensionAPI): void {
           let content: string;
           switch (state._tag) {
             case "Detecting":
-              content = `[AUDIT MODE — DETECTION]\n\nYou are detecting which audit concerns apply to this branch's changes.${principlesBlock}`;
+              content = `[AUDIT MODE — DETECTION]\n\nYou are detecting which audit concerns apply to this branch's changes. Always get explicit user approval, preferably via the interview tool, before calling ${AUDIT_SIGNAL_TOOLS.detectConcerns}.${principlesBlock}`;
               break;
             case "Auditing":
             case "Failed":
               return;
             case "Synthesizing":
-              content = `[AUDIT MODE — SYNTHESIS]\n\nSynthesize findings and output structured JSON.${principlesBlock}`;
+              content = `[AUDIT MODE — SYNTHESIS]\n\nSynthesize findings, then call ${AUDIT_SIGNAL_TOOLS.synthesisComplete} with the ordered findings array.${principlesBlock}`;
               break;
             case "Fixing": {
               const f = state.findings[state.currentFinding]!;
@@ -498,44 +715,34 @@ export default function auditExtension(pi: ExtensionAPI): void {
       agent_end: {
         mode: "fire" as const,
         toEvent: (state, event, ctx): AuditEvent | null => {
-          if (!ctx.hasUI || state._tag === "Idle") return null;
+          if (!ctx.hasUI || state._tag === "Idle" || state._tag === "Failed") return null;
 
-          const text = getLastAssistantText(event.messages);
-          if (!text.trim()) return { _tag: "Cancel" };
+          const signalHandled = [
+            AUDIT_SIGNAL_TOOLS.detectConcerns,
+            AUDIT_SIGNAL_TOOLS.synthesisComplete,
+            AUDIT_SIGNAL_TOOLS.findingResult,
+            AUDIT_SIGNAL_TOOLS.fixGateResult,
+            AUDIT_SIGNAL_TOOLS.fixCounselResult,
+          ].some((toolName) => hasToolCall(event.messages, toolName));
+          if (signalHandled) return null;
 
-          switch (state._tag) {
-            case "Detecting": {
-              if (!PHASE_MARKERS.detecting.test(text)) return null;
-              const concerns = parseConcernsJson(text);
-              if (concerns === null) return { _tag: "DetectionFailed" };
-              return { _tag: "ConcernsDetected", concerns };
-            }
-            case "Synthesizing": {
-              if (!PHASE_MARKERS.synthesizing.test(text)) return null;
-              const findings = parseFindingsJson(text) ?? [];
-              return { _tag: "SynthesisComplete", findings };
-            }
-            case "Fixing": {
-              if (state.phase === "running") {
-                if (PHASE_MARKERS.findingFixed.test(text)) return { _tag: "FindingFixed" };
-                if (PHASE_MARKERS.findingSkip.test(text)) return { _tag: "FixSkip" };
-                return null;
-              }
-              if (state.phase === "gating") {
-                if (PHASE_MARKERS.fixGatePass.test(text)) return { _tag: "FixGatePass" };
-                if (PHASE_MARKERS.fixGateFail.test(text)) return { _tag: "FixGateFail" };
-                return null;
-              }
-              if (state.phase === "counseling") {
-                if (PHASE_MARKERS.fixCounselPass.test(text)) return { _tag: "FixCounselPass" };
-                if (PHASE_MARKERS.fixCounselFail.test(text)) return { _tag: "FixCounselFail" };
-                return null;
-              }
-              return null;
-            }
-            case "Failed":
-              return null;
+          if (state._tag === "Detecting") {
+            return { _tag: "DetectionFailed" };
           }
+
+          if (state._tag === "Auditing") {
+            // Main-session agent_end is irrelevant here. Concern audits run in spawned subagents.
+            return null;
+          }
+
+          if (state._tag === "Synthesizing") {
+            return { _tag: "SynthesisFailed" };
+          }
+
+          if (state._tag === "Fixing") {
+            return { _tag: "FixSignalMissing", phase: state.phase };
+          }
+
           return null;
         },
       },
@@ -572,7 +779,12 @@ export default function auditExtension(pi: ExtensionAPI): void {
             data?.phase === "running" || data?.phase === "gating" || data?.phase === "counseling"
               ? data.phase
               : undefined;
-          const failedPhase = data?.failedPhase === "auditing" ? data.failedPhase : undefined;
+          const failedPhase =
+            data?.failedPhase === "auditing" ||
+            data?.failedPhase === "synthesizing" ||
+            data?.failedPhase === "fixing"
+              ? data.failedPhase
+              : undefined;
           const message = typeof data?.message === "string" ? data.message : undefined;
 
           return {
