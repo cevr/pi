@@ -77,7 +77,7 @@ class LabeledEditor extends CustomEditor {
   }
 
   private chrome(str: string): string {
-    return this.appTheme.fg(this.mode === "plan" ? "warning" : "dim", str);
+    return this.appTheme.fg(this.mode === "plan" ? "warning" : "muted", str);
   }
 
   setMode(mode: EditorMode): void {
@@ -503,18 +503,6 @@ function editorExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     if (!ctx.hasUI) return;
-
-    // make tool call backgrounds transparent — removes the colored box
-    // chrome that ToolExecutionComponent forces via Box(1,1,bgFn).
-    // the Box padding (1char/1row) remains but is invisible against
-    // the terminal's default background.
-    const themeAny = ctx.ui.theme as any;
-    if (themeAny.bgColors instanceof Map) {
-      const transparent = "\x1b[49m"; // ANSI bg reset = terminal default
-      themeAny.bgColors.set("toolPendingBg", transparent);
-      themeAny.bgColors.set("toolSuccessBg", transparent);
-      themeAny.bgColors.set("toolErrorBg", transparent);
-    }
 
     // replace editor with labeled box-drawing version
     ctx.ui.setEditorComponent(

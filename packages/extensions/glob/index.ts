@@ -99,7 +99,11 @@ export function createGlobTool(
 
     renderCall(args: any, theme: any) {
       const pattern = args.filePattern || "...";
-      return new Text(theme.fg("toolTitle", theme.bold("Find ")) + theme.fg("dim", pattern), 0, 0);
+      return new Text(
+        theme.fg("toolTitle", theme.bold("Find ")) + theme.fg("muted", pattern),
+        0,
+        0,
+      );
     },
 
     renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
@@ -212,7 +216,12 @@ export function createGlobTool(
           details: { header: p.filePattern },
         } as any;
       } catch (err) {
-        if (err != null && typeof err === "object" && "_tag" in err && err._tag === "CommandAborted") {
+        if (
+          err != null &&
+          typeof err === "object" &&
+          "_tag" in err &&
+          err._tag === "CommandAborted"
+        ) {
           return {
             content: [{ type: "text" as const, text: "search aborted" }],
             isError: true,

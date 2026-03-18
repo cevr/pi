@@ -1,11 +1,6 @@
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import {
-  boxRendererWindowed,
-  osc8Link,
-  type BoxSection,
-  type Excerpt,
-} from "@cvr/pi-box-format";
+import { boxRendererWindowed, osc8Link, type BoxSection, type Excerpt } from "@cvr/pi-box-format";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import {
@@ -138,7 +133,13 @@ export function createWebFetchTool(
 
       if (result.success._tag === "Image") {
         return {
-          content: [{ type: "image" as const, data: result.success.data, mimeType: result.success.mimeType }],
+          content: [
+            {
+              type: "image" as const,
+              data: result.success.data,
+              mimeType: result.success.mimeType,
+            },
+          ],
           details: {
             title: result.success.title,
             url: result.success.url,
@@ -163,7 +164,11 @@ export function createWebFetchTool(
       const short = url.length > 80 ? `${url.slice(0, 80)}...` : url;
       const linked = /^https?:\/\//.test(url) ? osc8Link(url, short) : short;
       const format = args.format ? theme.fg("muted", ` [${args.format}]`) : "";
-      return new Text(theme.fg("toolTitle", theme.bold("web_fetch ")) + theme.fg("dim", linked) + format, 0, 0);
+      return new Text(
+        theme.fg("toolTitle", theme.bold("web_fetch ")) + theme.fg("muted", linked) + format,
+        0,
+        0,
+      );
     },
 
     renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
@@ -200,7 +205,9 @@ export function createWebFetchExtension(
     );
     if (!enabled) return;
 
-    const runtime = ManagedRuntime.make(Layer.mergeAll(WebFetchService.layer(config), FetchHttpClient.layer));
+    const runtime = ManagedRuntime.make(
+      Layer.mergeAll(WebFetchService.layer(config), FetchHttpClient.layer),
+    );
     pi.registerTool(deps.withPromptPatch(createWebFetchTool(config, runtime)));
     pi.on("session_shutdown", async () => {
       await runtime.dispose();

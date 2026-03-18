@@ -51,7 +51,7 @@ export default function mermaidInlineExtension(pi: ExtensionAPI): void {
       /** width is already inner width — Box(1,1) subtracts padding before calling render */
       render(width: number): string[] {
         if (!entry?.block?.code) {
-          return [truncateToWidth(theme.fg("dim", "diagram not found"), width)];
+          return [truncateToWidth(theme.fg("muted", "diagram not found"), width)];
         }
 
         try {
@@ -60,7 +60,7 @@ export default function mermaidInlineExtension(pi: ExtensionAPI): void {
           const lines: string[] = [];
 
           let label = theme.fg("customMessageLabel", theme.bold("mermaid"));
-          if (overflowed) label += " " + theme.fg("dim", `[${preset.key}]`);
+          if (overflowed) label += " " + theme.fg("muted", `[${preset.key}]`);
           lines.push(label);
 
           for (const line of rendered.lines) {
@@ -68,14 +68,19 @@ export default function mermaidInlineExtension(pi: ExtensionAPI): void {
           }
 
           if (overflowed) {
-            lines.push(theme.fg("dim", "diagram wider than terminal — ctrl+shift+m to view full"));
+            lines.push(
+              theme.fg("muted", "diagram wider than terminal — ctrl+shift+m to view full"),
+            );
           }
 
           return lines.map((l) => truncateToWidth(l, width));
         } catch (err) {
           return [
             truncateToWidth(
-              theme.fg("dim", `render error: ${err instanceof Error ? err.message : String(err)}`),
+              theme.fg(
+                "muted",
+                `render error: ${err instanceof Error ? err.message : String(err)}`,
+              ),
               width,
             ),
           ];

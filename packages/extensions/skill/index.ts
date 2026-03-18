@@ -23,7 +23,11 @@ import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { boxRendererWindowed, textSection, type Excerpt } from "@cvr/pi-box-format";
-import { findSkillFile, listAvailableSkillNames, renderLoadedSkillContent } from "@cvr/pi-skill-paths";
+import {
+  findSkillFile,
+  listAvailableSkillNames,
+  renderLoadedSkillContent,
+} from "@cvr/pi-skill-paths";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
   { focus: "head" as const, context: 3 },
@@ -62,9 +66,9 @@ export function createSkillTool(): ToolDefinition {
     renderCall(args: any, theme: any) {
       const name = args.name || "...";
       return new Text(
-        theme.fg("dim", "using ") +
+        theme.fg("muted", "using ") +
           theme.fg("toolTitle", theme.bold(name)) +
-          theme.fg("dim", " skill"),
+          theme.fg("muted", " skill"),
         0,
         0,
       );

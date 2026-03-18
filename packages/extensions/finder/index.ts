@@ -206,7 +206,7 @@ export function createFinderTool(
           : args.query
         : "...";
       return new Text(
-        theme.fg("toolTitle", theme.bold("finder ")) + theme.fg("dim", preview),
+        theme.fg("toolTitle", theme.bold("finder ")) + theme.fg("muted", preview),
         0,
         0,
       );

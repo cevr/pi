@@ -313,7 +313,7 @@ function formatStats(stats: DiffStats, theme: any): string {
   if (stats.added > 0) parts.push(theme.fg("toolDiffAdded", `+${stats.added}`));
   if (stats.modified > 0) parts.push(theme.fg("warning", `~${stats.modified}`));
   if (stats.removed > 0) parts.push(theme.fg("toolDiffRemoved", `-${stats.removed}`));
-  return parts.length > 0 ? parts.join(" ") : theme.fg("dim", "no changes");
+  return parts.length > 0 ? parts.join(" ") : theme.fg("muted", "no changes");
 }
 
 // --- tool factory ---
@@ -370,7 +370,7 @@ export function createEditFileTool(
       const linked = filePath.startsWith("/")
         ? osc8Link(`file://${filePath}`, shortened)
         : shortened;
-      return new Text(theme.fg("toolTitle", theme.bold("Edit ")) + theme.fg("dim", linked), 0, 0);
+      return new Text(theme.fg("toolTitle", theme.bold("Edit ")) + theme.fg("muted", linked), 0, 0);
     },
 
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
@@ -520,7 +520,7 @@ export function createEditFileTool(
     renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) {
       const content = result.content?.[0];
       if (!content || content.type !== "text")
-        return new Text(theme.fg("dim", "(no output)"), 0, 0);
+        return new Text(theme.fg("muted", "(no output)"), 0, 0);
 
       const diffText = content.text;
       const filenameMatch = diffText.match(/^---\s+(\S+)/m);
@@ -529,14 +529,16 @@ export function createEditFileTool(
 
       const sections = parseDiffToSections(filename, diffText);
       if (!sections?.length || !sections[0]?.blocks.length)
-        return new Text(theme.fg("dim", "(no changes)"), 0, 0);
+        return new Text(theme.fg("muted", "(no changes)"), 0, 0);
 
       // compute stats from unwindowed sections (accurate counts)
       const stats = computeDiffStats(sections);
       const statsText = formatStats(stats, theme);
       const replaceCount: number | undefined = result.details?.replaceCount;
       const replaceNote =
-        replaceCount && replaceCount > 1 ? theme.fg("dim", ` (${replaceCount} replacements)`) : "";
+        replaceCount && replaceCount > 1
+          ? theme.fg("muted", ` (${replaceCount} replacements)`)
+          : "";
 
       /** 25 visual lines per hunk: head 12 + tail 13 */
       const HUNK_EXCERPTS: Excerpt[] = [

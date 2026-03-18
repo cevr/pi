@@ -391,7 +391,7 @@ export function createBashTool(
       const Text = getText();
       const content = result.content?.[0];
       if (!content || content.type !== "text")
-        return new Text(theme.fg("dim", "(no output)"), 0, 0);
+        return new Text(theme.fg("muted", "(no output)"), 0, 0);
 
       // extract command from structured details (preferred) or parse from content
       let text: string = content.text;
@@ -410,7 +410,7 @@ export function createBashTool(
         }
       }
 
-      if (!text || text === "(no output)") return new Text(theme.fg("dim", "(no output)"), 0, 0);
+      if (!text || text === "(no output)") return new Text(theme.fg("muted", "(no output)"), 0, 0);
 
       const lines = text.split("\n");
 

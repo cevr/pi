@@ -217,7 +217,7 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
         context += `:${readRange[0]}-${readRange[1]}`;
       }
       const linked = filePath.startsWith("/") ? osc8Link(`file://${filePath}`, context) : context;
-      return new Text(theme.fg("toolTitle", theme.bold("Read ")) + theme.fg("dim", linked), 0, 0);
+      return new Text(theme.fg("toolTitle", theme.bold("Read ")) + theme.fg("muted", linked), 0, 0);
     },
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

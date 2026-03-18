@@ -129,7 +129,10 @@ function renderSessionTree(
     if (entry.type === "message") {
       const msg = (entry as MessageEntry).message;
       if (msg.role === "user") {
-        const textParts = msg.content.filter(isTextContent).map((part) => part.text).join("\n");
+        const textParts = msg.content
+          .filter(isTextContent)
+          .map((part) => part.text)
+          .join("\n");
         if (textParts) {
           parts.push(`## user${marker}`);
           parts.push(textParts);
@@ -156,7 +159,10 @@ function renderSessionTree(
         }
       } else if (msg.role === "toolResult") {
         const toolName = typeof msg.toolName === "string" ? msg.toolName : "?";
-        const textContent = msg.content.filter(isTextContent).map((part) => part.text).join("\n");
+        const textContent = msg.content
+          .filter(isTextContent)
+          .map((part) => part.text)
+          .join("\n");
         const truncated =
           textContent.length > 500 ? `${textContent.slice(0, 500)}... (truncated)` : textContent;
         if (truncated) {
@@ -333,7 +339,7 @@ export function createReadSessionTool(
           ? `${args.goal.slice(0, 60)}...`
           : args.goal
         : "...";
-      let text = theme.fg("toolTitle", theme.bold("read_session ")) + theme.fg("dim", goal);
+      let text = theme.fg("toolTitle", theme.bold("read_session ")) + theme.fg("muted", goal);
       if (args.session_id) {
         const shortId = args.session_id.length > 8 ? args.session_id.slice(0, 8) : args.session_id;
         text += theme.fg("muted", ` (${shortId}...)`);

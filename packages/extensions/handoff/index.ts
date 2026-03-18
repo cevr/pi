@@ -207,7 +207,7 @@ function showProvenance(ctx: ExtensionContext, parentPath: string): void {
   ctx.ui.setWidget("handoff-provenance", (_tui, theme) => ({
     render(width: number): string[] {
       const desc = getParentDescription(parentPath, width);
-      const arrow = theme.fg("dim", "↳ ");
+      const arrow = theme.fg("muted", "↳ ");
       const text = truncateToWidth(`${PROVENANCE_PREFIX.slice(2)}${desc}`, width);
       const content = arrow + text;
       const contentWidth = visibleWidth(content);

@@ -28,10 +28,11 @@ import { Config, Effect, Layer, ManagedRuntime, Redacted, ServiceMap } from "eff
 import type { BadArgument, PlatformError } from "effect/PlatformError";
 
 type WebSearchRuntimeError = Config.ConfigError | BadArgument | PlatformError;
-type WebSearchRuntime = ManagedRuntime.ManagedRuntime<ProcessRunner | WebSearchSecrets, WebSearchRuntimeError>;
-type SearchParallelRuntime =
-  | ManagedRuntime.ManagedRuntime<ProcessRunner, never>
-  | WebSearchRuntime;
+type WebSearchRuntime = ManagedRuntime.ManagedRuntime<
+  ProcessRunner | WebSearchSecrets,
+  WebSearchRuntimeError
+>;
+type SearchParallelRuntime = ManagedRuntime.ManagedRuntime<ProcessRunner, never> | WebSearchRuntime;
 
 type WebSearchExtConfig = {
   defaultMaxResults: number;
@@ -55,7 +56,8 @@ export const DEFAULT_DEPS: WebSearchExtensionDeps = {
   withPromptPatch,
 };
 
-const MISSING_API_KEY_MESSAGE = "PARALLEL_API_KEY not set. add it to your environment or the repo .env file.";
+const MISSING_API_KEY_MESSAGE =
+  "PARALLEL_API_KEY not set. add it to your environment or the repo .env file.";
 
 export class WebSearchSecrets extends ServiceMap.Service<
   WebSearchSecrets,
@@ -407,7 +409,7 @@ export function createWebSearchTool(
     renderCall(args: any, theme: any) {
       const objective = args.objective || "...";
       const short = objective.length > 70 ? `${objective.slice(0, 70)}...` : objective;
-      let text = theme.fg("toolTitle", theme.bold("web_search ")) + theme.fg("dim", short);
+      let text = theme.fg("toolTitle", theme.bold("web_search ")) + theme.fg("muted", short);
       if (args.search_queries?.length) {
         text += theme.fg("muted", ` [${args.search_queries.join(", ")}]`);
       }
@@ -442,7 +444,9 @@ export function createWebSearchRuntime(
       processRunnerLayer,
       WebSearchSecrets.layer.pipe(
         Layer.provide(
-          layerRepoEnv(start).pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer))),
+          layerRepoEnv(start).pipe(
+            Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)),
+          ),
         ),
       ),
     ),

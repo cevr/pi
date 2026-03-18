@@ -121,7 +121,7 @@ export class StackPalette implements Component, Focusable {
     const maxW = Math.min(width, 72);
     const innerW = maxW - 2;
     const lines: string[] = [];
-    const dim = (s: string) => th.fg("dim", s);
+    const dim = (s: string) => th.fg("muted", s);
 
     const pad = (s: string, len: number) => {
       const vis = visibleWidth(s);

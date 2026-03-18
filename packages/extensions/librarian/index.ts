@@ -267,7 +267,7 @@ export function createLibrarianTool(
           : args.query
         : "...";
       return new Text(
-        theme.fg("toolTitle", theme.bold("librarian ")) + theme.fg("dim", preview),
+        theme.fg("toolTitle", theme.bold("librarian ")) + theme.fg("muted", preview),
         0,
         0,
       );

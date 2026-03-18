@@ -102,7 +102,7 @@ export function createUndoEditTool(
       const linked = filePath.startsWith("/")
         ? osc8Link(`file://${filePath}`, shortened)
         : shortened;
-      return new Text(theme.fg("toolTitle", theme.bold("Undo ")) + theme.fg("dim", linked), 0, 0);
+      return new Text(theme.fg("toolTitle", theme.bold("Undo ")) + theme.fg("muted", linked), 0, 0);
     },
 
     renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {

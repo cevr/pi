@@ -43,7 +43,7 @@ export function createLsTool(limits: ReadLimits): ToolDefinition {
       const home = os.homedir();
       const shortened = dirPath.startsWith(home) ? `~${dirPath.slice(home.length)}` : dirPath;
       const linked = dirPath.startsWith("/") ? osc8Link(`file://${dirPath}`, shortened) : shortened;
-      return new Text(theme.fg("toolTitle", theme.bold("ls ")) + theme.fg("dim", linked), 0, 0);
+      return new Text(theme.fg("toolTitle", theme.bold("ls ")) + theme.fg("muted", linked), 0, 0);
     },
 
     renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {

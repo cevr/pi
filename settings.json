@@ -2,6 +2,7 @@
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.4",
   "defaultThinkingLevel": "medium",
+  "theme": "cristian-nord",
   "enabledModels": [
     "anthropic/claude-opus-4-6",
     "*/gpt-5.4"
@@ -20,7 +21,7 @@
   "enableSkillCommands": false,
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
-  "lastChangelogVersion": "0.59.0",
+  "lastChangelogVersion": "0.60.0",
   "packages": [
     "npm:pi-subagents",
     "npm:pi-interview",

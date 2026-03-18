@@ -212,7 +212,7 @@ export function createGrepTool(
       const caseSuffix = args.caseSensitive === false ? " -i" : "";
       return new Text(
         theme.fg("toolTitle", theme.bold("Grep ")) +
-          theme.fg("dim", `/${pattern}/${caseSuffix} in ${linkedPath}`),
+          theme.fg("muted", `/${pattern}/${caseSuffix} in ${linkedPath}`),
         0,
         0,
       );
@@ -484,7 +484,12 @@ export function createGrepTool(
           },
         } as any;
       } catch (err) {
-        if (err != null && typeof err === "object" && "_tag" in err && err._tag === "CommandAborted") {
+        if (
+          err != null &&
+          typeof err === "object" &&
+          "_tag" in err &&
+          err._tag === "CommandAborted"
+        ) {
           return {
             content: [{ type: "text" as const, text: "search aborted" }],
             isError: true,

@@ -388,7 +388,7 @@ export function renderCallLine(
   theme: any,
 ): { render(width: number): string[]; invalidate(): void } {
   const line =
-    theme.fg("toolTitle", theme.bold(label)) + (context ? " " + theme.fg("dim", context) : "");
+    theme.fg("toolTitle", theme.bold(label)) + (context ? " " + theme.fg("muted", context) : "");
   return {
     render(_width: number): string[] {
       return [line];

@@ -207,7 +207,7 @@ function renderToolLine(
       : item.isError === false
         ? fg("success", "✓")
         : fg("muted", "⋯");
-  return `${icon} ${fg("accent", toolLabel(item.name))} ${fg("dim", toolArgSummary(item.name, item.args))}`;
+  return `${icon} ${fg("accent", toolLabel(item.name))} ${fg("muted", toolArgSummary(item.name, item.args))}`;
 }
 
 // --- tree rendering ---
@@ -285,7 +285,7 @@ export function renderAgentTree(
       const connector = isLast ? END : MID;
 
       if (child.kind === "text") {
-        container.addChild(new Text(connector + fg("dim", child.content), 0, 0));
+        container.addChild(new Text(connector + fg("muted", child.content), 0, 0));
       } else if (child.kind === "tool") {
         container.addChild(new TruncatedText(connector + renderToolLine(child.item, fg), 0, 0));
       } else if (child.kind === "summary") {
@@ -302,7 +302,7 @@ export function renderAgentTree(
   }
 
   const usageStr = formatUsageStats(r.usage, r.model);
-  if (usageStr) container.addChild(new Text(fg("dim", usageStr), 0, 0));
+  if (usageStr) container.addChild(new Text(fg("muted", usageStr), 0, 0));
 }
 
 // --- inline tests ---

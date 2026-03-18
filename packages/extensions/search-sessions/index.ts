@@ -463,7 +463,7 @@ export function createSearchSessionsTool(
       if (args.workspace) parts.push(`ws:${args.workspace}`);
       const preview = parts.join(" ") || "...";
       return new Text(
-        theme.fg("toolTitle", theme.bold("search_sessions ")) + theme.fg("dim", preview),
+        theme.fg("toolTitle", theme.bold("search_sessions ")) + theme.fg("muted", preview),
         0,
         0,
       );

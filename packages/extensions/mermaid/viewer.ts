@@ -144,7 +144,7 @@ class MermaidViewer {
 
     const th = this.theme;
     const innerW = width - 4; // "│ " + content + " │"
-    const dim = (s: string) => th.fg("dim", s);
+    const dim = (s: string) => th.fg("muted", s);
 
     const entry = this.diagrams[this.activeIndex];
     if (!entry) {

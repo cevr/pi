@@ -296,7 +296,11 @@ export function createTaskTool(
     renderCall(args: any, theme: any) {
       const desc = args.description || "...";
       const preview = desc.length > 80 ? `${desc.slice(0, 80)}...` : desc;
-      return new Text(theme.fg("toolTitle", theme.bold("Task ")) + theme.fg("dim", preview), 0, 0);
+      return new Text(
+        theme.fg("toolTitle", theme.bold("Task ")) + theme.fg("muted", preview),
+        0,
+        0,
+      );
     },
 
     renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) {
