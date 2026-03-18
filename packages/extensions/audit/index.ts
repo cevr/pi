@@ -314,17 +314,10 @@ export function runConcernBatch(
   });
 }
 
-const AUDIT_CUSTOM_TYPES = new Set([
+const AUDIT_HIDDEN_CONTEXT_TYPES = new Set([
   "audit-context",
-  "audit-trigger",
   "audit-progress",
   "audit-error",
-  "audit-fix",
-  "audit-gate",
-  "audit-gate-fix",
-  "audit-counsel",
-  "audit-counsel-fix",
-  "audit-commit",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -708,7 +701,9 @@ export default function auditExtension(pi: ExtensionAPI): void {
       context: {
         mode: "reply" as const,
         handle: (_state, event) => ({
-          messages: event.messages.filter((m: any) => !AUDIT_CUSTOM_TYPES.has(m.customType)),
+          messages: event.messages.filter(
+            (message: any) => !AUDIT_HIDDEN_CONTEXT_TYPES.has(message.customType),
+          ),
         }),
       },
 

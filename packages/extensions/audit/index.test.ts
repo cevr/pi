@@ -483,6 +483,30 @@ describe("audit extension", () => {
     });
   });
 
+  it("keeps audit trigger messages in context while stripping passive audit status messages", () => {
+    const harness = createMockExtensionApiHarness();
+    auditExtension(harness.pi);
+
+    const context = harness.getListener("context");
+    expect(context).toBeDefined();
+
+    const reply = context!.handler({
+      messages: [
+        { role: "custom", customType: "audit-context", content: "hidden" },
+        { role: "custom", customType: "audit-progress", content: "progress" },
+        { role: "custom", customType: "audit-trigger", content: "detect concerns" },
+        { role: "custom", customType: "audit-fix", content: "fix finding" },
+        { role: "user", content: "real user message" },
+      ],
+    });
+
+    expect(reply.messages).toEqual([
+      { role: "custom", customType: "audit-trigger", content: "detect concerns" },
+      { role: "custom", customType: "audit-fix", content: "fix finding" },
+      { role: "user", content: "real user message" },
+    ]);
+  });
+
   it("restores persisted Fixing gate phase on session start", () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
