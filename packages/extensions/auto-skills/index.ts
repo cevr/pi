@@ -16,6 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, Skill } from "@mariozechner/pi-coding-agent";
 import { loadSkills } from "@mariozechner/pi-coding-agent";
+import { getSkillPathsFromSettings } from "@cvr/pi-skill-paths";
 import { PiSpawnService } from "@cvr/pi-spawn";
 import { getFinalOutput } from "@cvr/pi-sub-agent-render";
 import { Effect, ManagedRuntime } from "effect";
@@ -78,34 +79,6 @@ function hashSignals(signals: ProjectSignals): string {
 // ---------------------------------------------------------------------------
 // Skill catalog
 // ---------------------------------------------------------------------------
-
-function getAgentDir(): string {
-  const envDir = process.env.PI_CODING_AGENT_DIR;
-  if (envDir) {
-    if (envDir === "~") return os.homedir();
-    if (envDir.startsWith("~/")) return os.homedir() + envDir.slice(1);
-    return envDir;
-  }
-  return path.join(os.homedir(), ".pi", "agent");
-}
-
-function getSkillPathsFromSettings(): string[] {
-  const settingsPath = path.join(getAgentDir(), "settings.json");
-  if (!fs.existsSync(settingsPath)) return [];
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-    if (Array.isArray(settings.skills)) {
-      return settings.skills.map((p: string) => {
-        if (p === "~") return os.homedir();
-        if (p.startsWith("~/")) return os.homedir() + p.slice(1);
-        return p;
-      });
-    }
-  } catch {
-    /* unreadable */
-  }
-  return [];
-}
 
 interface SkillEntry {
   name: string;

@@ -1,6 +1,7 @@
-/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as fs from "node:fs";
 import * as os from "node:os";
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as path from "node:path";
 import { walkDirSync } from "@cvr/pi-fs";
 import { createCache, getOrSet } from "./cache";
@@ -54,6 +55,12 @@ export interface ParsedSessionFile {
   header: SessionHeader | null;
   entries: SessionEntry[];
   sessionName: string;
+}
+
+export interface SessionTree {
+  byId: Map<string, SessionEntry>;
+  childrenByParentId: Map<string | null, SessionEntry[]>;
+  rootEntries: SessionEntry[];
 }
 
 export interface BranchResult {
@@ -142,6 +149,24 @@ export function listSessionFiles(sessionsDir: string): string[] {
   });
 }
 
+export function findSessionFileBySessionId(sessionId: string, sessionsDir: string): string | null {
+  if (!fs.existsSync(sessionsDir)) return null;
+
+  const byFilename = walkDirSync(sessionsDir, {
+    stopWhen: (entry) =>
+      entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(sessionId),
+  })[0];
+  if (byFilename && parseSessionFile(byFilename).header?.id === sessionId) {
+    return byFilename;
+  }
+
+  for (const filePath of listSessionFiles(sessionsDir)) {
+    if (parseSessionFile(filePath).header?.id === sessionId) return filePath;
+  }
+
+  return null;
+}
+
 export function parseSessionFile(filePath: string): ParsedSessionFile {
   let raw: string;
   try {
@@ -173,6 +198,47 @@ export function parseSessionFile(filePath: string): ParsedSessionFile {
   return { filePath, header, entries, sessionName };
 }
 
+export function buildSessionTree(entries: ReadonlyArray<SessionEntry>): SessionTree {
+  const byId = new Map<string, SessionEntry>();
+  for (const entry of entries) {
+    byId.set(entry.id, entry);
+  }
+
+  const childrenByParentId = new Map<string | null, SessionEntry[]>();
+  for (const entry of entries) {
+    const parentId = entry.parentId ?? null;
+    const bucket = childrenByParentId.get(parentId);
+    if (bucket) bucket.push(entry);
+    else childrenByParentId.set(parentId, [entry]);
+  }
+
+  const rootEntries = [...(childrenByParentId.get(null) ?? [])];
+  const rootIds = new Set(rootEntries.map((entry) => entry.id));
+  for (const entry of entries) {
+    if (entry.parentId && !byId.has(entry.parentId) && !rootIds.has(entry.id)) {
+      rootEntries.push(entry);
+      rootIds.add(entry.id);
+    }
+  }
+
+  return { byId, childrenByParentId, rootEntries };
+}
+
+export function getSessionChainToRoot(
+  leafId: string,
+  byId: ReadonlyMap<string, SessionEntry>,
+): SessionEntry[] {
+  const chain: SessionEntry[] = [];
+  let current = byId.get(leafId);
+
+  while (current) {
+    chain.unshift(current);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+
+  return chain;
+}
+
 export function extractFirstUserMessage(entries: SessionEntry[]): string {
   for (const entry of entries) {
     if (entry.type !== "message") continue;
@@ -194,24 +260,8 @@ export function enumerateBranches(
   filePath: string,
 ): BranchResult[] {
   const parentSessionPath = header.parentSession;
-  const children = new Map<string | null, SessionEntry[]>();
-
-  for (const entry of entries) {
-    const parent = entry.parentId ?? null;
-    const bucket = children.get(parent);
-    if (bucket) bucket.push(entry);
-    else children.set(parent, [entry]);
-  }
-
-  const hasChildren = new Set<string>();
-  for (const entry of entries) {
-    if (entry.parentId) hasChildren.add(entry.parentId);
-  }
-
-  const leaves = entries.filter((entry) => !hasChildren.has(entry.id));
-  const byId = new Map<string, SessionEntry>();
-  for (const entry of entries) byId.set(entry.id, entry);
-
+  const { byId, childrenByParentId } = buildSessionTree(entries);
+  const leaves = entries.filter((entry) => (childrenByParentId.get(entry.id)?.length ?? 0) === 0);
   const branches: BranchResult[] = [];
 
   for (const leaf of leaves) {
@@ -220,25 +270,11 @@ export function enumerateBranches(
       leaf.type === "model_change" ||
       leaf.type === "thinking_level_change"
     ) {
-      let hasMessages = false;
-      let current: SessionEntry | undefined = leaf;
-      while (current) {
-        if (current.type === "message") {
-          hasMessages = true;
-          break;
-        }
-        current = current.parentId ? byId.get(current.parentId) : undefined;
-      }
+      const hasMessages = getSessionChainToRoot(leaf.id, byId).some((entry) => entry.type === "message");
       if (!hasMessages) continue;
     }
 
-    const chain: SessionEntry[] = [];
-    let current: SessionEntry | undefined = leaf;
-    while (current) {
-      chain.unshift(current);
-      current = current.parentId ? byId.get(current.parentId) : undefined;
-    }
-
+    const chain = getSessionChainToRoot(leaf.id, byId);
     const files = new Set<string>();
     const models = new Set<string>();
     const textChunks: string[] = [];

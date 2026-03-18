@@ -82,6 +82,7 @@
       "@cvr/pi-repo-env": ["./packages/core/repo-env/index.ts"],
       "@cvr/pi-git-client": ["./packages/core/git-client/index.ts"],
       "@cvr/pi-output-buffer": ["./packages/core/output-buffer/index.ts"],
+      "@cvr/pi-skill-paths": ["./packages/core/skill-paths/index.ts"],
       "@cvr/pi-permissions": ["./packages/core/permissions/index.ts"],
       "@cvr/pi-spawn": ["./packages/core/pi-spawn/index.ts"],
       "@cvr/pi-prompt-patch": ["./packages/core/prompt-patch/index.ts"],

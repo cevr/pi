@@ -307,7 +307,7 @@ describe("getGlobalConfig", () => {
       promptVariables: { foo: { literal: "bar" } },
     });
     setGlobalSettingsPath(settingsPath);
-    expect(getGlobalConfig<{ foo: { literal: string } }>("promptVariables")).toEqual({
+    expect(getGlobalConfig("promptVariables")).toEqual({
       foo: { literal: "bar" },
     });
   });

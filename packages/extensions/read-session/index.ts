@@ -11,11 +11,18 @@
  * in the rendered output so the agent knows which path to focus on.
  */
 
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { walkDirSync } from "@cvr/pi-fs";
+import {
+  buildSessionTree,
+  findSessionFileBySessionId,
+  getSessionChainToRoot,
+  isTextContent,
+  parseSessionFile,
+  type MessageEntry,
+  type SessionEntry,
+} from "@cvr/pi-mentions";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { Type } from "@sinclair/typebox";
@@ -79,32 +86,6 @@ export interface ReadSessionConfig {
   maxChars: number;
 }
 
-// --- session parsing (shared types with search-sessions) ---
-
-interface SessionEntry {
-  type: string;
-  id: string;
-  parentId: string | null;
-  timestamp: string;
-  [key: string]: unknown;
-}
-
-interface MessageContent {
-  role: string;
-  content: Array<{
-    type: string;
-    text?: string;
-    thinking?: string;
-    name?: string;
-    arguments?: Record<string, unknown>;
-    [key: string]: unknown;
-  }>;
-  toolCallId?: string;
-  toolName?: string;
-  isError?: boolean;
-  [key: string]: unknown;
-}
-
 // --- session rendering ---
 
 interface ReadSessionParams {
@@ -113,125 +94,42 @@ interface ReadSessionParams {
   leaf_id?: string;
 }
 
-export function findSessionFile(sessionId: string, sessionsDir: string): string | null {
-  if (!fs.existsSync(sessionsDir)) return null;
-
-  // fast path: check filename contains session id
-  const byFilename = walkDirSync(sessionsDir, {
-    stopWhen: (entry) =>
-      entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(sessionId),
-  })[0];
-  if (byFilename) return byFilename;
-
-  // slow path: parse headers
-  return (
-    walkDirSync(sessionsDir, {
-      stopWhen: (entry, absolutePath) => {
-        if (!entry.isFile() || !entry.name.endsWith(".jsonl")) return false;
-        try {
-          const firstLine = fs.readFileSync(absolutePath, "utf-8").split("\n")[0];
-          if (!firstLine) return false;
-          const header = JSON.parse(firstLine);
-          return header.type === "session" && header.id === sessionId;
-        } catch {
-          return false;
-        }
-      },
-    })[0] ?? null
-  );
-}
+export { findSessionFileBySessionId as findSessionFile } from "@cvr/pi-mentions";
 
 function renderSessionTree(
   filePath: string,
   targetLeafId: string | undefined,
   maxChars: number,
 ): { markdown: string; sessionName: string; sessionId: string } {
-  const raw = fs.readFileSync(filePath, "utf-8");
-  const lines = raw.split("\n").filter((l) => l.trim());
+  const parsed = parseSessionFile(filePath);
+  const sessionId = parsed.header?.id ?? "";
+  const sessionName = parsed.sessionName;
+  const workspace = parsed.header?.cwd ?? "";
+  const startedAt = parsed.header?.timestamp ?? "";
+  const { byId, childrenByParentId, rootEntries } = buildSessionTree(parsed.entries);
+  const targetPath = new Set(
+    targetLeafId ? getSessionChainToRoot(targetLeafId, byId).map((entry) => entry.id) : [],
+  );
 
-  const entries: SessionEntry[] = [];
-  let sessionId = "";
-  let sessionName = "";
-  let cwd = "";
-  let timestamp = "";
-
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === "session") {
-        sessionId = entry.id;
-        cwd = entry.cwd || "";
-        timestamp = entry.timestamp || "";
-      }
-      if (entry.type === "session_info" && entry.name) {
-        sessionName = entry.name;
-      }
-      if (entry.id) entries.push(entry);
-    } catch {
-      /* skip */
-    }
-  }
-
-  // build tree
-  const byId = new Map<string, SessionEntry>();
-  const children = new Map<string, string[]>();
-  for (const e of entries) {
-    byId.set(e.id, e);
-    const parent = e.parentId ?? "__root__";
-    if (!children.has(parent)) children.set(parent, []);
-    children.get(parent)!.push(e.id);
-  }
-
-  // find target branch path (leaf → root) for annotation
-  const targetPath = new Set<string>();
-  if (targetLeafId) {
-    let current = targetLeafId;
-    while (current) {
-      targetPath.add(current);
-      const entry = byId.get(current);
-      if (!entry?.parentId) break;
-      current = entry.parentId;
-    }
-  }
-
-  // detect branch points (entries with >1 child)
-  const branchPoints = new Set<string>();
-  for (const [parentId, kids] of children.entries()) {
-    if (kids.length > 1) branchPoints.add(parentId);
-  }
-
-  // render as markdown via DFS
   const parts: string[] = [];
   parts.push(`# session: ${sessionName || sessionId}`);
   parts.push(`id: ${sessionId}`);
-  parts.push(`workspace: ${cwd}`);
-  parts.push(`started: ${timestamp}`);
+  parts.push(`workspace: ${workspace}`);
+  parts.push(`started: ${startedAt}`);
   if (targetLeafId) parts.push(`target branch leaf: ${targetLeafId}`);
   parts.push("");
 
-  const renderEntry = (entryId: string, depth: number) => {
-    const entry = byId.get(entryId);
-    if (!entry) return;
-
-    const isTarget = targetPath.has(entryId);
-    const marker = isTarget ? " [TARGET BRANCH]" : "";
-
-    // check if this is a branch point
-    const kids = children.get(entryId) || [];
-    if (kids.length > 1) {
-      parts.push(`\n--- branch point (${kids.length} paths) ---\n`);
+  const renderEntry = (entry: SessionEntry) => {
+    const marker = targetPath.has(entry.id) ? " [TARGET BRANCH]" : "";
+    const children = childrenByParentId.get(entry.id) ?? [];
+    if (children.length > 1) {
+      parts.push(`\n--- branch point (${children.length} paths) ---\n`);
     }
 
     if (entry.type === "message") {
-      const msg = (entry as any).message as MessageContent | undefined;
-      if (!msg) return;
-
+      const msg = (entry as MessageEntry).message;
       if (msg.role === "user") {
-        const textParts =
-          msg.content
-            ?.filter((p) => p.type === "text")
-            .map((p) => p.text)
-            .join("\n") || "";
+        const textParts = msg.content.filter(isTextContent).map((part) => part.text).join("\n");
         if (textParts) {
           parts.push(`## user${marker}`);
           parts.push(textParts);
@@ -241,36 +139,28 @@ function renderSessionTree(
         const textParts: string[] = [];
         const toolCalls: string[] = [];
 
-        for (const part of msg.content || []) {
-          if (part.type === "text" && part.text) {
+        for (const part of msg.content) {
+          if (isTextContent(part)) {
             textParts.push(part.text);
           } else if (part.type === "toolCall") {
             const args = part.arguments ? JSON.stringify(part.arguments).slice(0, 200) : "";
             toolCalls.push(`${part.name}(${args})`);
           }
-          // skip thinking blocks — they're internal
         }
 
         if (textParts.length > 0 || toolCalls.length > 0) {
           parts.push(`## assistant${marker}`);
           if (textParts.length > 0) parts.push(textParts.join("\n"));
-          if (toolCalls.length > 0) {
-            parts.push(`\ntool calls: ${toolCalls.join(", ")}`);
-          }
+          if (toolCalls.length > 0) parts.push(`\ntool calls: ${toolCalls.join(", ")}`);
           parts.push("");
         }
       } else if (msg.role === "toolResult") {
-        const toolName = msg.toolName || "?";
-        const textContent =
-          msg.content
-            ?.filter((p) => p.type === "text")
-            .map((p) => p.text)
-            .join("\n") || "";
-        // truncate tool results to avoid overwhelming the context
+        const toolName = typeof msg.toolName === "string" ? msg.toolName : "?";
+        const textContent = msg.content.filter(isTextContent).map((part) => part.text).join("\n");
         const truncated =
           textContent.length > 500 ? `${textContent.slice(0, 500)}... (truncated)` : textContent;
         if (truncated) {
-          parts.push(`### ${toolName} result${msg.isError ? " (ERROR)" : ""}${marker}`);
+          parts.push(`### ${toolName} result${msg.isError === true ? " (ERROR)" : ""}${marker}`);
           parts.push(truncated);
           parts.push("");
         }
@@ -279,32 +169,22 @@ function renderSessionTree(
       parts.push(`*model changed to ${String(entry.modelId)}*\n`);
     }
 
-    // render children
-    for (const childId of kids) {
-      renderEntry(childId, depth + 1);
+    for (const child of children) {
+      renderEntry(child);
     }
   };
 
-  // start from root entries (parentId is null or points to non-existent)
-  const rootIds = children.get("__root__") || [];
-  // also find entries whose parentId doesn't exist in byId (orphan roots)
-  for (const e of entries) {
-    if (e.parentId && !byId.has(e.parentId) && !rootIds.includes(e.id)) {
-      rootIds.push(e.id);
-    }
+  for (const rootEntry of rootEntries) {
+    renderEntry(rootEntry);
   }
 
-  for (const rootId of rootIds) {
-    renderEntry(rootId, 0);
-  }
-
-  let markdown = parts.join("\n");
+  const markdown = parts.join("\n");
   const truncated = headTailChars(markdown, maxChars);
-  if (truncated.truncated) {
-    markdown = truncated.text;
-  }
-
-  return { markdown, sessionName, sessionId };
+  return {
+    markdown: truncated.truncated ? truncated.text : markdown,
+    sessionName,
+    sessionId,
+  };
 }
 
 // --- tool ---
@@ -349,7 +229,7 @@ export function createReadSessionTool(
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const p = params as ReadSessionParams;
       // find the session file
-      const sessionFile = findSessionFile(p.session_id, config.sessionsDir);
+      const sessionFile = findSessionFileBySessionId(p.session_id, config.sessionsDir);
       if (!sessionFile) {
         return {
           content: [

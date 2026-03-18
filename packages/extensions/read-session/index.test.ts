@@ -90,6 +90,30 @@ describe("findSessionFile", () => {
 
     expect(findSessionFile("beta-session", sessionsDir)).toBe(filePath);
   });
+
+  it("does not trust filename substring matches without an exact header match", () => {
+    const sessionsDir = makeTmpDir();
+    const misleadingPath = path.join(sessionsDir, "nested", "2026-03-06T17-00-00-000Z_alpha.jsonl");
+    const exactPath = path.join(sessionsDir, "nested", "session-log.jsonl");
+    writeSessionJsonl(misleadingPath, [
+      {
+        type: "session",
+        id: "alpha-elsewhere",
+        timestamp: "2026-03-06T17:00:00.000Z",
+        cwd: "/repo/app",
+      },
+    ]);
+    writeSessionJsonl(exactPath, [
+      {
+        type: "session",
+        id: "alpha",
+        timestamp: "2026-03-06T17:10:00.000Z",
+        cwd: "/repo/app",
+      },
+    ]);
+
+    expect(findSessionFile("alpha", sessionsDir)).toBe(exactPath);
+  });
 });
 
 describe("read-session extension", () => {

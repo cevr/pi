@@ -11,11 +11,10 @@
  * remains registered separately for backward compat / model-initiated loading.
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, Skill } from "@mariozechner/pi-coding-agent";
 import { loadSkills } from "@mariozechner/pi-coding-agent";
+import { getSkillPathsFromSettings, renderLoadedSkillContent } from "@cvr/pi-skill-paths";
 import {
   type Component,
   CURSOR_MARKER,
@@ -40,34 +39,6 @@ const MAX_VISIBLE = 12;
 // Skill catalog
 // ---------------------------------------------------------------------------
 
-function getAgentDir(): string {
-  const envDir = process.env.PI_CODING_AGENT_DIR;
-  if (envDir) {
-    if (envDir === "~") return os.homedir();
-    if (envDir.startsWith("~/")) return os.homedir() + envDir.slice(1);
-    return envDir;
-  }
-  return path.join(os.homedir(), ".pi", "agent");
-}
-
-function getSkillPathsFromSettings(): string[] {
-  const settingsPath = path.join(getAgentDir(), "settings.json");
-  if (!fs.existsSync(settingsPath)) return [];
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-    if (Array.isArray(settings.skills)) {
-      return settings.skills.map((p: string) => {
-        if (p === "~") return os.homedir();
-        if (p.startsWith("~/")) return os.homedir() + p.slice(1);
-        return p;
-      });
-    }
-  } catch {
-    /* unreadable */
-  }
-  return [];
-}
-
 function getSkillCatalog(cwd: string): Skill[] {
   const skillPaths = getSkillPathsFromSettings();
   const { skills } = loadSkills({ cwd, skillPaths, includeDefaults: true });
@@ -75,64 +46,15 @@ function getSkillCatalog(cwd: string): Skill[] {
 }
 
 // ---------------------------------------------------------------------------
-// SKILL.md loading (ported from skill/index.ts)
+// SKILL.md loading
 // ---------------------------------------------------------------------------
 
-function parseFrontmatter(content: string): { body: string } {
-  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (!normalized.startsWith("---")) return { body: normalized };
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) return { body: normalized };
-  return { body: normalized.slice(endIndex + 4).trim() };
-}
-
-function collectSkillFiles(baseDir: string): string[] {
-  const files: string[] = [];
-  function walk(dir: string) {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.isFile() && entry.name !== "SKILL.md") files.push(full);
-    }
-  }
-  walk(baseDir);
-  return files;
-}
-
 function loadSkillContent(skill: Skill): string | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(skill.filePath, "utf-8");
-  } catch {
-    return null;
-  }
-
-  const { body } = parseFrontmatter(raw);
-  const baseDir = path.dirname(skill.filePath);
-
-  const parts: string[] = [
-    `<loaded_skill name="${skill.name}">`,
-    body,
-    "",
-    `Base directory for this skill: ${baseDir}`,
-  ];
-
-  const skillFiles = collectSkillFiles(baseDir);
-  if (skillFiles.length > 0) {
-    parts.push("", "<skill_files>");
-    for (const f of skillFiles) parts.push(`<file>${f}</file>`);
-    parts.push("</skill_files>");
-  }
-
-  parts.push("</loaded_skill>");
-  return parts.join("\n");
+  return renderLoadedSkillContent({
+    name: skill.name,
+    filePath: skill.filePath,
+    baseDir: path.dirname(skill.filePath),
+  });
 }
 
 // ---------------------------------------------------------------------------

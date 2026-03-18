@@ -18,191 +18,17 @@
  * this first pass.
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { boxRendererWindowed, textSection, type Excerpt } from "@cvr/pi-box-format";
+import { findSkillFile, listAvailableSkillNames, renderLoadedSkillContent } from "@cvr/pi-skill-paths";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
   { focus: "head" as const, context: 3 },
   { focus: "tail" as const, context: 5 },
 ];
-
-// --- frontmatter parsing (reimplemented; pi's isn't re-exported) ---
-
-interface Frontmatter {
-  name?: string;
-  description?: string;
-  [key: string]: unknown;
-}
-
-function parseFrontmatter(content: string): {
-  frontmatter: Frontmatter;
-  body: string;
-} {
-  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (!normalized.startsWith("---")) {
-    return { frontmatter: {}, body: normalized };
-  }
-
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) {
-    return { frontmatter: {}, body: normalized };
-  }
-
-  const yamlStr = normalized.slice(4, endIndex);
-  const body = normalized.slice(endIndex + 4).trim();
-
-  // minimal yaml key:value parsing — skills use simple flat frontmatter
-  const frontmatter: Frontmatter = {};
-  for (const line of yamlStr.split("\n")) {
-    const match = line.match(/^(\w[\w-]*):\s*"?(.+?)"?\s*$/);
-    if (match && match[1] && match[2]) {
-      frontmatter[match[1]] = match[2];
-    }
-  }
-
-  return { frontmatter, body };
-}
-
-// --- skill discovery ---
-
-interface SkillEntry {
-  name: string;
-  filePath: string;
-  baseDir: string;
-}
-
-/**
- * resolve agentDir the same way pi does:
- * env PI_CODING_AGENT_DIR > ~/.pi/agent/
- */
-function getAgentDir(): string {
-  const envDir = process.env.PI_CODING_AGENT_DIR;
-  if (envDir) {
-    if (envDir === "~") return os.homedir();
-    if (envDir.startsWith("~/")) return os.homedir() + envDir.slice(1);
-    return envDir;
-  }
-  return path.join(os.homedir(), ".pi", "agent");
-}
-
-/**
- * read pi's settings.json to get additional skill paths.
- * returns the `skills` array if present.
- */
-function getSkillPathsFromSettings(): string[] {
-  const settingsPath = path.join(getAgentDir(), "settings.json");
-  if (!fs.existsSync(settingsPath)) return [];
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-    if (Array.isArray(settings.skills)) {
-      return settings.skills.map((p: string) => {
-        if (p === "~") return os.homedir();
-        if (p.startsWith("~/")) return os.homedir() + p.slice(1);
-        return p;
-      });
-    }
-  } catch {
-    /* unreadable */
-  }
-  return [];
-}
-
-/**
- * search for a skill by name across all known directories.
- * checks: agentDir/skills/{name}/SKILL.md, settings skill paths,
- * and project-local .pi/skills/{name}/SKILL.md.
- */
-function findSkill(name: string, cwd: string): SkillEntry | null {
-  const candidates: string[] = [];
-
-  // 1. default agentDir skills
-  candidates.push(path.join(getAgentDir(), "skills", name, "SKILL.md"));
-
-  // 2. settings.json skill paths
-  for (const skillDir of getSkillPathsFromSettings()) {
-    candidates.push(path.join(skillDir, name, "SKILL.md"));
-  }
-
-  // 3. project-local
-  candidates.push(path.join(cwd, ".pi", "skills", name, "SKILL.md"));
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return {
-        name,
-        filePath: candidate,
-        baseDir: path.dirname(candidate),
-      };
-    }
-  }
-
-  return null;
-}
-
-/**
- * list all known skill names for error messages.
- */
-function listAvailableSkills(cwd: string): string[] {
-  const names = new Set<string>();
-  const dirs: string[] = [
-    path.join(getAgentDir(), "skills"),
-    ...getSkillPathsFromSettings(),
-    path.join(cwd, ".pi", "skills"),
-  ];
-
-  for (const dir of dirs) {
-    if (!fs.existsSync(dir)) continue;
-    try {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const skillMd = path.join(dir, entry.name, "SKILL.md");
-        if (fs.existsSync(skillMd)) names.add(entry.name);
-      }
-    } catch {
-      /* unreadable */
-    }
-  }
-
-  return Array.from(names).sort();
-}
-
-/**
- * collect file paths in the skill directory (excluding SKILL.md),
- * walking subdirectories. used for the <skill_files> block so the
- * model knows what reference files are available.
- */
-function collectSkillFiles(baseDir: string): string[] {
-  const files: string[] = [];
-
-  function walk(dir: string) {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
-      if (entry.name === "node_modules") continue;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(full);
-      } else if (entry.isFile() && entry.name !== "SKILL.md") {
-        files.push(full);
-      }
-    }
-  }
-
-  walk(baseDir);
-  return files;
-}
 
 // --- tool factory ---
 
@@ -246,10 +72,10 @@ export function createSkillTool(): ToolDefinition {
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const p = params as SkillParams;
-      const skill = findSkill(p.name, ctx.cwd);
+      const skill = findSkillFile(p.name, ctx.cwd);
 
       if (!skill) {
-        const available = listAvailableSkills(ctx.cwd);
+        const available = listAvailableSkillNames(ctx.cwd);
         const list = available.length > 0 ? `\n\navailable skills: ${available.join(", ")}` : "";
         return {
           content: [
@@ -262,46 +88,21 @@ export function createSkillTool(): ToolDefinition {
         } as any;
       }
 
-      let rawContent: string;
-      try {
-        rawContent = fs.readFileSync(skill.filePath, "utf-8");
-      } catch (err: any) {
+      const rendered = renderLoadedSkillContent(skill);
+      if (!rendered) {
         return {
           content: [
             {
               type: "text" as const,
-              text: `failed to read skill file: ${err.message}`,
+              text: `failed to read skill file: ${skill.filePath}`,
             },
           ],
           isError: true,
         } as any;
       }
 
-      const { body } = parseFrontmatter(rawContent);
-
-      // build output in <loaded_skill> format
-      const parts: string[] = [
-        `<loaded_skill name="${skill.name}">`,
-        body,
-        "",
-        `Base directory for this skill: file://${skill.baseDir}`,
-        "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
-      ];
-
-      const skillFiles = collectSkillFiles(skill.baseDir);
-      if (skillFiles.length > 0) {
-        parts.push("");
-        parts.push("<skill_files>");
-        for (const f of skillFiles) {
-          parts.push(`<file>${f}</file>`);
-        }
-        parts.push("</skill_files>");
-      }
-
-      parts.push("</loaded_skill>");
-
       return {
-        content: [{ type: "text" as const, text: parts.join("\n") }],
+        content: [{ type: "text" as const, text: rendered }],
         details: { header: skill.name },
       } as any;
     },

@@ -177,11 +177,11 @@ export function getEnabledExtensionConfig<T extends Record<string, unknown>>(
 }
 
 /** read a top-level (non-namespaced) key from the global settings file. */
-export function getGlobalConfig<T>(key: string): T | undefined {
+export function getGlobalConfig(key: string): unknown {
   const globalPath = resolveGlobalSettingsPath();
   const settings = readJsonFile(globalPath);
   if (!settings || !(key in settings)) return undefined;
-  return settings[key] as T;
+  return settings[key];
 }
 
 /** directory containing the global settings file (e.g. ~/.pi/agent/). */
