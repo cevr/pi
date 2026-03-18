@@ -4,18 +4,13 @@
  * injection into the conversation context.
  *
  * replaces pi's default approach (model uses `read` on the SKILL.md
- * path) with a dedicated tool. the model
- * calls `skill(name: "git")` instead of `read(path: "/.../SKILL.md")`.
+ * path) with a dedicated tool. the model calls `skill(name: "git")`
+ * instead of `read(path: "/.../SKILL.md")`.
  *
- * discovery searches skill directories configured in pi's settings
- * (settings.json `skills` array), the default agentDir/skills/,
- * and project-local .pi/skills/. frontmatter is parsed for name
- * and description. files in the skill directory are listed in
- * <skill_files> for the model to read if needed.
- *
- * does NOT inject MCP or builtin tools from frontmatter — that
- * requires runtime tool registration which is out of scope for
- * this first pass.
+ * discovery searches skill directories configured in pi's settings,
+ * the default agentDir/skills/, and project-local .pi/.claude/.agents
+ * skill directories. duplicate local skills can be selected with
+ * qualified names like `foo:.claude`; plain `foo` prefers global.
  */
 
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
@@ -24,17 +19,15 @@ import { Text } from "@mariozechner/pi-tui";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { boxRendererWindowed, textSection, type Excerpt } from "@cvr/pi-box-format";
 import {
-  findSkillFile,
   listAvailableSkillNames,
   renderLoadedSkillContent,
+  resolveSkillReference,
 } from "@cvr/pi-skill-paths";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
   { focus: "head" as const, context: 3 },
   { focus: "tail" as const, context: 5 },
 ];
-
-// --- tool factory ---
 
 interface SkillParams {
   name: string;
@@ -49,12 +42,16 @@ export function createSkillTool(): ToolDefinition {
       "Load a specialized skill that provides domain-specific instructions and workflows.\n\n" +
       "When you recognize that a task matches one of the available skills, use this tool " +
       "to load the full skill instructions.\n\n" +
+      "Duplicate local variants can be selected with qualified names like " +
+      "`foo:.pi`, `foo:.claude`, or `foo:.agents`. Plain `foo` prefers global.\n\n" +
       "The skill will inject detailed instructions, workflows, and access to bundled " +
       "resources (scripts, references, templates) into the conversation context.",
 
     parameters: Type.Object({
       name: Type.String({
-        description: "The name of the skill to load (must match one of the available skills).",
+        description:
+          "The skill reference to load. Use plain names like 'react' or qualified names like " +
+          "'foo:.claude', 'foo:.agents', 'foo:.pi', 'foo:local', or 'foo:global'.",
       }),
       arguments: Type.Optional(
         Type.String({
@@ -76,16 +73,18 @@ export function createSkillTool(): ToolDefinition {
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const p = params as SkillParams;
-      const skill = findSkillFile(p.name, ctx.cwd);
+      const resolved = resolveSkillReference(p.name, ctx.cwd);
+      const skill = resolved.skill;
 
       if (!skill) {
         const available = listAvailableSkillNames(ctx.cwd);
         const list = available.length > 0 ? `\n\navailable skills: ${available.join(", ")}` : "";
+        const message = resolved.error ?? `skill "${p.name}" not found.`;
         return {
           content: [
             {
               type: "text" as const,
-              text: `skill "${p.name}" not found.${list}`,
+              text: `${message}${list}`,
             },
           ],
           isError: true,
@@ -107,7 +106,7 @@ export function createSkillTool(): ToolDefinition {
 
       return {
         content: [{ type: "text" as const, text: rendered }],
-        details: { header: skill.name },
+        details: { header: skill.token },
       } as any;
     },
 

@@ -3,18 +3,25 @@
  * skill mentions — `$skill-name` token expansion with picker overlay.
  *
  * type `$` in the editor to open a fuzzy-searchable skill picker.
- * on selection, the skill name is pasted after the `$` already in the editor.
+ * on selection, the skill token is pasted after the `$` already in the editor.
  * on submit, `$skill-name` tokens matching known skills are expanded:
  * SKILL.md content is loaded and injected as hidden context.
+ *
+ * duplicate names can be qualified with suffixes like `$foo:.claude`.
+ * plain `$foo` prefers the global skill when both global and local variants exist.
  *
  * replaces the auto-skills extension (model-pruned hints). the `skill` tool
  * remains registered separately for backward compat / model-initiated loading.
  */
 
 import * as path from "node:path";
-import type { ExtensionAPI, Skill } from "@mariozechner/pi-coding-agent";
-import { loadSkills } from "@mariozechner/pi-coding-agent";
-import { getSkillPathsFromSettings, renderLoadedSkillContent } from "@cvr/pi-skill-paths";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+  getDiscoveredSkills,
+  renderLoadedSkillContent,
+  resolveSkillReference,
+  type DiscoveredSkill,
+} from "@cvr/pi-skill-paths";
 import {
   type Component,
   CURSOR_MARKER,
@@ -32,24 +39,23 @@ import { boxBottom, boxRow, boxTop } from "@cvr/pi-box-chrome";
 // ---------------------------------------------------------------------------
 
 const CUSTOM_TYPE = "skill-mentions:context";
-const SKILL_TOKEN_RE = /(?<![\\$\w])\$([a-z][a-z0-9-]*)/g;
+const SKILL_TOKEN_RE =
+  /(?<![\\$\w])\$([a-z][a-z0-9-]*)(?::(global|local|\.pi|\.claude|\.agents))?/g;
 const MAX_VISIBLE = 12;
 
 // ---------------------------------------------------------------------------
 // Skill catalog
 // ---------------------------------------------------------------------------
 
-function getSkillCatalog(cwd: string): Skill[] {
-  const skillPaths = getSkillPathsFromSettings();
-  const { skills } = loadSkills({ cwd, skillPaths, includeDefaults: true });
-  return skills.filter((s) => s.description.length > 0);
+function getSkillCatalog(cwd: string): DiscoveredSkill[] {
+  return getDiscoveredSkills(cwd).filter((skill) => skill.description.length > 0);
 }
 
 // ---------------------------------------------------------------------------
 // SKILL.md loading
 // ---------------------------------------------------------------------------
 
-function loadSkillContent(skill: Skill): string | null {
+function loadSkillContent(skill: DiscoveredSkill): string | null {
   return renderLoadedSkillContent({
     name: skill.name,
     filePath: skill.filePath,
@@ -61,16 +67,17 @@ function loadSkillContent(skill: Skill): string | null {
 // Token parsing
 // ---------------------------------------------------------------------------
 
-function parseSkillTokens(
-  text: string,
-  catalogNames: Set<string>,
-): Array<{ name: string; start: number; end: number }> {
-  const tokens: Array<{ name: string; start: number; end: number }> = [];
+function parseSkillTokens(text: string): Array<{ reference: string; start: number; end: number }> {
+  const tokens: Array<{ reference: string; start: number; end: number }> = [];
   for (const match of text.matchAll(SKILL_TOKEN_RE)) {
     const name = match[1]!;
-    if (!catalogNames.has(name)) continue;
+    const selector = match[2];
     const start = match.index!;
-    tokens.push({ name, start, end: start + match[0].length });
+    tokens.push({
+      reference: selector ? `${name}:${selector}` : name,
+      start,
+      end: start + match[0].length,
+    });
   }
   return tokens;
 }
@@ -82,6 +89,7 @@ function parseSkillTokens(
 interface PickerItem {
   name: string;
   description: string;
+  insertText: string;
 }
 
 class SkillPicker implements Component, Focusable {
@@ -142,7 +150,6 @@ class SkillPicker implements Component, Focusable {
         this.applyFilter();
         this.invalidate();
       } else {
-        // empty search + backspace → close picker and delete the $ in editor
         this.onCancel(true);
       }
       return;
@@ -177,7 +184,6 @@ class SkillPicker implements Component, Focusable {
       }),
     );
 
-    // search input
     const prompt = dim(" $ ");
     const searchDisplay = th.fg("text", this.searchText);
     const cursor = this._focused ? CURSOR_MARKER + th.fg("accent", "▏") : dim("▏");
@@ -185,7 +191,6 @@ class SkillPicker implements Component, Focusable {
     lines.push(row(prompt + searchDisplay + cursor + placeholder));
     lines.push(row(""));
 
-    // items
     if (this.filtered.length === 0) {
       lines.push(row(dim("  no matches")));
     } else {
@@ -262,15 +267,15 @@ class SkillPicker implements Component, Focusable {
 // ---------------------------------------------------------------------------
 
 export default function skillMentionsExtension(pi: ExtensionAPI): void {
-  let catalog: Skill[] = [];
-  let catalogNames = new Set<string>();
+  let catalog: DiscoveredSkill[] = [];
   let activeSkillContext = "";
   let inputUnsub: (() => void) | null = null;
   let pickerOpen = false;
+  let currentCwd = process.cwd();
 
   function rebuildCatalog(cwd: string) {
+    currentCwd = cwd;
     catalog = getSkillCatalog(cwd);
-    catalogNames = new Set(catalog.map((s) => s.name));
   }
 
   function clearActive() {
@@ -281,9 +286,10 @@ export default function skillMentionsExtension(pi: ExtensionAPI): void {
     if (!ctx.hasUI || pickerOpen || catalog.length === 0) return;
     pickerOpen = true;
 
-    const items: PickerItem[] = catalog.map((s) => ({
-      name: s.name,
-      description: s.description,
+    const items: PickerItem[] = catalog.map((skill) => ({
+      name: skill.displayName,
+      description: skill.description,
+      insertText: skill.token,
     }));
 
     await ctx.ui.custom<void>(
@@ -292,12 +298,11 @@ export default function skillMentionsExtension(pi: ExtensionAPI): void {
           items,
           theme,
           (item) => {
-            ctx.ui.pasteToEditor(item.name + " ");
+            ctx.ui.pasteToEditor(item.insertText + " ");
             done();
           },
           (deletePrefix) => {
             if (deletePrefix) {
-              // remove the $ that was typed into the editor
               const text = ctx.ui.getEditorText();
               if (text.endsWith("$")) {
                 ctx.ui.setEditorText(text.slice(0, -1));
@@ -346,7 +351,6 @@ export default function skillMentionsExtension(pi: ExtensionAPI): void {
     inputUnsub = ctx.ui.onTerminalInput((data) => {
       if (data !== "$") return undefined;
 
-      // let $ land in editor (do NOT consume), open picker opportunistically
       const text = ctx.ui.getEditorText();
       if (text.length === 0 || /\s$/.test(text)) {
         void openPicker(ctx);
@@ -363,20 +367,19 @@ export default function skillMentionsExtension(pi: ExtensionAPI): void {
   pi.on("input", async (event) => {
     if (event.source === "extension") return { action: "continue" as const };
 
-    const tokens = parseSkillTokens(event.text, catalogNames);
+    const tokens = parseSkillTokens(event.text);
     if (tokens.length === 0) {
       clearActive();
       return { action: "continue" as const };
     }
 
-    // dedupe by name
     const seen = new Set<string>();
     const loaded: string[] = [];
     for (const token of tokens) {
-      if (seen.has(token.name)) continue;
-      seen.add(token.name);
-      const skill = catalog.find((s) => s.name === token.name);
+      const { skill } = resolveSkillReference(token.reference, currentCwd);
       if (!skill) continue;
+      if (seen.has(skill.filePath)) continue;
+      seen.add(skill.filePath);
       const content = loadSkillContent(skill);
       if (content) loaded.push(content);
     }

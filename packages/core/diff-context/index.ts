@@ -2,12 +2,12 @@
  * diff-context — shared diff + skill catalog gathering for audit and plan-mode.
  *
  * Git helpers use GitClient Effect service via ManagedRuntime.
- * Skill catalog uses the public loadSkills API from pi-coding-agent.
+ * Skill catalog uses the shared pi skill discovery helper.
  */
 
 import { GitClient } from "@cvr/pi-git-client";
+import { getDiscoveredSkills } from "@cvr/pi-skill-paths";
 import { Effect, type ManagedRuntime } from "effect";
-import { loadSkills } from "@mariozechner/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -117,10 +117,9 @@ export async function getChangedFiles(
 // ---------------------------------------------------------------------------
 
 export function buildSkillCatalog(cwd: string): SkillCatalogEntry[] {
-  const { skills } = loadSkills({ cwd, includeDefaults: true });
-  return skills
-    .filter((s) => s.description.length > 0)
-    .map((s) => ({ name: s.name, description: s.description }));
+  return getDiscoveredSkills(cwd)
+    .filter((skill) => skill.description.length > 0)
+    .map((skill) => ({ name: skill.token, description: skill.description }));
 }
 
 /**

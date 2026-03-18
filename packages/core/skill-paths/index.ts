@@ -1,14 +1,37 @@
 /** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { loadSkillsFromDir, type Skill } from "@mariozechner/pi-coding-agent";
 import { expandPath } from "@cvr/pi-fs";
 
 const DEFAULT_AGENT_DIR = path.join(expandPath("~"), ".pi", "agent");
+const PROJECT_SKILL_DIR_SUFFIXES = [
+  [".pi", "skills"],
+  [".claude", "skills"],
+  [".agents", "skills"],
+] as const;
+const SKILL_REFERENCE_RE = /^([a-z][a-z0-9-]*)(?::(global|local|\.pi|\.claude|\.agents))?$/;
+
+export type SkillSelector = "global" | "local" | ".pi" | ".claude" | ".agents";
+export type SkillLocation = Exclude<SkillSelector, "local">;
 
 export interface ResolvedSkillFile {
   name: string;
   filePath: string;
   baseDir: string;
+}
+
+export interface DiscoveredSkill extends Skill {
+  location: SkillLocation;
+  isLocal: boolean;
+  token: string;
+  displayName: string;
+}
+
+export interface SkillResolution {
+  skill: DiscoveredSkill | null;
+  error?: string;
+  matches: DiscoveredSkill[];
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -37,41 +60,204 @@ export function getSkillPathsFromSettings(): string[] {
   }
 }
 
-export function getSkillSearchDirs(cwd: string): string[] {
-  return [
-    ...new Set([getDefaultSkillDir(), ...getSkillPathsFromSettings(), path.join(cwd, ".pi", "skills")]),
-  ];
+function dedupePaths(paths: string[]): string[] {
+  return [...new Set(paths.map((entry) => path.resolve(entry)))];
 }
 
-export function findSkillFile(name: string, cwd: string): ResolvedSkillFile | null {
-  for (const skillDir of getSkillSearchDirs(cwd)) {
-    const filePath = path.join(skillDir, name, "SKILL.md");
-    if (fs.existsSync(filePath)) {
-      return { name, filePath, baseDir: path.dirname(filePath) };
+function getProjectSkillDirs(
+  cwd: string,
+): Array<{ dir: string; location: Exclude<SkillLocation, "global"> }> {
+  return PROJECT_SKILL_DIR_SUFFIXES.map((suffix) => ({
+    dir: path.join(cwd, ...suffix),
+    location: suffix[0],
+  }));
+}
+
+export function getSkillSearchDirs(cwd: string): string[] {
+  return dedupePaths([
+    getDefaultSkillDir(),
+    ...getSkillPathsFromSettings(),
+    ...getProjectSkillDirs(cwd).map((entry) => entry.dir),
+  ]);
+}
+
+function getSkillSource(skillDir: string, cwd: string): "user" | "project" | "path" {
+  if (path.resolve(skillDir) === path.resolve(getDefaultSkillDir())) return "user";
+  if (
+    getProjectSkillDirs(cwd).some((entry) => path.resolve(entry.dir) === path.resolve(skillDir))
+  ) {
+    return "project";
+  }
+  return "path";
+}
+
+function getSkillLocation(skillDir: string, cwd: string): SkillLocation {
+  const resolvedSkillDir = path.resolve(skillDir);
+  const local = getProjectSkillDirs(cwd).find(
+    (entry) => path.resolve(entry.dir) === resolvedSkillDir,
+  );
+  return local?.location ?? "global";
+}
+
+function getRealPath(filePath: string): string {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
+function shouldQualifySkill(
+  location: SkillLocation,
+  duplicateCount: number,
+  hasGlobalVariant: boolean,
+): boolean {
+  if (duplicateCount <= 1) return false;
+  if (hasGlobalVariant) return location !== "global";
+  return true;
+}
+
+function buildSkillToken(
+  name: string,
+  location: SkillLocation,
+  duplicateCount: number,
+  hasGlobalVariant: boolean,
+): string {
+  return shouldQualifySkill(location, duplicateCount, hasGlobalVariant)
+    ? `${name}:${location}`
+    : name;
+}
+
+function buildSkillDisplayName(
+  name: string,
+  location: SkillLocation,
+  duplicateCount: number,
+  hasGlobalVariant: boolean,
+): string {
+  if (!shouldQualifySkill(location, duplicateCount, hasGlobalVariant)) return name;
+  return `${name} (${location})`;
+}
+
+function parseSkillReference(reference: string): { name: string; selector?: SkillSelector } | null {
+  const trimmed = reference.trim();
+  const match = trimmed.match(SKILL_REFERENCE_RE);
+  if (!match) return null;
+  const [, name, selector] = match;
+  return { name: name!, selector: selector as SkillSelector | undefined };
+}
+
+export function getDiscoveredSkills(cwd: string): DiscoveredSkill[] {
+  const discovered: Array<DiscoveredSkill & { order: number }> = [];
+  const seenRealPaths = new Set<string>();
+  const searchDirs = getSkillSearchDirs(cwd);
+
+  for (const [order, skillDir] of searchDirs.entries()) {
+    if (!fs.existsSync(skillDir)) continue;
+
+    const { skills } = loadSkillsFromDir({
+      dir: skillDir,
+      source: getSkillSource(skillDir, cwd),
+    });
+    const location = getSkillLocation(skillDir, cwd);
+
+    for (const skill of skills) {
+      const realPath = getRealPath(skill.filePath);
+      if (seenRealPaths.has(realPath)) continue;
+      seenRealPaths.add(realPath);
+      discovered.push({
+        ...skill,
+        location,
+        isLocal: location !== "global",
+        token: buildSkillToken(skill.name, location),
+        displayName: skill.name,
+        order,
+      });
     }
   }
 
-  return null;
+  const duplicateCounts = new Map<string, number>();
+  const hasGlobalVariant = new Map<string, boolean>();
+  for (const skill of discovered) {
+    duplicateCounts.set(skill.name, (duplicateCounts.get(skill.name) ?? 0) + 1);
+    if (skill.location === "global") hasGlobalVariant.set(skill.name, true);
+  }
+
+  return discovered
+    .map((skill) => {
+      const duplicateCount = duplicateCounts.get(skill.name) ?? 1;
+      const hasGlobal = hasGlobalVariant.get(skill.name) ?? false;
+      return {
+        ...skill,
+        token: buildSkillToken(skill.name, skill.location, duplicateCount, hasGlobal),
+        displayName: buildSkillDisplayName(skill.name, skill.location, duplicateCount, hasGlobal),
+      };
+    })
+    .sort(
+      (a, b) =>
+        a.name.localeCompare(b.name) || a.order - b.order || a.filePath.localeCompare(b.filePath),
+    )
+    .map(({ order: _order, ...skill }) => skill);
+}
+
+export function resolveSkillReference(reference: string, cwd: string): SkillResolution {
+  const parsed = parseSkillReference(reference);
+  if (!parsed) {
+    return {
+      skill: null,
+      matches: [],
+      error:
+        `invalid skill reference "${reference}". ` +
+        "Use foo, foo:global, foo:local, foo:.pi, foo:.claude, or foo:.agents.",
+    };
+  }
+
+  const matches = getDiscoveredSkills(cwd).filter((skill) => skill.name === parsed.name);
+  if (matches.length === 0) {
+    return { skill: null, matches: [] };
+  }
+
+  if (!parsed.selector) {
+    const global = matches.find((skill) => skill.location === "global");
+    if (global) return { skill: global, matches };
+    if (matches.length === 1) return { skill: matches[0]!, matches };
+    return {
+      skill: null,
+      matches,
+      error: `skill "${parsed.name}" is ambiguous. Use one of: ${matches.map((skill) => skill.token).join(", ")}`,
+    };
+  }
+
+  const filtered =
+    parsed.selector === "local"
+      ? matches.filter((skill) => skill.isLocal)
+      : matches.filter((skill) => skill.location === parsed.selector);
+
+  if (filtered.length === 0) {
+    return {
+      skill: null,
+      matches,
+      error: `skill "${reference}" not found. Available matches: ${matches.map((skill) => skill.token).join(", ")}`,
+    };
+  }
+
+  if (filtered.length > 1) {
+    return {
+      skill: null,
+      matches: filtered,
+      error: `skill "${reference}" is ambiguous. Use one of: ${filtered.map((skill) => skill.token).join(", ")}`,
+    };
+  }
+
+  return { skill: filtered[0]!, matches: filtered };
+}
+
+export function findSkillFile(reference: string, cwd: string): ResolvedSkillFile | null {
+  const { skill } = resolveSkillReference(reference, cwd);
+  return skill ? { name: skill.name, filePath: skill.filePath, baseDir: skill.baseDir } : null;
 }
 
 export function listAvailableSkillNames(cwd: string): string[] {
-  const names = new Set<string>();
-
-  for (const skillDir of getSkillSearchDirs(cwd)) {
-    if (!fs.existsSync(skillDir)) continue;
-    try {
-      for (const entry of fs.readdirSync(skillDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        if (fs.existsSync(path.join(skillDir, entry.name, "SKILL.md"))) {
-          names.add(entry.name);
-        }
-      }
-    } catch {
-      /* unreadable */
-    }
-  }
-
-  return [...names].sort();
+  return getDiscoveredSkills(cwd).map((skill) => skill.token);
 }
 
 function parseSkillFrontmatter(content: string): string {

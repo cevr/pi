@@ -14,9 +14,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ExtensionAPI, Skill } from "@mariozechner/pi-coding-agent";
-import { loadSkills } from "@mariozechner/pi-coding-agent";
-import { getSkillPathsFromSettings } from "@cvr/pi-skill-paths";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { getDiscoveredSkills } from "@cvr/pi-skill-paths";
 import { PiSpawnService } from "@cvr/pi-spawn";
 import { getFinalOutput } from "@cvr/pi-sub-agent-render";
 import { Effect, ManagedRuntime } from "effect";
@@ -86,11 +85,9 @@ interface SkillEntry {
 }
 
 function getSkillCatalog(cwd: string): SkillEntry[] {
-  const skillPaths = getSkillPathsFromSettings();
-  const { skills } = loadSkills({ cwd, skillPaths, includeDefaults: true });
-  return skills
-    .filter((s: Skill) => s.description.length > 0)
-    .map((s: Skill) => ({ name: s.name, description: s.description }));
+  return getDiscoveredSkills(cwd)
+    .filter((skill) => skill.description.length > 0)
+    .map((skill) => ({ name: skill.token, description: skill.description }));
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +157,7 @@ Rules:
 - Select 3-7 skills maximum
 - Always include "code-style"
 - Only include skills that match the project's dependencies or file markers
+- If a local variant includes a suffix like : .pi / .claude / .agents, preserve that exact skill name
 - Be specific in hints — reference file types, import patterns, or task types
 - Do NOT include skills for technologies not present in the project`;
 }
@@ -172,7 +170,9 @@ function parseSkillHints(
   const hints: Array<{ name: string; when: string }> = [];
 
   for (const line of output.split("\n")) {
-    const match = line.match(/^([a-z0-9-]+)\s*\|\s*(.+)$/);
+    const match = line.match(
+      /^([a-z0-9-]+(?::(?:global|local|\.pi|\.claude|\.agents))?)\s*\|\s*(.+)$/,
+    );
     if (!match) continue;
     const [, name, when] = match;
     if (name && nameSet.has(name) && when) {
