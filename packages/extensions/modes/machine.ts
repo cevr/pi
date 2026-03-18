@@ -13,6 +13,12 @@ import type { TodoItem } from "./utils";
 // ---------------------------------------------------------------------------
 
 export const PLAN_TOOLS = ["read", "bash", "grep", "find", "ls", "interview"];
+export const PLAN_SIGNAL_TOOLS = ["modes_plan_ready"] as const;
+export const EXECUTION_SIGNAL_TOOLS = [
+  "modes_step_done",
+  "modes_gate_result",
+  "modes_counsel_result",
+] as const;
 
 // ---------------------------------------------------------------------------
 // State
@@ -33,9 +39,11 @@ export type ModesState =
   | { _tag: "AwaitingChoice"; savedTools: string[]; pending: PendingPlan }
   | {
       _tag: "Executing";
+      savedTools: string[];
       todoItems: TodoItem[];
       planFilePath: string | null;
       phase: ExecutionPhase;
+      currentStep: number | null;
     };
 
 // ---------------------------------------------------------------------------
@@ -45,8 +53,7 @@ export type ModesState =
 export type ModesEvent =
   | { _tag: "Toggle"; currentTools: string[]; diffContext?: DiffContext }
   | { _tag: "PlanWithPrompt"; prompt: string; currentTools: string[]; diffContext?: DiffContext }
-  | { _tag: "AgentEnd"; todoItems: TodoItem[]; planText: string; planFilePath: string }
-  | { _tag: "TurnEnd"; todoItems: TodoItem[] }
+  | { _tag: "PlanReady"; todoItems: TodoItem[]; planText: string; planFilePath: string }
   | { _tag: "ChooseExecute" }
   | { _tag: "ChooseStay" }
   | { _tag: "ChooseRefine"; refinement: string }
@@ -60,13 +67,12 @@ export type ModesEvent =
       pending?: PendingPlan;
       flagPlan: boolean;
       currentTools: string[];
+      currentStep?: number | null;
     }
-  | { _tag: "ExecutionComplete" }
-  | { _tag: "TaskDone" }
-  | { _tag: "GatePass" }
-  | { _tag: "GateFail" }
-  | { _tag: "CounselPass" }
-  | { _tag: "CounselFail" };
+  | { _tag: "StepDone"; step: number }
+  | { _tag: "GateResult"; status: "pass" | "fail" }
+  | { _tag: "CounselResult"; status: "pass" | "fail" }
+  | { _tag: "ExecutionComplete" };
 
 // ---------------------------------------------------------------------------
 // Extension-specific effects
@@ -124,7 +130,7 @@ function persist(state: ModesState): ModesEffect {
           mode: "Executing",
           todoItems: state.todoItems,
           planFilePath: state.planFilePath,
-          savedTools: null,
+          savedTools: state.savedTools,
         };
     }
   })();
@@ -133,6 +139,33 @@ function persist(state: ModesState): ModesEffect {
 }
 
 const UI: ModesEffect = { type: "updateUI" };
+
+function mergeTools(...groups: ReadonlyArray<readonly string[]>): string[] {
+  return [...new Set(groups.flat())];
+}
+
+function getPlanModeTools(): string[] {
+  return mergeTools(PLAN_TOOLS, PLAN_SIGNAL_TOOLS);
+}
+
+function getExecutionTools(savedTools: readonly string[]): string[] {
+  return mergeTools(savedTools, EXECUTION_SIGNAL_TOOLS);
+}
+
+function buildUpdatedTodoItems(items: readonly TodoItem[], step: number): TodoItem[] {
+  return items.map((todo) =>
+    todo.step === step
+      ? {
+          ...todo,
+          completed: true,
+        }
+      : { ...todo },
+  );
+}
+
+function getNextIncompleteStep(items: readonly TodoItem[]): TodoItem | undefined {
+  return items.find((todo) => !todo.completed);
+}
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -155,8 +188,11 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
         return {
           state: next,
           effects: [
-            { type: "setActiveTools", tools: PLAN_TOOLS },
-            { type: "notify", message: `PLAN mode enabled. Tools: ${PLAN_TOOLS.join(", ")}` },
+            { type: "setActiveTools", tools: getPlanModeTools() },
+            {
+              type: "notify",
+              message: `PLAN mode enabled. Tools: ${getPlanModeTools().join(", ")}`,
+            },
             UI,
             persist(next),
           ],
@@ -226,8 +262,11 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       return {
         state: next,
         effects: [
-          { type: "setActiveTools", tools: PLAN_TOOLS },
-          { type: "notify", message: `PLAN mode enabled. Tools: ${PLAN_TOOLS.join(", ")}` },
+          { type: "setActiveTools", tools: getPlanModeTools() },
+          {
+            type: "notify",
+            message: `PLAN mode enabled. Tools: ${getPlanModeTools().join(", ")}`,
+          },
           UI,
           { type: "sendUserMessage", content: event.prompt, deliverAs: "followUp" },
           persist(next),
@@ -235,8 +274,8 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       };
     }
 
-    // ----- AgentEnd (plan extracted) -----
-    case "AgentEnd": {
+    // ----- PlanReady (agent signal) -----
+    case "PlanReady": {
       if (state._tag !== "Planning") return { state };
       if (event.todoItems.length === 0) return { state };
 
@@ -279,9 +318,11 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       const { pending, savedTools } = state;
       const next: ModesState = {
         _tag: "Executing",
+        savedTools,
         todoItems: pending.todoItems,
         planFilePath: pending.planFilePath,
         phase: "running",
+        currentStep: null,
       };
       const execMessage =
         pending.todoItems.length > 0
@@ -291,7 +332,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       return {
         state: next,
         effects: [
-          { type: "setActiveTools", tools: savedTools },
+          { type: "setActiveTools", tools: getExecutionTools(savedTools) },
           UI,
           {
             type: "sendMessage",
@@ -333,29 +374,149 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
 
       return {
         state: next,
-        effects: [UI, { type: "sendUserMessage", content: event.refinement }, persist(next)],
+        effects: [
+          UI,
+          { type: "sendUserMessage", content: event.refinement, deliverAs: "followUp" },
+          persist(next),
+        ],
       };
     }
 
-    // ----- TurnEnd (execution progress) -----
-    case "TurnEnd": {
-      if (state._tag !== "Executing" || state.todoItems.length === 0) return { state };
+    // ----- StepDone (execution progress signal) -----
+    case "StepDone": {
+      if (state._tag !== "Executing" || state.phase !== "running" || state.todoItems.length === 0) {
+        return { state };
+      }
 
+      const todoItems = buildUpdatedTodoItems(state.todoItems, event.step);
       const next: ModesState = {
         _tag: "Executing",
-        todoItems: event.todoItems,
+        savedTools: state.savedTools,
+        todoItems,
         planFilePath: state.planFilePath,
-        phase: state.phase,
+        phase: "gating",
+        currentStep: event.step,
       };
-      const effects: Effect[] = [UI, persist(next)];
+      const effects: Effect[] = [
+        {
+          type: "sendMessage",
+          customType: "modes-gate",
+          content:
+            "Run the full gate (typecheck, lint, format, test) for the completed step. When finished, call modes_gate_result with status 'pass' or 'fail'.",
+          display: false,
+          triggerTurn: true,
+        },
+        UI,
+        persist(next),
+      ];
       if (state.planFilePath) {
         effects.push({
           type: "updatePlanFile",
           planFilePath: state.planFilePath,
-          todoItems: event.todoItems,
+          todoItems,
         });
       }
       return { state: next, effects };
+    }
+
+    // ----- GateResult -----
+    case "GateResult": {
+      if (state._tag !== "Executing" || state.phase !== "gating") return { state };
+
+      if (event.status === "pass") {
+        const next: ModesState = { ...state, phase: "counseling" };
+        return {
+          state: next,
+          effects: [
+            {
+              type: "sendMessage",
+              customType: "modes-counsel",
+              content:
+                "Gate passed. Run counsel for cross-vendor review of the changes for this step. When finished, call modes_counsel_result with status 'pass' or 'fail'.",
+              display: false,
+              triggerTurn: true,
+            },
+            UI,
+            persist(next),
+          ],
+        };
+      }
+
+      const next: ModesState = { ...state, phase: "running" };
+      return {
+        state: next,
+        effects: [
+          { type: "notify", message: "Gate failed — fix and retry", level: "warning" },
+          {
+            type: "sendMessage",
+            customType: "modes-gate-fix",
+            content:
+              state.currentStep === null
+                ? "Gate failed. Fix the failures, rerun the gate, then call modes_step_done again when the step is truly complete."
+                : `Gate failed for step ${state.currentStep}. Fix the failures, rerun the gate, then call modes_step_done for step ${state.currentStep} again when it is truly complete.`,
+            display: false,
+            triggerTurn: true,
+          },
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
+    // ----- CounselResult -----
+    case "CounselResult": {
+      if (state._tag !== "Executing" || state.phase !== "counseling") return { state };
+
+      if (event.status === "fail") {
+        const next: ModesState = { ...state, phase: "running" };
+        return {
+          state: next,
+          effects: [
+            {
+              type: "notify",
+              message: "Counsel found issues — address feedback",
+              level: "warning",
+            },
+            {
+              type: "sendMessage",
+              customType: "modes-counsel-fix",
+              content:
+                state.currentStep === null
+                  ? "Counsel found issues. Address the feedback, then call modes_step_done again when the step is actually complete."
+                  : `Counsel found issues on step ${state.currentStep}. Address the feedback, then call modes_step_done for step ${state.currentStep} again when it is actually complete.`,
+              display: false,
+              triggerTurn: true,
+            },
+            UI,
+            persist(next),
+          ],
+        };
+      }
+
+      const completedAll = state.todoItems.every((todo) => todo.completed);
+      if (completedAll) {
+        return modesReducer(state, { _tag: "ExecutionComplete" });
+      }
+
+      const nextStep = getNextIncompleteStep(state.todoItems);
+      const next: ModesState = { ...state, phase: "running", currentStep: null };
+      return {
+        state: next,
+        effects: [
+          { type: "notify", message: "Counsel approved — continue to the next step" },
+          {
+            type: "sendMessage",
+            customType: "modes-counsel-pass",
+            content: nextStep
+              ? `Counsel approved. Continue with step ${nextStep.step}: ${nextStep.text}. When that step is complete, call modes_step_done for step ${nextStep.step}.`
+              : "Counsel approved. Continue the plan and call modes_step_done when the next step is complete.",
+            display: false,
+            triggerTurn: true,
+          },
+          UI,
+          persist(next),
+        ],
+      };
     }
 
     // ----- ExecutionComplete -----
@@ -371,6 +532,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           content: `**Plan Complete!**\n\n${completedList}${pathInfo}`,
           display: true,
         },
+        { type: "setActiveTools", tools: state.savedTools },
       ];
       if (state.planFilePath) {
         effects.push({
@@ -382,109 +544,6 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       const next: ModesState = { _tag: "Auto" };
       effects.push(UI, persist(next));
       return { state: next, effects };
-    }
-
-    // ----- Gated execution events -----
-    case "TaskDone": {
-      if (state._tag !== "Executing" || state.phase !== "running") return { state };
-      const next: ModesState = { ...state, phase: "gating" };
-      return {
-        state: next,
-        effects: [
-          {
-            type: "sendMessage",
-            customType: "modes-gate",
-            content:
-              "Run the full gate (typecheck, lint, format, test). Report GATE_PASS if all pass, GATE_FAIL if any fail.",
-            display: false,
-            triggerTurn: true,
-          },
-          UI,
-          persist(next),
-        ],
-      };
-    }
-
-    case "GatePass": {
-      if (state._tag !== "Executing" || state.phase !== "gating") return { state };
-      const next: ModesState = { ...state, phase: "counseling" };
-      return {
-        state: next,
-        effects: [
-          {
-            type: "sendMessage",
-            customType: "modes-counsel",
-            content:
-              "Gate passed. Run counsel for cross-vendor review of the changes. Report COUNSEL_PASS if approved, COUNSEL_FAIL if issues found.",
-            display: false,
-            triggerTurn: true,
-          },
-          UI,
-          persist(next),
-        ],
-      };
-    }
-
-    case "GateFail": {
-      if (state._tag !== "Executing" || state.phase !== "gating") return { state };
-      const next: ModesState = { ...state, phase: "running" };
-      return {
-        state: next,
-        effects: [
-          { type: "notify", message: "Gate failed — fix and retry", level: "warning" },
-          {
-            type: "sendMessage",
-            customType: "modes-gate-fix",
-            content:
-              "Gate failed. Fix the failures, then mark the step as done again with [DONE:n].",
-            display: false,
-            triggerTurn: true,
-          },
-          UI,
-          persist(next),
-        ],
-      };
-    }
-
-    case "CounselPass": {
-      if (state._tag !== "Executing" || state.phase !== "counseling") return { state };
-      const next: ModesState = { ...state, phase: "running" };
-      return {
-        state: next,
-        effects: [
-          { type: "notify", message: "Counsel approved — commit and continue" },
-          {
-            type: "sendMessage",
-            customType: "modes-counsel-pass",
-            content: "Counsel approved. Commit the changes and continue to the next step.",
-            display: false,
-            triggerTurn: true,
-          },
-          UI,
-          persist(next),
-        ],
-      };
-    }
-
-    case "CounselFail": {
-      if (state._tag !== "Executing" || state.phase !== "counseling") return { state };
-      const next: ModesState = { ...state, phase: "running" };
-      return {
-        state: next,
-        effects: [
-          { type: "notify", message: "Counsel found issues — address feedback", level: "warning" },
-          {
-            type: "sendMessage",
-            customType: "modes-counsel-fix",
-            content:
-              "Counsel found issues. Address the feedback, then mark the step as done again with [DONE:n].",
-            display: false,
-            triggerTurn: true,
-          },
-          UI,
-          persist(next),
-        ],
-      };
     }
 
     // ----- Reset -----
@@ -503,18 +562,20 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           savedTools,
           pending: event.pending,
         };
-        effects.push({ type: "setActiveTools", tools: PLAN_TOOLS }, UI);
+        effects.push({ type: "setActiveTools", tools: getPlanModeTools() }, UI);
         return { state: next, effects };
       }
 
       if (event.mode === "Executing" && event.todoItems.length > 0) {
         const next: ModesState = {
           _tag: "Executing",
+          savedTools,
           todoItems: event.todoItems,
           planFilePath: event.planFilePath,
           phase: "running",
+          currentStep: event.currentStep ?? null,
         };
-        effects.push(UI);
+        effects.push({ type: "setActiveTools", tools: getExecutionTools(savedTools) }, UI);
         if (event.planFilePath) {
           effects.push({
             type: "updatePlanFile",
@@ -531,7 +592,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           savedTools,
           pending: event.pending,
         };
-        effects.push({ type: "setActiveTools", tools: PLAN_TOOLS }, UI);
+        effects.push({ type: "setActiveTools", tools: getPlanModeTools() }, UI);
         return { state: next, effects };
       }
 

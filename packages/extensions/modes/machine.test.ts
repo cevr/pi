@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { BuiltinEffect } from "@cvr/pi-state-machine";
-import { PLAN_TOOLS, modesReducer, type ModesEffect, type ModesState } from "./machine";
+import {
+  EXECUTION_SIGNAL_TOOLS,
+  PLAN_SIGNAL_TOOLS,
+  PLAN_TOOLS,
+  modesReducer,
+  type ModesEffect,
+  type ModesState,
+} from "./machine";
 import type { TodoItem } from "./utils";
 
 // ---------------------------------------------------------------------------
@@ -32,10 +39,11 @@ function awaitingChoice(savedTools = ["read", "bash", "edit"]): ModesState {
 
 function executing(
   items?: TodoItem[],
-  options?: { phase?: "running" | "gating" | "counseling" },
+  options?: { phase?: "running" | "gating" | "counseling"; currentStep?: number | null },
 ): ModesState {
   return {
     _tag: "Executing",
+    savedTools: ["read", "bash", "edit", "write"],
     todoItems: items ?? [
       { step: 1, text: "First step", completed: false },
       { step: 2, text: "Second step", completed: false },
@@ -43,6 +51,7 @@ function executing(
     ],
     planFilePath: "/tmp/plan.md",
     phase: options?.phase ?? "running",
+    currentStep: options?.currentStep ?? null,
   };
 }
 
@@ -72,7 +81,7 @@ describe("modesReducer — Toggle", () => {
     }
     expect(hasEffect(result.effects, "setActiveTools")).toBe(true);
     expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
-      tools: PLAN_TOOLS,
+      tools: [...PLAN_TOOLS, ...PLAN_SIGNAL_TOOLS],
     });
     expect(hasEffect(result.effects, "notify")).toBe(true);
     expect(hasEffect(result.effects, "updateUI")).toBe(true);
@@ -152,17 +161,17 @@ describe("modesReducer — PlanWithPrompt", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AgentEnd (plan extraction)
+// PlanReady (plan signal)
 // ---------------------------------------------------------------------------
 
-describe("modesReducer — AgentEnd", () => {
+describe("modesReducer — PlanReady", () => {
   it("Planning + todos → AwaitingChoice", () => {
     const todos: TodoItem[] = [
       { step: 1, text: "Step one", completed: false },
       { step: 2, text: "Step two", completed: false },
     ];
     const result = modesReducer(planning(), {
-      _tag: "AgentEnd",
+      _tag: "PlanReady",
       todoItems: todos,
       planText: "The plan",
       planFilePath: "/tmp/plan.md",
@@ -176,7 +185,7 @@ describe("modesReducer — AgentEnd", () => {
   it("Planning + empty todos → no change", () => {
     const state = planning();
     const result = modesReducer(state, {
-      _tag: "AgentEnd",
+      _tag: "PlanReady",
       todoItems: [],
       planText: "",
       planFilePath: "/tmp/plan.md",
@@ -184,10 +193,10 @@ describe("modesReducer — AgentEnd", () => {
     expect(result.state).toBe(state);
   });
 
-  it("Auto + AgentEnd → no change", () => {
+  it("Auto + PlanReady → no change", () => {
     const state = auto();
     const result = modesReducer(state, {
-      _tag: "AgentEnd",
+      _tag: "PlanReady",
       todoItems: [{ step: 1, text: "x", completed: false }],
       planText: "x",
       planFilePath: "/tmp/plan.md",
@@ -205,7 +214,7 @@ describe("modesReducer — Choice transitions", () => {
     const result = modesReducer(awaitingChoice(["full", "tools"]), { _tag: "ChooseExecute" });
     expect(result.state._tag).toBe("Executing");
     expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
-      tools: ["full", "tools"],
+      tools: ["full", "tools", ...EXECUTION_SIGNAL_TOOLS],
     });
     expect(hasEffect(result.effects, "sendMessage")).toBe(true);
     expect(hasEffect(result.effects, "updateUI")).toBe(true);
@@ -223,7 +232,10 @@ describe("modesReducer — Choice transitions", () => {
   });
 
   it("ChooseRefine → Planning (sends refinement)", () => {
-    const result = modesReducer(awaitingChoice(), { _tag: "ChooseRefine", refinement: "add tests" });
+    const result = modesReducer(awaitingChoice(), {
+      _tag: "ChooseRefine",
+      refinement: "add tests",
+    });
     expect(result.state._tag).toBe("Planning");
     expect(getEffect<BuiltinEffect>(result.effects, "sendUserMessage")).toMatchObject({
       content: "add tests",
@@ -240,29 +252,27 @@ describe("modesReducer — Choice transitions", () => {
 });
 
 // ---------------------------------------------------------------------------
-// TurnEnd (execution progress)
+// StepDone (execution progress signal)
 // ---------------------------------------------------------------------------
 
-describe("modesReducer — TurnEnd", () => {
-  it("updates todoItems in Executing state", () => {
-    const updatedItems: TodoItem[] = [
-      { step: 1, text: "First step", completed: true },
-      { step: 2, text: "Second step", completed: false },
-      { step: 3, text: "Third step", completed: false },
-    ];
-    const result = modesReducer(executing(), { _tag: "TurnEnd", todoItems: updatedItems });
+describe("modesReducer — StepDone", () => {
+  it("marks the step complete and enters gating", () => {
+    const result = modesReducer(executing(), { _tag: "StepDone", step: 1 });
     expect(result.state._tag).toBe("Executing");
     if (result.state._tag === "Executing") {
       expect(result.state.todoItems[0]!.completed).toBe(true);
+      expect(result.state.phase).toBe("gating");
+      expect(result.state.currentStep).toBe(1);
     }
+    expect(hasEffect(result.effects, "sendMessage")).toBe(true);
     expect(hasEffect(result.effects, "updateUI")).toBe(true);
     expect(hasEffect(result.effects, "persistState")).toBe(true);
     expect(hasEffect(result.effects, "updatePlanFile")).toBe(true);
   });
 
-  it("non-Executing state is no-op", () => {
-    const state = planning();
-    const result = modesReducer(state, { _tag: "TurnEnd", todoItems: [] });
+  it("non-running execution state is no-op", () => {
+    const state = executing(undefined, { phase: "gating" });
+    const result = modesReducer(state, { _tag: "StepDone", step: 1 });
     expect(result.state).toBe(state);
   });
 });
@@ -276,6 +286,9 @@ describe("modesReducer — ExecutionComplete", () => {
     const result = modesReducer(executing(), { _tag: "ExecutionComplete" });
     expect(result.state._tag).toBe("Auto");
     expect(hasEffect(result.effects, "sendMessage")).toBe(true);
+    expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
+      tools: ["read", "bash", "edit", "write"],
+    });
     expect(hasEffect(result.effects, "updatePlanFile")).toBe(true);
     expect(hasEffect(result.effects, "updateUI")).toBe(true);
     expect(hasEffect(result.effects, "persistState")).toBe(true);
@@ -322,7 +335,9 @@ describe("modesReducer — Hydrate", () => {
       pending,
     });
     expect(result.state._tag).toBe("AwaitingChoice");
-    expect(hasEffect(result.effects, "setActiveTools")).toBe(true);
+    expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
+      tools: [...PLAN_TOOLS, ...PLAN_SIGNAL_TOOLS],
+    });
     expect(hasEffect(result.effects, "updateUI")).toBe(true);
   });
 
@@ -336,13 +351,18 @@ describe("modesReducer — Hydrate", () => {
       planFilePath: "/tmp/plan.md",
     });
     expect(result.state._tag).toBe("Executing");
+    expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
+      tools: [...base.currentTools, ...EXECUTION_SIGNAL_TOOLS],
+    });
     expect(hasEffect(result.effects, "updateUI")).toBe(true);
   });
 
   it("hydrates to Planning when persisted planning state", () => {
     const result = modesReducer(auto(), { _tag: "Hydrate", ...base, mode: "Planning" });
     expect(result.state._tag).toBe("Planning");
-    expect(hasEffect(result.effects, "setActiveTools")).toBe(true);
+    expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
+      tools: [...PLAN_TOOLS, ...PLAN_SIGNAL_TOOLS],
+    });
   });
 
   it("hydrates to Planning when --plan flag is set", () => {
@@ -372,29 +392,14 @@ describe("modesReducer — Hydrate", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Gated execution (always on)
+// GateResult / CounselResult
 // ---------------------------------------------------------------------------
 
-describe("modesReducer — Gated execution", () => {
-  it("TaskDone in running → gating with gate prompt", () => {
-    const result = modesReducer(executing(), { _tag: "TaskDone" });
-    expect(result.state._tag).toBe("Executing");
-    if (result.state._tag === "Executing") {
-      expect(result.state.phase).toBe("gating");
-    }
-    expect(hasEffect(result.effects, "sendMessage")).toBe(true);
-    expect(hasEffect(result.effects, "updateUI")).toBe(true);
-  });
-
-  it("TaskDone in gating phase → no-op", () => {
-    const state = executing(undefined, { phase: "gating" });
-    const result = modesReducer(state, { _tag: "TaskDone" });
-    expect(result.state).toBe(state);
-  });
-
-  it("GatePass → counseling with counsel prompt", () => {
-    const result = modesReducer(executing(undefined, { phase: "gating" }), {
-      _tag: "GatePass",
+describe("modesReducer — GateResult / CounselResult", () => {
+  it("GateResult pass → counseling with counsel prompt", () => {
+    const result = modesReducer(executing(undefined, { phase: "gating", currentStep: 1 }), {
+      _tag: "GateResult",
+      status: "pass",
     });
     expect(result.state._tag).toBe("Executing");
     if (result.state._tag === "Executing") {
@@ -403,49 +408,51 @@ describe("modesReducer — Gated execution", () => {
     expect(hasEffect(result.effects, "sendMessage")).toBe(true);
   });
 
-  it("GatePass in wrong phase → no-op", () => {
-    const state = executing(undefined, { phase: "running" });
-    const result = modesReducer(state, { _tag: "GatePass" });
-    expect(result.state).toBe(state);
-  });
-
-  it("GateFail → back to running with fix prompt", () => {
-    const result = modesReducer(executing(undefined, { phase: "gating" }), {
-      _tag: "GateFail",
+  it("GateResult fail → back to running with fix prompt", () => {
+    const result = modesReducer(executing(undefined, { phase: "gating", currentStep: 2 }), {
+      _tag: "GateResult",
+      status: "fail",
     });
     expect(result.state._tag).toBe("Executing");
     if (result.state._tag === "Executing") {
       expect(result.state.phase).toBe("running");
+      expect(result.state.currentStep).toBe(2);
     }
     expect(hasEffect(result.effects, "notify")).toBe(true);
     expect(hasEffect(result.effects, "sendMessage")).toBe(true);
   });
 
-  it("CounselPass → back to running with commit prompt", () => {
-    const result = modesReducer(executing(undefined, { phase: "counseling" }), {
-      _tag: "CounselPass",
+  it("CounselResult pass → complete when all steps are done", () => {
+    const result = modesReducer(
+      executing([{ step: 1, text: "Only step", completed: true }], {
+        phase: "counseling",
+        currentStep: 1,
+      }),
+      {
+        _tag: "CounselResult",
+        status: "pass",
+      },
+    );
+    expect(result.state._tag).toBe("Auto");
+    expect(hasEffect(result.effects, "sendMessage")).toBe(true);
+    expect(hasEffect(result.effects, "setActiveTools")).toBe(true);
+  });
+
+  it("CounselResult fail → back to running with fix prompt", () => {
+    const result = modesReducer(executing(undefined, { phase: "counseling", currentStep: 3 }), {
+      _tag: "CounselResult",
+      status: "fail",
     });
     expect(result.state._tag).toBe("Executing");
     if (result.state._tag === "Executing") {
       expect(result.state.phase).toBe("running");
+      expect(result.state.currentStep).toBe(3);
     }
     expect(hasEffect(result.effects, "notify")).toBe(true);
     expect(hasEffect(result.effects, "sendMessage")).toBe(true);
   });
 
-  it("CounselFail → back to running with fix prompt", () => {
-    const result = modesReducer(executing(undefined, { phase: "counseling" }), {
-      _tag: "CounselFail",
-    });
-    expect(result.state._tag).toBe("Executing");
-    if (result.state._tag === "Executing") {
-      expect(result.state.phase).toBe("running");
-    }
-    expect(hasEffect(result.effects, "notify")).toBe(true);
-    expect(hasEffect(result.effects, "sendMessage")).toBe(true);
-  });
-
-  it("ChooseExecute always enables gated execution", () => {
+  it("ChooseExecute always enables signal-driven execution", () => {
     const result = modesReducer(awaitingChoice(), { _tag: "ChooseExecute" });
     expect(result.state._tag).toBe("Executing");
     if (result.state._tag === "Executing") {

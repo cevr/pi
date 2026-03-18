@@ -10,9 +10,9 @@ import * as fs from "node:fs";
 // @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as path from "node:path";
 import * as os from "node:os";
-import type { AssistantMessage, Message as PiMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
 import { readPrinciples } from "@cvr/pi-brain-principles";
 import { gatherDiffContext, type DiffContext } from "@cvr/pi-diff-context";
 import { GitClient } from "@cvr/pi-git-client";
@@ -21,6 +21,8 @@ import { register } from "@cvr/pi-state-machine";
 import type { Command, StateObserver } from "@cvr/pi-state-machine";
 import { Layer, ManagedRuntime } from "effect";
 import {
+  EXECUTION_SIGNAL_TOOLS,
+  PLAN_SIGNAL_TOOLS,
   PLAN_TOOLS,
   modesReducer,
   type ModesEffect,
@@ -28,7 +30,7 @@ import {
   type ModesState,
   type PersistPayload,
 } from "./machine";
-import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils";
+import { cleanStepText, isSafeCommand, type TodoItem } from "./utils";
 
 // ---------------------------------------------------------------------------
 // File I/O
@@ -57,7 +59,11 @@ function writePlanFileToDisk(planPath: string, fullText: string, items: TodoItem
   const checklist = items
     .map((todo) => `- [${todo.completed ? "x" : " "}] ${todo.step}. ${todo.text}`)
     .join("\n");
-  fs.writeFileSync(planPath, `# Plan\n\n${checklist}\n\n---\n\n## Full Plan\n\n${fullText}\n`, "utf-8");
+  fs.writeFileSync(
+    planPath,
+    `# Plan\n\n${checklist}\n\n---\n\n## Full Plan\n\n${fullText}\n`,
+    "utf-8",
+  );
 }
 
 function updatePlanFileToDisk(planPath: string, items: TodoItem[]): void {
@@ -76,18 +82,18 @@ function updatePlanFileToDisk(planPath: string, items: TodoItem[]): void {
 }
 
 // ---------------------------------------------------------------------------
-// Message helpers
+// Plan helpers
 // ---------------------------------------------------------------------------
 
-function isAssistantMessage(message: PiMessage): message is AssistantMessage {
-  return message.role === "assistant" && Array.isArray(message.content);
-}
-
-function getTextContent(message: AssistantMessage): string {
-  return message.content
-    .filter((block): block is TextContent => block.type === "text")
-    .map((block) => block.text)
-    .join("\n");
+function buildTodoItemsFromSteps(steps: readonly string[]): TodoItem[] {
+  return steps
+    .map((step) => cleanStepText(step))
+    .filter((step) => step.length > 3)
+    .map((text, index) => ({
+      step: index + 1,
+      text,
+      completed: false,
+    }));
 }
 
 function getEditorMode(state: ModesState): EditorMode {
@@ -215,6 +221,183 @@ export default function modesExtension(pi: ExtensionAPI): void {
     },
   ];
 
+  // ----- Signal tools -----
+  pi.registerTool({
+    name: PLAN_SIGNAL_TOOLS[0],
+    label: "Plan Ready",
+    description: "Signal that planning is complete and the user must choose what happens next.",
+    promptSnippet: "Signal when the plan is ready for user review and choice.",
+    promptGuidelines: [
+      "In PLAN mode, call this tool exactly once when your plan is ready instead of relying on plain-text plan parsing.",
+    ],
+    parameters: Type.Object({
+      planText: Type.String({ description: "The full plan markdown/text." }),
+      steps: Type.Array(Type.String({ minLength: 1 }), {
+        minItems: 1,
+        description: "Ordered plan steps for the todo list shown to the user.",
+      }),
+    }),
+    async execute(_toolCallId, params) {
+      const state = machine.getState();
+      if (state._tag !== "Planning") {
+        return {
+          content: [
+            { type: "text" as const, text: "Plan mode is not currently waiting for a plan." },
+          ],
+          details: {},
+          isError: true,
+        };
+      }
+
+      const todoItems = buildTodoItemsFromSteps(params.steps);
+      if (todoItems.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: "At least one valid plan step is required." }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      machine.send({
+        _tag: "PlanReady",
+        todoItems,
+        planText: params.planText,
+        planFilePath: generatePlanPath(todoItems[0]!.text),
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Plan captured. The system is now waiting for the user's choice. Do not continue until that choice is resolved.",
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: EXECUTION_SIGNAL_TOOLS[0],
+    label: "Step Done",
+    description: "Signal that the current execution step is complete and ready for gating.",
+    promptSnippet: "Signal completed plan steps during execution.",
+    promptGuidelines: [
+      "During execution, call this tool when a plan step is complete instead of writing [DONE:n] tags.",
+    ],
+    parameters: Type.Object({
+      step: Type.Number({ minimum: 1, description: "Completed step number." }),
+      summary: Type.Optional(Type.String({ description: "Optional summary of what changed." })),
+    }),
+    async execute(_toolCallId, params) {
+      const state = machine.getState();
+      if (state._tag !== "Executing" || state.phase !== "running") {
+        return {
+          content: [
+            { type: "text" as const, text: "A running execution step is not active right now." },
+          ],
+          details: {},
+          isError: true,
+        };
+      }
+
+      if (!state.todoItems.some((todo) => todo.step === params.step)) {
+        return {
+          content: [{ type: "text" as const, text: `Unknown plan step: ${params.step}.` }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      machine.send({ _tag: "StepDone", step: params.step });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Recorded step ${params.step} as complete. Run the gate next.`,
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: EXECUTION_SIGNAL_TOOLS[1],
+    label: "Gate Result",
+    description: "Signal whether the post-step validation gate passed or failed.",
+    promptSnippet: "Signal gate results during plan execution.",
+    promptGuidelines: [
+      "After running the gate, call this tool with the result instead of emitting GATE_PASS or GATE_FAIL.",
+    ],
+    parameters: Type.Object({
+      status: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
+      summary: Type.Optional(Type.String({ description: "Optional gate summary." })),
+    }),
+    async execute(_toolCallId, params) {
+      const state = machine.getState();
+      if (state._tag !== "Executing" || state.phase !== "gating") {
+        return {
+          content: [{ type: "text" as const, text: "The plan gate is not active right now." }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      machine.send({ _tag: "GateResult", status: params.status });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              params.status === "pass"
+                ? "Gate passed. Run counsel next."
+                : "Gate failed. Fix the issues, then re-run the step validation.",
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: EXECUTION_SIGNAL_TOOLS[2],
+    label: "Counsel Result",
+    description: "Signal whether counsel approved the current step or found issues.",
+    promptSnippet: "Signal counsel results during plan execution.",
+    promptGuidelines: [
+      "After running counsel, call this tool with the result instead of emitting COUNSEL_PASS or COUNSEL_FAIL.",
+    ],
+    parameters: Type.Object({
+      status: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
+      summary: Type.Optional(Type.String({ description: "Optional counsel summary." })),
+    }),
+    async execute(_toolCallId, params) {
+      const state = machine.getState();
+      if (state._tag !== "Executing" || state.phase !== "counseling") {
+        return {
+          content: [{ type: "text" as const, text: "Counsel is not active right now." }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      machine.send({ _tag: "CounselResult", status: params.status });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              params.status === "pass"
+                ? "Counsel approved. Continue the plan."
+                : "Counsel found issues. Address them before continuing.",
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
   // ----- Observer: AwaitingChoice async UI -----
   const awaitingChoiceObserver: StateObserver<ModesState, ModesEvent> = {
     match: (state) => state._tag === "AwaitingChoice",
@@ -257,7 +440,14 @@ export default function modesExtension(pi: ExtensionAPI): void {
         tool_call: {
           mode: "reply",
           handle: (state, event) => {
-            if (state._tag !== "Planning" && state._tag !== "AwaitingChoice") return;
+            if (state._tag === "AwaitingChoice") {
+              return {
+                block: true,
+                reason:
+                  "PLAN mode is waiting for the user's choice. Do not continue with more tools until the choice is resolved.",
+              };
+            }
+            if (state._tag !== "Planning") return;
             if (event.toolName !== "bash") return;
             const command = event.input.command as string;
             if (!isSafeCommand(command)) {
@@ -275,10 +465,16 @@ export default function modesExtension(pi: ExtensionAPI): void {
             messages: event.messages.filter((message: any) => {
               if (message.customType === "modes-context") return false;
               if (message.customType === "modes-execution-context") return false;
-              if (typeof message.customType === "string" && message.customType.startsWith("modes-gate")) {
+              if (
+                typeof message.customType === "string" &&
+                message.customType.startsWith("modes-gate")
+              ) {
                 return false;
               }
-              if (typeof message.customType === "string" && message.customType.startsWith("modes-counsel")) {
+              if (
+                typeof message.customType === "string" &&
+                message.customType.startsWith("modes-counsel")
+              ) {
                 return false;
               }
               if (message.role !== "user") return true;
@@ -287,7 +483,8 @@ export default function modesExtension(pi: ExtensionAPI): void {
                 if (typeof content === "string") return !content.includes("[PLAN MODE ACTIVE]");
                 if (Array.isArray(content)) {
                   return !content.some(
-                    (block: any) => block.type === "text" && block.text?.includes("[PLAN MODE ACTIVE]"),
+                    (block: any) =>
+                      block.type === "text" && block.text?.includes("[PLAN MODE ACTIVE]"),
                   );
                 }
               }
@@ -318,15 +515,12 @@ Restrictions:
 - Bash is restricted to an allowlist of read-only commands
 - Use the interview tool to ask the user clarifying questions about scope
 
-Create a detailed plan under a "Plan:" header.
-Use a numbered list or bullet points:
+When your plan is ready, call ${PLAN_SIGNAL_TOOLS[0]} with:
+- planText: the full plan markdown/text
+- steps: the ordered checklist items for the user-facing todo list
 
-Plan:
-1. First step description
-2. Second step description
-- or a bullet step
-
-Do NOT attempt to make changes - just describe what you would do.${diffBlock}${principlesBlock}`,
+Do NOT rely on plain-text "Plan:" parsing anymore.
+Do NOT attempt to make changes - just describe what you would do, then call ${PLAN_SIGNAL_TOOLS[0]}.${diffBlock}${principlesBlock}`,
                   display: false,
                 },
               };
@@ -348,76 +542,15 @@ Do NOT attempt to make changes - just describe what you would do.${diffBlock}${p
 Remaining steps:
 ${todoList}${planRef}
 
-Use the counsel tool for cross-vendor review before committing each batch of changes.
+Use ${EXECUTION_SIGNAL_TOOLS[0]} when a step is complete.
+Use ${EXECUTION_SIGNAL_TOOLS[1]} after the validation gate.
+Use ${EXECUTION_SIGNAL_TOOLS[2]} after counsel review.
 
-Execute each step in order.
-After completing a step, include a [DONE:n] tag in your response.${principlesBlock}`,
+Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_PASS, or COUNSEL_FAIL text markers anymore — use the signal tools instead.${principlesBlock}`,
                   display: false,
                 },
               };
             }
-          },
-        },
-
-        turn_end: {
-          mode: "fire",
-          toEvent: (state, event): ModesEvent | null => {
-            if (state._tag !== "Executing" || state.todoItems.length === 0) return null;
-            if (!isAssistantMessage(event.message)) return null;
-
-            const text = getTextContent(event.message);
-            const updatedItems = state.todoItems.map((todo) => ({ ...todo }));
-            const marked = markCompletedSteps(text, updatedItems);
-            if (marked > 0) {
-              queueMicrotask(() => {
-                if (state.phase === "running") {
-                  machine.send({ _tag: "TaskDone" });
-                }
-              });
-              return { _tag: "TurnEnd", todoItems: updatedItems };
-            }
-            return null;
-          },
-        },
-
-        agent_end: {
-          mode: "fire",
-          toEvent: (state, event): ModesEvent | null => {
-            if (state._tag === "Executing" && state.todoItems.length > 0) {
-              const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
-              const text = lastAssistant ? getTextContent(lastAssistant) : "";
-
-              if (state.phase === "gating") {
-                if (/GATE_PASS/i.test(text)) return { _tag: "GatePass" };
-                if (/GATE_FAIL/i.test(text)) return { _tag: "GateFail" };
-                return null;
-              }
-              if (state.phase === "counseling") {
-                if (/COUNSEL_PASS/i.test(text)) return { _tag: "CounselPass" };
-                if (/COUNSEL_FAIL/i.test(text)) return { _tag: "CounselFail" };
-                return null;
-              }
-
-              return state.todoItems.every((todo) => todo.completed)
-                ? { _tag: "ExecutionComplete" }
-                : null;
-            }
-
-            if (state._tag !== "Planning") return null;
-
-            const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
-            if (!lastAssistant) return null;
-
-            const fullText = getTextContent(lastAssistant);
-            const extracted = extractTodoItems(fullText);
-            if (extracted.length === 0) return null;
-
-            return {
-              _tag: "AgentEnd",
-              todoItems: extracted,
-              planText: fullText,
-              planFilePath: generatePlanPath(extracted[0]!.text),
-            };
           },
         },
 
@@ -440,29 +573,12 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
             const data = modesEntry?.data;
             const mode = data?.mode;
             const pending = data?.pending;
-            let todoItems = pending?.todoItems ?? data?.todoItems ?? [];
+            const todoItems = (pending?.todoItems ?? data?.todoItems ?? []).map((todo) => ({
+              ...todo,
+            }));
             const planFilePath = pending?.planFilePath ?? data?.planFilePath ?? null;
             const savedTools = data?.savedTools ?? null;
             const flagPlan = pi.getFlag("plan") === true;
-
-            if (modesEntry && mode === "Executing" && todoItems.length > 0) {
-              todoItems = todoItems.map((todo) => ({ ...todo }));
-              let executeIndex = -1;
-              for (let index = entries.length - 1; index >= 0; index--) {
-                if ((entries[index] as any).customType === "modes-execute") {
-                  executeIndex = index;
-                  break;
-                }
-              }
-              const messages: AssistantMessage[] = [];
-              for (let index = executeIndex + 1; index < entries.length; index++) {
-                const entry = entries[index] as any;
-                if (entry.type === "message" && "message" in entry && isAssistantMessage(entry.message)) {
-                  messages.push(entry.message as AssistantMessage);
-                }
-              }
-              markCompletedSteps(messages.map(getTextContent).join("\n"), todoItems);
-            }
 
             return {
               _tag: "Hydrate",
@@ -472,6 +588,7 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
               savedTools,
               pending,
               flagPlan,
+              currentStep: null,
               currentTools: pi.getActiveTools(),
             };
           },
@@ -504,7 +621,8 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
 
   // ----- /plan command (imperative — async diff context gathering) -----
   pi.registerCommand("plan", {
-    description: "Toggle PLAN mode. Shift+Tab also toggles it. /plan <prompt> enters PLAN mode and sends the prompt.",
+    description:
+      "Toggle PLAN mode. Shift+Tab also toggles it. /plan <prompt> enters PLAN mode and sends the prompt.",
     handler: async (args, ctx) => {
       const prompt = args.trim();
       const currentTools = pi.getActiveTools();

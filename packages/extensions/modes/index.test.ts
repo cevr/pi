@@ -4,7 +4,7 @@ import { Key } from "@mariozechner/pi-tui";
 import modesExtension from "./index";
 
 function createMockExtensionApiHarness() {
-  const tools: unknown[] = [];
+  const tools: Array<{ name: string; tool: any }> = [];
   const commands: Array<{ name: string; command: any }> = [];
   const shortcuts: Array<{ key: unknown; options: any }> = [];
   const flags: Array<{ name: string; options: unknown }> = [];
@@ -17,8 +17,8 @@ function createMockExtensionApiHarness() {
   let activeTools: string[] = ["read", "bash", "edit", "write", "grep", "find", "ls", "skill"];
 
   const pi = {
-    registerTool(tool: unknown) {
-      tools.push(tool);
+    registerTool(tool: any) {
+      tools.push({ name: tool.name, tool });
     },
     registerCommand(name: string, command: any) {
       commands.push({ name, command });
@@ -66,6 +66,7 @@ function createMockExtensionApiHarness() {
     sentUserMessages,
     appendedEntries,
     getActiveTools: () => activeTools,
+    getTool: (name: string) => tools.find((tool) => tool.name === name)?.tool,
     getCommand: (name: string) => commands.find((command) => command.name === name),
     getListener: (event: string) => listeners.find((listener) => listener.event === event),
     setFlag: (name: string, value: unknown) => {
@@ -110,6 +111,18 @@ describe("modes extension", () => {
     expect(names).toContain("todos");
   });
 
+  it("registers signal tools", () => {
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
+
+    expect(harness.tools.map((tool) => tool.name)).toEqual([
+      "modes_plan_ready",
+      "modes_step_done",
+      "modes_gate_result",
+      "modes_counsel_result",
+    ]);
+  });
+
   it("registers shift+tab shortcut", () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
@@ -135,7 +148,7 @@ describe("modes extension", () => {
     expect(harness.flags[0]!.name).toBe("plan");
   });
 
-  it("registers event handlers for tool_call, context, before_agent_start, turn_end, agent_end, session_start", () => {
+  it("registers event handlers for tool_call, context, before_agent_start, session_start", () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
 
@@ -143,76 +156,52 @@ describe("modes extension", () => {
     expect(events).toContain("tool_call");
     expect(events).toContain("context");
     expect(events).toContain("before_agent_start");
-    expect(events).toContain("turn_end");
-    expect(events).toContain("agent_end");
     expect(events).toContain("session_start");
+    expect(events).not.toContain("agent_end");
+    expect(events).not.toContain("turn_end");
   });
 
-  it("does not register any tools", () => {
-    const harness = createMockExtensionApiHarness();
-    modesExtension(harness.pi);
-
-    expect(harness.tools).toHaveLength(0);
-  });
-
-  it("auto-executes after plan extraction when no UI is available", async () => {
+  it("plan signal captures the plan and auto-executes with no UI", async () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
 
     const ctx = harness.createContext({ hasUI: false });
     await harness.shortcuts[0]!.options.handler(ctx);
 
-    const agentEnd = harness.getListener("agent_end");
-    expect(agentEnd).toBeDefined();
+    const planReady = harness.getTool("modes_plan_ready");
+    expect(planReady).toBeDefined();
 
-    agentEnd!.handler(
-      {
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Plan:\n1. Audit the flow\n2. Add tests" }],
-          },
-        ],
-      },
-      ctx,
-    );
+    const result = await planReady.execute("tc-1", {
+      planText: "## Plan\n1. Audit the flow\n2. Add tests",
+      steps: ["Audit the flow", "Add tests"],
+    });
 
-    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-todo-list")).toBe(
-      true,
-    );
+    expect(result.isError).toBeUndefined();
+    expect(
+      harness.sentMessages.some((entry) => entry.message.customType === "modes-todo-list"),
+    ).toBe(true);
     expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(
       true,
     );
   });
 
-  it("auto-executes after bullet-plan extraction when no UI is available", async () => {
+  it("blocks further tool calls while awaiting choice", async () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
 
-    const ctx = harness.createContext({ hasUI: false });
+    const ctx = harness.createContext();
+    ctx.ui.select = mock(async () => new Promise<undefined>(() => {}));
     await harness.shortcuts[0]!.options.handler(ctx);
 
-    const agentEnd = harness.getListener("agent_end");
-    expect(agentEnd).toBeDefined();
+    const planReady = harness.getTool("modes_plan_ready");
+    await planReady.execute("tc-1", {
+      planText: "## Plan\n1. Audit the flow",
+      steps: ["Audit the flow"],
+    });
 
-    agentEnd!.handler(
-      {
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Plan:\n- Audit the flow\n- Improve coverage" }],
-          },
-        ],
-      },
-      ctx,
-    );
-
-    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-todo-list")).toBe(
-      true,
-    );
-    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(
-      true,
-    );
+    const toolCall = harness.getListener("tool_call");
+    const reply = toolCall!.handler({ toolName: "read", input: { path: "/tmp/foo" } }, ctx);
+    expect(reply).toMatchObject({ block: true });
   });
 
   it("restores an awaiting choice session and re-prompts on session start", () => {
@@ -244,6 +233,6 @@ describe("modes extension", () => {
     expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(
       true,
     );
-    expect(harness.getActiveTools()).toEqual(["read", "bash", "edit"]);
+    expect(harness.getActiveTools()).toContain("modes_step_done");
   });
 });
