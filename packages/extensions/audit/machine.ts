@@ -8,16 +8,18 @@
 import type { SkillCatalogEntry } from "@cvr/pi-diff-context";
 import { executeTurn, type ExecutionEffect } from "@cvr/pi-execution";
 import {
+  recordGraphTaskCompletion,
+  startGraphExecution,
+  type GraphExecutionCursor,
+  type GraphExecutionPolicy,
+} from "@cvr/pi-graph-execution";
+import {
   enterSequentialExecutionGate,
   resolveSequentialExecutionCounsel,
   resolveSequentialExecutionGate,
   type SequentialExecutionPhase,
 } from "@cvr/pi-sequential-execution";
-import {
-  findTaskByOrder,
-  setTaskStatus,
-  type TaskListItem,
-} from "@cvr/pi-task-list";
+import type { TaskListItem } from "@cvr/pi-task-list";
 import type { BuiltinEffect, Reducer, TransitionResult } from "@cvr/pi-state-machine";
 
 export type { SkillCatalogEntry, DiffContext } from "@cvr/pi-diff-context";
@@ -47,6 +49,7 @@ export interface AuditFinding {
 export interface AuditConcernTaskMetadata {
   description: string;
   skills: string[];
+  notes?: string;
 }
 
 export interface AuditConcernTask extends TaskListItem {
@@ -54,6 +57,8 @@ export interface AuditConcernTask extends TaskListItem {
 }
 
 export type FixPhase = SequentialExecutionPhase;
+
+export const AUDIT_GRAPH_POLICY: GraphExecutionPolicy = { maxParallel: 3 };
 
 // ---------------------------------------------------------------------------
 // State
@@ -78,7 +83,7 @@ export type AuditState =
       diffStat: string;
       targetPaths: string[];
       userPrompt: string;
-      currentConcern: number;
+      cursor: GraphExecutionCursor;
     }
   | {
       _tag: "Synthesizing";
@@ -108,7 +113,8 @@ export type AuditEvent =
     }
   | { _tag: "ConcernsDetected"; concerns: AuditConcern[] }
   | { _tag: "DetectionFailed" }
-  | { _tag: "ConcernAudited" }
+  | { _tag: "ConcernAudited"; taskId: string; notes: string }
+  | { _tag: "ConcernAuditFailed"; message: string }
   | { _tag: "SynthesisComplete"; findings: AuditFinding[] }
   | { _tag: "FindingFixed" }
   | { _tag: "FixGatePass" }
@@ -117,13 +123,45 @@ export type AuditEvent =
   | { _tag: "FixCounselFail" }
   | { _tag: "FixSkip" }
   | { _tag: "Cancel" }
+  | {
+      _tag: "Hydrate";
+      mode?: AuditState["_tag"];
+      scope?: AuditScopeMode;
+      concerns?: AuditConcernTask[];
+      diffStat?: string;
+      targetPaths?: string[];
+      skillCatalog?: SkillCatalogEntry[];
+      userPrompt?: string;
+      concernCursor?: GraphExecutionCursor;
+      findings?: AuditFinding[];
+      currentFinding?: number;
+      phase?: FixPhase;
+    }
   | { _tag: "Reset" };
 
 // ---------------------------------------------------------------------------
 // Extension effects
 // ---------------------------------------------------------------------------
 
-export type AuditEffect = ExecutionEffect | { type: "updateUI" };
+export type AuditEffect =
+  | ExecutionEffect
+  | { type: "persistState"; state: PersistPayload }
+  | { type: "runConcernBatch"; state: Extract<AuditState, { _tag: "Auditing" }> }
+  | { type: "updateUI" };
+
+export interface PersistPayload {
+  mode: AuditState["_tag"];
+  scope?: AuditScopeMode;
+  concerns?: AuditConcernTask[];
+  diffStat?: string;
+  targetPaths?: string[];
+  skillCatalog?: SkillCatalogEntry[];
+  userPrompt?: string;
+  concernCursor?: GraphExecutionCursor;
+  findings?: AuditFinding[];
+  currentFinding?: number;
+  phase?: FixPhase;
+}
 
 // ---------------------------------------------------------------------------
 // Prompt builders (pure — used by both reducer effects and wiring)
@@ -190,8 +228,17 @@ Produce the concern-specific audit notes in plain text with concrete file refere
 
 export function buildSynthesisPrompt(state: Extract<AuditState, { _tag: "Synthesizing" }>): string {
   const userBlock = state.userPrompt ? `\n## Focus\n${state.userPrompt}\n` : "";
+  const concernNotes = state.concerns
+    .map((concern) => {
+      const notes = concern.metadata.notes?.trim() || "(no notes collected)";
+      return `## Concern ${concern.order}: ${concern.subject}\n${notes}`;
+    })
+    .join("\n\n");
 
   return `Synthesize audit findings from ${state.concerns.length} concern-specific audits.${userBlock}
+
+## Concern Audit Notes
+${concernNotes}
 
 1. Deduplicate across concerns
 2. Rank by severity (critical → warning → suggestion)
@@ -236,6 +283,79 @@ type Result = TransitionResult<AuditState, AuditEffect>;
 
 const UI: AuditEffect = { type: "updateUI" };
 
+function runConcernBatch(state: Extract<AuditState, { _tag: "Auditing" }>): AuditEffect {
+  return { type: "runConcernBatch", state };
+}
+
+function persist(state: AuditState): AuditEffect {
+  const payload: PersistPayload = (() => {
+    switch (state._tag) {
+      case "Idle":
+        return { mode: "Idle" };
+      case "Detecting":
+        return {
+          mode: "Detecting",
+          scope: state.scope,
+          diffStat: state.diffStat,
+          targetPaths: state.targetPaths,
+          skillCatalog: state.skillCatalog,
+          userPrompt: state.userPrompt,
+        };
+      case "Auditing":
+        return {
+          mode: "Auditing",
+          scope: state.scope,
+          concerns: state.concerns,
+          diffStat: state.diffStat,
+          targetPaths: state.targetPaths,
+          userPrompt: state.userPrompt,
+          concernCursor: state.cursor,
+        };
+      case "Synthesizing":
+        return {
+          mode: "Synthesizing",
+          concerns: state.concerns,
+          userPrompt: state.userPrompt,
+        };
+      case "Fixing":
+        return {
+          mode: "Fixing",
+          concerns: state.concerns,
+          findings: state.findings,
+          currentFinding: state.currentFinding,
+          phase: state.phase,
+        };
+    }
+  })();
+
+  return { type: "persistState", state: payload };
+}
+
+export function getAuditStatusText(state: AuditState): string | undefined {
+  switch (state._tag) {
+    case "Idle":
+      return undefined;
+    case "Detecting":
+      return "audit: detecting...";
+    case "Auditing": {
+      const activeConcerns = getActiveAuditConcerns(state);
+      if (activeConcerns.length <= 1) {
+        const concern = activeConcerns[0] ?? getCurrentAuditConcern(state);
+        return `audit: concern ${concern?.order ?? 0}/${state.concerns.length}`;
+      }
+      return `audit: ${activeConcerns.length} concerns active/${state.concerns.length}`;
+    }
+    case "Synthesizing":
+      return "audit: synthesizing...";
+    case "Fixing":
+      return state.phase === "gating"
+        ? `audit: gating fix ${state.currentFinding + 1}/${state.findings.length}`
+        : state.phase === "counseling"
+          ? `audit: counsel fix ${state.currentFinding + 1}/${state.findings.length}`
+          : `audit: fix ${state.currentFinding + 1}/${state.findings.length}`;
+  }
+}
+
 function triggerMessage(content: string, customType = "audit-trigger"): ExecutionEffect {
   return executeTurn({
     customType,
@@ -258,6 +378,10 @@ function statusEffect(text?: string): BuiltinEffect {
   return { type: "setStatus", key: "audit", text };
 }
 
+function statusEffectForState(state: AuditState): BuiltinEffect {
+  return statusEffect(getAuditStatusText(state));
+}
+
 function createConcernTasks(concerns: readonly AuditConcern[]): AuditConcernTask[] {
   return concerns.map((concern, index) => ({
     id: String(index + 1),
@@ -273,36 +397,142 @@ function createConcernTasks(concerns: readonly AuditConcern[]): AuditConcernTask
   }));
 }
 
-function startConcernAudit(concerns: readonly AuditConcernTask[]): AuditConcernTask[] {
-  const firstConcern = concerns[0];
-  return firstConcern ? setTaskStatus(concerns, firstConcern.order, "in_progress") : [...concerns];
+function cloneConcernTask(concern: AuditConcernTask): AuditConcernTask {
+  return {
+    ...concern,
+    blockedBy: [...concern.blockedBy],
+    metadata: {
+      description: concern.metadata.description,
+      skills: [...concern.metadata.skills],
+      notes: concern.metadata.notes,
+    },
+  };
 }
 
-function completeConcernAudit(
-  concerns: readonly AuditConcernTask[],
-  currentConcern: number,
-): AuditConcernTask[] {
-  return setTaskStatus(concerns, currentConcern, "completed");
+function cloneConcernTasks(concerns: readonly AuditConcernTask[]): AuditConcernTask[] {
+  return concerns.map(cloneConcernTask);
 }
 
-function advanceConcernAudit(
+function setConcernStatuses(
   concerns: readonly AuditConcernTask[],
-  currentConcern: number,
+  taskIds: readonly string[],
+  status: AuditConcernTask["status"],
 ): AuditConcernTask[] {
-  const completed = completeConcernAudit(concerns, currentConcern);
-  const nextConcern = findTaskByOrder(completed, currentConcern + 1);
-  return nextConcern ? setTaskStatus(completed, nextConcern.order, "in_progress") : completed;
+  const targetIds = new Set(taskIds);
+  return cloneConcernTasks(concerns).map((concern) =>
+    targetIds.has(concern.id)
+      ? {
+          ...concern,
+          status,
+        }
+      : concern,
+  );
+}
+
+function setConcernNotes(
+  concerns: readonly AuditConcernTask[],
+  taskId: string,
+  notes: string,
+): AuditConcernTask[] {
+  return cloneConcernTasks(concerns).map((concern) =>
+    concern.id === taskId
+      ? {
+          ...concern,
+          metadata: {
+            ...concern.metadata,
+            notes,
+          },
+        }
+      : concern,
+  );
+}
+
+function getActiveAuditConcerns(
+  state: Extract<AuditState, { _tag: "Auditing" }>,
+): AuditConcernTask[] {
+  return state.concerns.filter((concern) => state.cursor.activeTaskIds.includes(concern.id));
+}
+
+function getConcernForCursor(
+  concerns: readonly AuditConcernTask[],
+  cursor: GraphExecutionCursor,
+): AuditConcernTask | undefined {
+  const concernId = cursor.activeTaskIds[0] ?? cursor.frontierTaskIds[0];
+  return concernId === undefined ? undefined : concerns.find((concern) => concern.id === concernId);
+}
+
+function startConcernExecution(
+  concerns: readonly AuditConcernTask[],
+): { concerns: AuditConcernTask[]; cursor: GraphExecutionCursor; concern: AuditConcernTask } | null {
+  const cursor = startGraphExecution(concerns, AUDIT_GRAPH_POLICY);
+  if (!cursor) return null;
+
+  const nextConcerns = setConcernStatuses(concerns, cursor.frontierTaskIds, "in_progress");
+  const concern = getConcernForCursor(nextConcerns, cursor);
+  if (!concern) return null;
+
+  return {
+    concerns: nextConcerns,
+    cursor,
+    concern,
+  };
+}
+
+function getHydratedConcernExecution(
+  concerns: readonly AuditConcernTask[],
+  cursor: GraphExecutionCursor | undefined,
+): { concerns: AuditConcernTask[]; cursor: GraphExecutionCursor } | null {
+  const normalizedConcerns = cloneConcernTasks(concerns).map((concern) => ({
+    ...concern,
+    status: concern.status === "completed" ? "completed" : "pending",
+  }));
+  const completedConcernIds = new Set(
+    normalizedConcerns
+      .filter((concern) => concern.status === "completed")
+      .map((concern) => concern.id),
+  );
+  const validConcernIds = new Set(normalizedConcerns.map((concern) => concern.id));
+  const frontierTaskIds =
+    cursor?.frontierTaskIds.filter(
+      (taskId) => validConcernIds.has(taskId) && !completedConcernIds.has(taskId),
+    ) ?? [];
+  const activeTaskIds =
+    cursor?.activeTaskIds.filter((taskId) => frontierTaskIds.includes(taskId)) ?? [];
+  const inferredCursor = startGraphExecution(normalizedConcerns, AUDIT_GRAPH_POLICY);
+  const nextCursor =
+    frontierTaskIds.length > 0
+      ? {
+          phase: "running" as const,
+          frontierTaskIds,
+          activeTaskIds: activeTaskIds.length > 0 ? activeTaskIds : [...frontierTaskIds],
+          total: normalizedConcerns.length,
+        }
+      : inferredCursor;
+  if (!nextCursor) return null;
+
+  return {
+    concerns: setConcernStatuses(normalizedConcerns, nextCursor.frontierTaskIds, "in_progress"),
+    cursor: nextCursor,
+  };
+}
+
+export function getCurrentAuditConcern(
+  state: Extract<AuditState, { _tag: "Auditing" }>,
+): AuditConcernTask | undefined {
+  return getConcernForCursor(state.concerns, state.cursor);
 }
 
 function completeFindingSequence(state: Extract<AuditState, { _tag: "Fixing" }>): Result {
   const prevFile = state.findings[state.currentFinding]!.file;
+  const next: AuditState = { _tag: "Idle" };
   return {
-    state: { _tag: "Idle" },
+    state: next,
     effects: [
       { type: "notify", message: "audit-loop complete — all findings addressed", level: "info" },
-      statusEffect(),
+      statusEffectForState(next),
       displayMessage(`Commit the fix for ${prevFile}, then say "AUDIT_LOOP_DONE".`, "audit-commit"),
       UI,
+      persist(next),
     ],
   };
 }
@@ -325,7 +555,7 @@ function continueWithFinding(
   return {
     state: next,
     effects: [
-      statusEffect(`audit: fix ${nextFindingIndex + 1}/${state.findings.length}`),
+      statusEffectForState(next),
       displayMessage(
         `Commit the fix for ${prevFile}, then proceed.\n\n${buildFixPrompt(
           finding,
@@ -335,6 +565,7 @@ function continueWithFinding(
         "audit-fix",
       ),
       UI,
+      persist(next),
     ],
   };
 }
@@ -367,9 +598,10 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       return {
         state: next,
         effects: [
-          statusEffect("audit: detecting..."),
+          statusEffectForState(next),
           triggerMessage(buildDetectionPrompt(next)),
           UI,
+          persist(next),
         ],
       };
     }
@@ -379,50 +611,68 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       if (state._tag !== "Detecting") return { state };
 
       if (event.concerns.length === 0) {
+        const next: AuditState = { _tag: "Idle" };
         return {
-          state: { _tag: "Idle" },
+          state: next,
           effects: [
             { type: "notify", message: "no audit concerns detected", level: "info" },
-            statusEffect(),
+            statusEffectForState(next),
             UI,
+            persist(next),
           ],
         };
       }
 
-      const concerns = startConcernAudit(createConcernTasks(event.concerns.slice(0, MAX_CONCERNS)));
-      const firstConcern = concerns[0]!;
+      const concernExecution = startConcernExecution(
+        createConcernTasks(event.concerns.slice(0, MAX_CONCERNS)),
+      );
+      if (!concernExecution) {
+        const next: AuditState = { _tag: "Idle" };
+        return {
+          state: next,
+          effects: [
+            {
+              type: "notify",
+              message: "audit: couldn't start concern execution",
+              level: "error",
+            },
+            statusEffectForState(next),
+            UI,
+            persist(next),
+          ],
+        };
+      }
+
       const next: AuditState = {
         _tag: "Auditing",
         scope: state.scope,
-        concerns,
+        concerns: concernExecution.concerns,
         diffStat: state.diffStat,
         targetPaths: state.targetPaths,
         userPrompt: state.userPrompt,
-        currentConcern: firstConcern.order,
+        cursor: concernExecution.cursor,
       };
       return {
         state: next,
-        effects: [
-          statusEffect(`audit: concern ${firstConcern.order}/${concerns.length}`),
-          triggerMessage(buildConcernAuditPrompt(next, firstConcern)),
-          UI,
-        ],
+        effects: [statusEffectForState(next), runConcernBatch(next), UI, persist(next)],
       };
     }
 
     // ----- DetectionFailed -----
     case "DetectionFailed": {
       if (state._tag !== "Detecting") return { state };
+      const next: AuditState = { _tag: "Idle" };
       return {
-        state: { _tag: "Idle" },
+        state: next,
         effects: [
           {
             type: "notify",
             message: "audit: couldn't parse concerns from agent output",
             level: "error",
           },
-          statusEffect(),
+          statusEffectForState(next),
           UI,
+          persist(next),
         ],
       };
     }
@@ -431,11 +681,28 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
     case "ConcernAudited": {
       if (state._tag !== "Auditing") return { state };
 
-      const currentConcern = state.currentConcern;
-      const concerns = advanceConcernAudit(state.concerns, currentConcern);
-      const nextConcern = findTaskByOrder(concerns, currentConcern + 1);
+      const concerns = setConcernStatuses(
+        setConcernNotes(state.concerns, event.taskId, event.notes),
+        [event.taskId],
+        "completed",
+      );
+      const progress = recordGraphTaskCompletion(state.cursor, event.taskId);
+      if (!progress) return { state };
 
-      if (!nextConcern) {
+      if (progress.phase === "running") {
+        const next: AuditState = {
+          ...state,
+          concerns,
+          cursor: progress,
+        };
+        return {
+          state: next,
+          effects: [statusEffectForState(next), UI, persist(next)],
+        };
+      }
+
+      const concernExecution = startConcernExecution(concerns);
+      if (!concernExecution) {
         const next: AuditState = {
           _tag: "Synthesizing",
           concerns,
@@ -444,24 +711,36 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         return {
           state: next,
           effects: [
-            statusEffect("audit: synthesizing..."),
+            statusEffectForState(next),
             triggerMessage(buildSynthesisPrompt(next)),
             UI,
+            persist(next),
           ],
         };
       }
 
       const next: AuditState = {
         ...state,
-        concerns,
-        currentConcern: nextConcern.order,
+        concerns: concernExecution.concerns,
+        cursor: concernExecution.cursor,
       };
       return {
         state: next,
+        effects: [statusEffectForState(next), runConcernBatch(next), UI, persist(next)],
+      };
+    }
+
+    // ----- ConcernAuditFailed -----
+    case "ConcernAuditFailed": {
+      if (state._tag !== "Auditing") return { state };
+      const next: AuditState = { _tag: "Idle" };
+      return {
+        state: next,
         effects: [
-          statusEffect(`audit: concern ${nextConcern.order}/${concerns.length}`),
-          triggerMessage(buildConcernAuditPrompt(next, nextConcern)),
+          { type: "notify", message: event.message, level: "error" },
+          statusEffectForState(next),
           UI,
+          persist(next),
         ],
       };
     }
@@ -471,12 +750,14 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       if (state._tag !== "Synthesizing") return { state };
 
       if (event.findings.length === 0) {
+        const next: AuditState = { _tag: "Idle" };
         return {
-          state: { _tag: "Idle" },
+          state: next,
           effects: [
             { type: "notify", message: "audit complete — no findings to fix", level: "info" },
-            statusEffect(),
+            statusEffectForState(next),
             UI,
+            persist(next),
           ],
         };
       }
@@ -492,9 +773,10 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       return {
         state: next,
         effects: [
-          statusEffect(`audit: fix 1/${event.findings.length}`),
+          statusEffectForState(next),
           displayMessage(buildFixPrompt(first, 0, event.findings.length), "audit-fix"),
           UI,
+          persist(next),
         ],
       };
     }
@@ -516,9 +798,10 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       return {
         state: next,
         effects: [
-          statusEffect(`audit: gating fix ${state.currentFinding + 1}/${state.findings.length}`),
+          statusEffectForState(next),
           triggerMessage(buildFixGatePrompt(), "audit-gate"),
           UI,
+          persist(next),
         ],
       };
     }
@@ -546,9 +829,10 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       return {
         state: next,
         effects: [
-          statusEffect(`audit: counsel fix ${state.currentFinding + 1}/${state.findings.length}`),
+          statusEffectForState(next),
           triggerMessage(buildFixCounselPrompt(), "audit-counsel"),
           UI,
+          persist(next),
         ],
       };
     }
@@ -571,12 +855,13 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         state: next,
         effects: [
           { type: "notify", message: "gate failed — fix and retry", level: "warning" },
-          statusEffect(`audit: fix ${state.currentFinding + 1}/${state.findings.length}`),
+          statusEffectForState(next),
           triggerMessage(
             "Gate failed. Fix the failures, then say FINDING_FIXED again.",
             "audit-gate-fix",
           ),
           UI,
+          persist(next),
         ],
       };
     }
@@ -616,12 +901,13 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         state: next,
         effects: [
           { type: "notify", message: "counsel found issues — address feedback", level: "warning" },
-          statusEffect(`audit: fix ${state.currentFinding + 1}/${state.findings.length}`),
+          statusEffectForState(next),
           triggerMessage(
             "Counsel found issues. Address the feedback, then say FINDING_FIXED again.",
             "audit-counsel-fix",
           ),
           UI,
+          persist(next),
         ],
       };
     }
@@ -629,21 +915,96 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
     // ----- Cancel -----
     case "Cancel": {
       if (state._tag === "Idle") return { state };
+      const next: AuditState = { _tag: "Idle" };
       return {
-        state: { _tag: "Idle" },
+        state: next,
         effects: [
           { type: "notify", message: "audit cancelled", level: "info" },
-          statusEffect(),
+          statusEffectForState(next),
           UI,
+          persist(next),
         ],
+      };
+    }
+
+    // ----- Hydrate -----
+    case "Hydrate": {
+      if (event.mode === "Detecting" && event.scope) {
+        const next: AuditState = {
+          _tag: "Detecting",
+          scope: event.scope,
+          diffStat: event.diffStat ?? "",
+          targetPaths: event.targetPaths ?? [],
+          skillCatalog: event.skillCatalog ?? [],
+          userPrompt: event.userPrompt ?? "",
+        };
+        return { state: next, effects: [statusEffectForState(next), UI] };
+      }
+
+      if (event.mode === "Auditing" && event.scope && (event.concerns?.length ?? 0) > 0) {
+        const concernExecution = getHydratedConcernExecution(event.concerns ?? [], event.concernCursor);
+        if (!concernExecution) {
+          const next: AuditState = { _tag: "Idle" };
+          return {
+            state: next,
+            effects: [statusEffectForState(next), UI],
+          };
+        }
+
+        const next: AuditState = {
+          _tag: "Auditing",
+          scope: event.scope,
+          concerns: concernExecution.concerns,
+          diffStat: event.diffStat ?? "",
+          targetPaths: event.targetPaths ?? [],
+          userPrompt: event.userPrompt ?? "",
+          cursor: concernExecution.cursor,
+        };
+        return { state: next, effects: [statusEffectForState(next), runConcernBatch(next), UI] };
+      }
+
+      if (event.mode === "Synthesizing" && (event.concerns?.length ?? 0) > 0) {
+        const next: AuditState = {
+          _tag: "Synthesizing",
+          concerns: event.concerns ?? [],
+          userPrompt: event.userPrompt ?? "",
+        };
+        return { state: next, effects: [statusEffectForState(next), UI] };
+      }
+
+      if (event.mode === "Fixing" && (event.findings?.length ?? 0) > 0) {
+        const findings = event.findings ?? [];
+        const currentFinding =
+          typeof event.currentFinding === "number" && event.currentFinding >= 0
+            ? Math.min(event.currentFinding, findings.length - 1)
+            : 0;
+        const phase =
+          event.phase === "gating" || event.phase === "counseling" || event.phase === "running"
+            ? event.phase
+            : "running";
+        const next: AuditState = {
+          _tag: "Fixing",
+          concerns: event.concerns ?? [],
+          findings,
+          currentFinding,
+          phase,
+        };
+        return { state: next, effects: [statusEffectForState(next), UI] };
+      }
+
+      const next: AuditState = { _tag: "Idle" };
+      return {
+        state: next,
+        effects: [statusEffectForState(next), UI],
       };
     }
 
     // ----- Reset -----
     case "Reset": {
+      const next: AuditState = { _tag: "Idle" };
       return {
-        state: { _tag: "Idle" },
-        effects: [statusEffect(), UI],
+        state: next,
+        effects: [statusEffectForState(next), UI],
       };
     }
   }

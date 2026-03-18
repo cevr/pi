@@ -1,7 +1,7 @@
 /**
  * Audit Extension — skill-aware branch audit-loop.
  *
- * Full loop: detect concerns → parallel audit → synthesize findings → fix each
+ * Full loop: detect concerns → audit each concern → synthesize findings → fix each
  * finding with gate + counsel between fixes.
  *
  * Usage:
@@ -16,18 +16,34 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { readPrinciples } from "@cvr/pi-brain-principles";
 import { createInlineExecutionExecutor, isExecutionEffect } from "@cvr/pi-execution";
 import { GitClient } from "@cvr/pi-git-client";
+import { GraphRuntime } from "@cvr/pi-graph-runtime";
 import { ProcessRunner } from "@cvr/pi-process-runner";
+import { PiSpawnService } from "@cvr/pi-spawn";
+import { getFinalOutput } from "@cvr/pi-sub-agent-render";
 import { register, type MachineConfig } from "@cvr/pi-state-machine";
 import { renderTaskWidget } from "@cvr/pi-task-widget";
 import type { Command } from "@cvr/pi-state-machine";
-import { Layer, ManagedRuntime } from "effect";
+import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import {
   resolveBaseBranch,
   getDiffStat,
   getChangedFiles,
   buildSkillCatalog,
 } from "@cvr/pi-diff-context";
-import { auditReducer, type AuditEffect, type AuditEvent, type AuditState } from "./machine";
+import {
+  AUDIT_GRAPH_POLICY,
+  auditReducer,
+  buildConcernAuditPrompt,
+  getAuditStatusText,
+  type AuditConcernTask,
+  type AuditEffect,
+  type AuditEvent,
+  type AuditFinding,
+  type AuditState,
+  type PersistPayload,
+  type SkillCatalogEntry,
+} from "./machine";
+import type { GraphExecutionCursor } from "@cvr/pi-graph-execution";
 import { parseAuditScopeArgs, toAuditDisplayPath } from "./scope";
 import { parseConcernsJson, parseFindingsJson, PHASE_MARKERS } from "./utils";
 
@@ -49,6 +65,187 @@ function getLastAssistantText(messages: PiMessage[]): string {
     .join("\n");
 }
 
+function normalizeHydratedSkillCatalog(
+  entries: readonly Record<string, unknown>[] | undefined,
+): SkillCatalogEntry[] {
+  return (entries ?? []).flatMap((entry) => {
+    if (typeof entry.name !== "string" || typeof entry.description !== "string") return [];
+    return [{ name: entry.name, description: entry.description }];
+  });
+}
+
+function normalizeHydratedConcernTasks(
+  items: readonly Record<string, unknown>[] | undefined,
+): AuditConcernTask[] {
+  return (items ?? []).flatMap((item) => {
+    const metadata =
+      typeof item.metadata === "object" && item.metadata !== null
+        ? (item.metadata as Record<string, unknown>)
+        : undefined;
+    if (
+      typeof item.id !== "string" ||
+      typeof item.order !== "number" ||
+      typeof item.subject !== "string" ||
+      (item.status !== "pending" && item.status !== "in_progress" && item.status !== "completed") ||
+      typeof metadata?.description !== "string"
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        id: item.id,
+        order: item.order,
+        subject: item.subject,
+        activeForm: typeof item.activeForm === "string" ? item.activeForm : undefined,
+        owner: typeof item.owner === "string" ? item.owner : undefined,
+        status: item.status,
+        blockedBy: Array.isArray(item.blockedBy)
+          ? item.blockedBy.filter((value): value is string => typeof value === "string")
+          : [],
+        metadata: {
+          description: metadata.description,
+          skills: Array.isArray(metadata.skills)
+            ? metadata.skills.filter((value): value is string => typeof value === "string")
+            : [],
+          notes: typeof metadata.notes === "string" ? metadata.notes : undefined,
+        },
+      },
+    ];
+  });
+}
+
+function normalizeHydratedConcernCursor(value: unknown): GraphExecutionCursor | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+
+  const cursor = value as Record<string, unknown>;
+  if (
+    (cursor.phase !== "running" && cursor.phase !== "gating" && cursor.phase !== "counseling") ||
+    typeof cursor.total !== "number" ||
+    !Array.isArray(cursor.frontierTaskIds) ||
+    !Array.isArray(cursor.activeTaskIds)
+  ) {
+    return undefined;
+  }
+
+  return {
+    phase: cursor.phase,
+    total: cursor.total,
+    frontierTaskIds: cursor.frontierTaskIds.filter((taskId): taskId is string => typeof taskId === "string"),
+    activeTaskIds: cursor.activeTaskIds.filter((taskId): taskId is string => typeof taskId === "string"),
+  };
+}
+
+function normalizeHydratedFindings(items: readonly Record<string, unknown>[] | undefined): AuditFinding[] {
+  return (items ?? []).flatMap((item) => {
+    if (
+      typeof item.file !== "string" ||
+      typeof item.description !== "string" ||
+      (item.severity !== "critical" && item.severity !== "warning" && item.severity !== "suggestion")
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        file: item.file,
+        description: item.description,
+        severity: item.severity,
+      },
+    ];
+  });
+}
+
+const CONCERN_AUDIT_BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash"];
+const CONCERN_AUDIT_EXTENSION_TOOLS = ["read", "grep", "find", "ls", "bash", "skill"];
+
+export class ConcernBatchError extends Schema.TaggedErrorClass<ConcernBatchError>()(
+  "ConcernBatchError",
+  { message: Schema.String },
+) {}
+
+export interface ConcernBatchResult {
+  taskId: string;
+  notes: string;
+}
+
+function buildConcernAuditSystemPrompt(
+  state: Extract<AuditState, { _tag: "Auditing" }>,
+  concern: AuditConcernTask,
+  principles: string | undefined,
+): string {
+  const principlesBlock = principles ? `\n\n${principles}` : "";
+  return `[AUDIT MODE — CONCERN ${concern.order}/${state.concerns.length}]\n\nCurrent concern: ${concern.subject} — ${concern.metadata.description}${principlesBlock}`;
+}
+
+function normalizeConcernAuditNotes(text: string): string {
+  return text.replace(PHASE_MARKERS.auditing, "").trim();
+}
+
+export function runConcernBatch(
+  state: Extract<AuditState, { _tag: "Auditing" }>,
+  cwd: string,
+  sessionId: string,
+  principles: string | undefined,
+  signal?: AbortSignal,
+): Effect.Effect<ReadonlyArray<ConcernBatchResult>, ConcernBatchError, GraphRuntime | PiSpawnService> {
+  return Effect.gen(function* () {
+    const graphRuntime = yield* GraphRuntime;
+    const spawn = yield* PiSpawnService;
+
+    const results = yield* graphRuntime.runFrontier(
+      state.cursor.frontierTaskIds,
+      (taskId) =>
+        Effect.gen(function* () {
+          const concern = state.concerns.find((item) => item.id === taskId);
+          if (!concern) {
+            return yield* Effect.fail(
+              new ConcernBatchError({
+                message: `audit: missing concern for task ${taskId}`,
+              }),
+            );
+          }
+
+          const result = yield* spawn.spawn({
+            cwd,
+            task: buildConcernAuditPrompt(state, concern),
+            builtinTools: CONCERN_AUDIT_BUILTIN_TOOLS,
+            extensionTools: CONCERN_AUDIT_EXTENSION_TOOLS,
+            systemPromptBody: buildConcernAuditSystemPrompt(state, concern, principles),
+            signal,
+            sessionId,
+          });
+          const output = getFinalOutput(result.messages).trim();
+          const isError =
+            result.exitCode !== 0 ||
+            result.stopReason === "error" ||
+            result.stopReason === "aborted" ||
+            !PHASE_MARKERS.auditing.test(output);
+
+          if (isError) {
+            return yield* Effect.fail(
+              new ConcernBatchError({
+                message:
+                  result.errorMessage ||
+                  result.stderr ||
+                  output ||
+                  `audit: concern ${concern.subject} failed`,
+              }),
+            );
+          }
+
+          return {
+            taskId,
+            notes: normalizeConcernAuditNotes(output),
+          } satisfies ConcernBatchResult;
+        }),
+      AUDIT_GRAPH_POLICY,
+    );
+
+    return results.map((result) => result.value);
+  });
+}
+
 const AUDIT_CUSTOM_TYPES = new Set([
   "audit-context",
   "audit-trigger",
@@ -65,15 +262,20 @@ const AUDIT_CUSTOM_TYPES = new Set([
 // ---------------------------------------------------------------------------
 
 function formatUI(state: AuditState, ctx: ExtensionContext): void {
+  if (!ctx.hasUI) return;
+
+  ctx.ui.setStatus("audit", getAuditStatusText(state));
+
   if (state._tag === "Auditing") {
     const widget = renderTaskWidget(state.concerns, { theme: ctx.ui.theme });
     ctx.ui.setWidget("audit-progress", widget.lines);
   } else if (state._tag === "Fixing") {
-    const lines = state.findings.map((f, i) => {
-      const marker = i < state.currentFinding ? "✓" : i === state.currentFinding ? "▸" : "○";
+    const lines = state.findings.map((finding, index) => {
+      const marker =
+        index < state.currentFinding ? "✓" : index === state.currentFinding ? "▸" : "○";
       const phase =
-        i === state.currentFinding && state.phase !== "running" ? ` (${state.phase})` : "";
-      return `  ${marker} [${f.severity}] ${f.file}${phase}`;
+        index === state.currentFinding && state.phase !== "running" ? ` (${state.phase})` : "";
+      return `  ${marker} [${finding.severity}] ${finding.file}${phase}`;
     });
     ctx.ui.setWidget("audit-progress", lines);
   } else {
@@ -87,10 +289,14 @@ function formatUI(state: AuditState, ctx: ExtensionContext): void {
 
 export default function auditExtension(pi: ExtensionAPI): void {
   const gitRuntime = ManagedRuntime.make(GitClient.layer.pipe(Layer.provide(ProcessRunner.layer)));
+  const concernRuntime = ManagedRuntime.make(Layer.mergeAll(GraphRuntime.layer, PiSpawnService.layer));
   const executor = createInlineExecutionExecutor(pi);
+  let activeConcernBatchAbort: AbortController | undefined;
 
   pi.on("session_shutdown" as any, async () => {
-    await gitRuntime.dispose();
+    activeConcernBatchAbort?.abort();
+    activeConcernBatchAbort = undefined;
+    await Promise.all([gitRuntime.dispose(), concernRuntime.dispose()]);
   });
 
   // ----- Commands -----
@@ -172,11 +378,8 @@ export default function auditExtension(pi: ExtensionAPI): void {
             case "Detecting":
               content = `[AUDIT MODE — DETECTION]\n\nYou are detecting which audit concerns apply to this branch's changes.${principlesBlock}`;
               break;
-            case "Auditing": {
-              const concern = state.concerns[state.currentConcern - 1]!;
-              content = `[AUDIT MODE — CONCERN ${concern.order}/${state.concerns.length}]\n\nCurrent concern: ${concern.subject} — ${concern.metadata.description}${principlesBlock}`;
-              break;
-            }
+            case "Auditing":
+              return;
             case "Synthesizing":
               content = `[AUDIT MODE — SYNTHESIS]\n\nSynthesize findings and output structured JSON.${principlesBlock}`;
               break;
@@ -225,10 +428,6 @@ export default function auditExtension(pi: ExtensionAPI): void {
               if (concerns === null) return { _tag: "DetectionFailed" };
               return { _tag: "ConcernsDetected", concerns };
             }
-            case "Auditing": {
-              if (PHASE_MARKERS.auditing.test(text)) return { _tag: "ConcernAudited" };
-              return null;
-            }
             case "Synthesizing": {
               if (!PHASE_MARKERS.synthesizing.test(text)) return null;
               const findings = parseFindingsJson(text) ?? [];
@@ -259,7 +458,50 @@ export default function auditExtension(pi: ExtensionAPI): void {
 
       session_start: {
         mode: "fire" as const,
-        toEvent: (): AuditEvent => ({ _tag: "Reset" }),
+        toEvent: (_state, _event, ctx): AuditEvent => {
+          const entries = ctx.sessionManager.getEntries();
+          const auditEntry = entries
+            .filter((entry: any) => entry.type === "custom" && entry.customType === "audit")
+            .pop() as { data?: PersistPayload } | undefined;
+          const data = auditEntry?.data;
+          const mode = data?.mode;
+          const scope = data?.scope === "diff" || data?.scope === "paths" ? data.scope : undefined;
+          const concerns = normalizeHydratedConcernTasks(
+            Array.isArray(data?.concerns) ? (data.concerns as Record<string, unknown>[]) : undefined,
+          );
+          const findings = normalizeHydratedFindings(
+            Array.isArray(data?.findings) ? (data.findings as Record<string, unknown>[]) : undefined,
+          );
+          const skillCatalog = normalizeHydratedSkillCatalog(
+            Array.isArray(data?.skillCatalog)
+              ? (data.skillCatalog as Record<string, unknown>[])
+              : undefined,
+          );
+          const concernCursor = normalizeHydratedConcernCursor(data?.concernCursor);
+          const currentFinding =
+            typeof data?.currentFinding === "number" ? data.currentFinding : undefined;
+          const phase =
+            data?.phase === "running" || data?.phase === "gating" || data?.phase === "counseling"
+              ? data.phase
+              : undefined;
+
+          return {
+            _tag: "Hydrate",
+            mode,
+            scope,
+            concerns,
+            diffStat: data?.diffStat ?? "",
+            targetPaths: Array.isArray(data?.targetPaths)
+              ? data.targetPaths.filter((value): value is string => typeof value === "string")
+              : [],
+            skillCatalog,
+            userPrompt: data?.userPrompt ?? "",
+            concernCursor,
+            findings,
+            currentFinding,
+            phase,
+          };
+        },
       },
 
       session_switch: {
@@ -287,6 +529,58 @@ export default function auditExtension(pi: ExtensionAPI): void {
     (effect, _pi, ctx) => {
       if (isExecutionEffect(effect)) {
         executor.execute(effect.request, ctx);
+        return;
+      }
+      if (effect.type === "persistState") {
+        if (effect.state.mode !== "Auditing") {
+          activeConcernBatchAbort?.abort();
+          activeConcernBatchAbort = undefined;
+        }
+        pi.appendEntry("audit", effect.state);
+        return;
+      }
+      if (effect.type === "runConcernBatch") {
+        activeConcernBatchAbort?.abort();
+        const batchAbort = new AbortController();
+        activeConcernBatchAbort = batchAbort;
+        const principles = readPrinciples();
+        const sessionId = ctx.sessionManager?.getSessionId?.() ?? "";
+
+        concernRuntime
+          .runPromise(
+            runConcernBatch(
+              effect.state,
+              ctx.cwd,
+              sessionId,
+              principles,
+              batchAbort.signal,
+            ),
+          )
+          .then((results) => {
+            if (activeConcernBatchAbort !== batchAbort || batchAbort.signal.aborted) return;
+            for (const result of results) {
+              machine.send({
+                _tag: "ConcernAudited",
+                taskId: result.taskId,
+                notes: result.notes,
+              });
+            }
+            if (activeConcernBatchAbort === batchAbort) {
+              activeConcernBatchAbort = undefined;
+            }
+          })
+          .catch((err) => {
+            if (activeConcernBatchAbort !== batchAbort || batchAbort.signal.aborted) return;
+            batchAbort.abort();
+            const message =
+              err instanceof ConcernBatchError
+                ? err.message
+                : `audit: concern batch failed: ${String(err)}`;
+            machine.send({ _tag: "ConcernAuditFailed", message });
+            if (activeConcernBatchAbort === batchAbort) {
+              activeConcernBatchAbort = undefined;
+            }
+          });
         return;
       }
       if (effect.type === "updateUI") {

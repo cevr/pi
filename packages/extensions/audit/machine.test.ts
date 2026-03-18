@@ -9,6 +9,7 @@ import {
   type AuditFinding,
   type AuditState,
   type FixPhase,
+  type PersistPayload,
   type SkillCatalogEntry,
 } from "./machine";
 import type { BuiltinEffect } from "@cvr/pi-state-machine";
@@ -69,6 +70,16 @@ function createConcernTasks(
   }));
 }
 
+function createConcernCursor(currentConcern = 1, total = CONCERNS.length) {
+  const concernId = String(currentConcern);
+  return {
+    phase: "running" as const,
+    frontierTaskIds: [concernId],
+    activeTaskIds: [concernId],
+    total,
+  };
+}
+
 function auditing(
   concerns = createConcernTasks(),
   scope: "diff" | "paths" = "diff",
@@ -81,7 +92,7 @@ function auditing(
     diffStat: scope === "diff" ? " 3 files changed" : "",
     targetPaths: ["src/app.tsx", "src/lib.ts"],
     userPrompt: "",
-    currentConcern,
+    cursor: createConcernCursor(currentConcern, concerns.length),
   };
 }
 
@@ -110,6 +121,10 @@ function getEffect<T extends Effect>(
   return effects?.find((e) => e.type === type) as T | undefined;
 }
 
+function getPersistPayload(effects: readonly Effect[] | undefined): PersistPayload | undefined {
+  return getEffect<AuditEffect & { type: "persistState" }>(effects, "persistState")?.state;
+}
+
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
@@ -133,6 +148,12 @@ describe("auditReducer — Start", () => {
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
     expect(hasEffect(r.effects, "executeTurn")).toBe(true);
     expect(hasEffect(r.effects, "updateUI")).toBe(true);
+    expect(getPersistPayload(r.effects)).toMatchObject({
+      mode: "Detecting",
+      scope: "diff",
+      targetPaths: ["a.ts", "b.tsx"],
+      userPrompt: "check react",
+    });
   });
 
   it("non-Idle + Start is no-op", () => {
@@ -159,13 +180,32 @@ describe("auditReducer — ConcernsDetected", () => {
     expect(r.state._tag).toBe("Auditing");
     if (r.state._tag === "Auditing") {
       expect(r.state.concerns.map((concern) => concern.subject)).toEqual(["correctness", "frontend"]);
-      expect(r.state.concerns[0]!.status).toBe("in_progress");
-      expect(r.state.currentConcern).toBe(1);
+      expect(r.state.concerns.every((concern) => concern.status === "in_progress")).toBe(true);
+      expect(r.state.cursor).toEqual({
+        phase: "running",
+        frontierTaskIds: ["1", "2"],
+        activeTaskIds: ["1", "2"],
+        total: 2,
+      });
     }
-    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
-    expect(send?.request.content).toContain("Audit concern 1/2: correctness");
-    expect(send?.request.content).toContain("CONCERN_AUDITED");
+    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(r.effects, "runConcernBatch");
+    expect(batch?.state._tag).toBe("Auditing");
+    expect(batch?.state.cursor).toEqual({
+      phase: "running",
+      frontierTaskIds: ["1", "2"],
+      activeTaskIds: ["1", "2"],
+      total: 2,
+    });
     expect(hasEffect(r.effects, "updateUI")).toBe(true);
+    expect(getPersistPayload(r.effects)).toMatchObject({
+      mode: "Auditing",
+      concernCursor: {
+        phase: "running",
+        frontierTaskIds: ["1", "2"],
+        activeTaskIds: ["1", "2"],
+        total: 2,
+      },
+    });
   });
 
   it("Detecting + empty concerns → Idle with notify", () => {
@@ -218,16 +258,22 @@ describe("auditReducer — DetectionFailed", () => {
 // ---------------------------------------------------------------------------
 
 describe("auditReducer — ConcernAudited", () => {
-  it("Auditing → advances to the next concern", () => {
-    const r = auditReducer(auditing(), { _tag: "ConcernAudited" });
+  it("Auditing → advances to the next concern batch and stores notes", () => {
+    const r = auditReducer(auditing(), {
+      _tag: "ConcernAudited",
+      taskId: "1",
+      notes: "found issues in src/app.tsx",
+    });
     expect(r.state._tag).toBe("Auditing");
     if (r.state._tag === "Auditing") {
-      expect(r.state.currentConcern).toBe(2);
+      expect(r.state.cursor).toEqual(createConcernCursor(2, 2));
       expect(r.state.concerns[0]!.status).toBe("completed");
+      expect(r.state.concerns[0]!.metadata.notes).toBe("found issues in src/app.tsx");
       expect(r.state.concerns[1]!.status).toBe("in_progress");
     }
-    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
-    expect(send?.request.content).toContain("Audit concern 2/2: frontend");
+    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(r.effects, "runConcernBatch");
+    expect(batch?.state._tag).toBe("Auditing");
+    expect(batch?.state.cursor).toEqual(createConcernCursor(2, 2));
   });
 
   it("last concern → Synthesizing", () => {
@@ -237,18 +283,49 @@ describe("auditReducer — ConcernAudited", () => {
     }));
     const r = auditReducer(auditing(concerns, "diff", 2), {
       _tag: "ConcernAudited",
+      taskId: "2",
+      notes: "frontend looks fine",
     });
     expect(r.state._tag).toBe("Synthesizing");
     if (r.state._tag === "Synthesizing") {
       expect(r.state.concerns.map((concern) => concern.subject)).toEqual(["correctness", "frontend"]);
       expect(r.state.concerns.every((concern) => concern.status === "completed")).toBe(true);
+      expect(r.state.concerns[1]!.metadata.notes).toBe("frontend looks fine");
     }
     expect(hasEffect(r.effects, "executeTurn")).toBe(true);
   });
 
   it("non-Auditing + ConcernAudited is no-op", () => {
     const state = detecting();
-    const r = auditReducer(state, { _tag: "ConcernAudited" });
+    const r = auditReducer(state, {
+      _tag: "ConcernAudited",
+      taskId: "1",
+      notes: "ignored",
+    });
+    expect(r.state).toBe(state);
+  });
+});
+
+describe("auditReducer — ConcernAuditFailed", () => {
+  it("Auditing → Idle with error notify", () => {
+    const r = auditReducer(auditing(), {
+      _tag: "ConcernAuditFailed",
+      message: "audit: concern batch failed",
+    });
+    expect(r.state._tag).toBe("Idle");
+    const notify = getEffect<BuiltinEffect>(r.effects, "notify");
+    expect(notify).toMatchObject({
+      level: "error",
+      message: "audit: concern batch failed",
+    });
+  });
+
+  it("non-Auditing + ConcernAuditFailed is no-op", () => {
+    const state = detecting();
+    const r = auditReducer(state, {
+      _tag: "ConcernAuditFailed",
+      message: "ignored",
+    });
     expect(r.state).toBe(state);
   });
 });
@@ -268,6 +345,11 @@ describe("auditReducer — SynthesisComplete", () => {
     }
     expect(hasEffect(r.effects, "executeTurn")).toBe(true);
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
+    expect(getPersistPayload(r.effects)).toMatchObject({
+      mode: "Fixing",
+      currentFinding: 0,
+      phase: "running",
+    });
   });
 
   it("Synthesizing + empty findings → Idle", () => {
@@ -296,6 +378,7 @@ describe("auditReducer — FindingFixed", () => {
       expect(r.state.phase).toBe("gating");
     }
     expect(hasEffect(r.effects, "executeTurn")).toBe(true);
+    expect(getPersistPayload(r.effects)).toMatchObject({ mode: "Fixing", phase: "gating" });
   });
 
   it("wrong phase → no-op", () => {
@@ -426,6 +509,84 @@ describe("auditReducer — Cancel", () => {
     const state = idle();
     const r = auditReducer(state, { _tag: "Cancel" });
     expect(r.state).toBe(state);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hydrate
+// ---------------------------------------------------------------------------
+
+describe("auditReducer — Hydrate", () => {
+  it("restores Auditing with the persisted concern cursor", () => {
+    const result = auditReducer(idle(), {
+      _tag: "Hydrate",
+      mode: "Auditing",
+      scope: "diff",
+      concerns: [
+        { ...createConcernTasks()[0]!, status: "completed" },
+        { ...createConcernTasks()[1]!, status: "pending" },
+      ],
+      diffStat: " 3 files changed",
+      targetPaths: ["src/app.tsx", "src/lib.ts"],
+      userPrompt: "focus on correctness",
+      concernCursor: createConcernCursor(2, 2),
+    });
+
+    expect(result.state._tag).toBe("Auditing");
+    if (result.state._tag === "Auditing") {
+      expect(result.state.cursor).toEqual(createConcernCursor(2, 2));
+      expect(result.state.concerns[0]!.status).toBe("completed");
+      expect(result.state.concerns[1]!.status).toBe("in_progress");
+      expect(result.state.userPrompt).toBe("focus on correctness");
+    }
+    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(result.effects, "runConcernBatch");
+    expect(batch?.state._tag).toBe("Auditing");
+    expect(hasEffect(result.effects, "setStatus")).toBe(true);
+    expect(hasEffect(result.effects, "updateUI")).toBe(true);
+  });
+
+  it("restores Synthesizing with persisted concerns", () => {
+    const concerns = createConcernTasks(CONCERNS, 2).map((concern) => ({
+      ...concern,
+      status: "completed" as const,
+    }));
+    const result = auditReducer(idle(), {
+      _tag: "Hydrate",
+      mode: "Synthesizing",
+      concerns,
+      userPrompt: "keep it tight",
+    });
+
+    expect(result.state).toEqual({
+      _tag: "Synthesizing",
+      concerns,
+      userPrompt: "keep it tight",
+    });
+    expect(hasEffect(result.effects, "setStatus")).toBe(true);
+    expect(hasEffect(result.effects, "updateUI")).toBe(true);
+  });
+
+  it("restores Fixing with persisted gate phase", () => {
+    const result = auditReducer(idle(), {
+      _tag: "Hydrate",
+      mode: "Fixing",
+      concerns: createConcernTasks(CONCERNS, 2).map((concern) => ({
+        ...concern,
+        status: "completed" as const,
+      })),
+      findings: FINDINGS,
+      currentFinding: 1,
+      phase: "gating",
+    });
+
+    expect(result.state._tag).toBe("Fixing");
+    if (result.state._tag === "Fixing") {
+      expect(result.state.currentFinding).toBe(1);
+      expect(result.state.phase).toBe("gating");
+      expect(result.state.findings).toEqual(FINDINGS);
+    }
+    expect(hasEffect(result.effects, "setStatus")).toBe(true);
+    expect(hasEffect(result.effects, "updateUI")).toBe(true);
   });
 });
 
