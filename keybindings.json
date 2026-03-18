@@ -1,6 +1,6 @@
 {
-  "cycleModelForward": "ctrl+]",
-  "cycleModelBackward": "shift+ctrl+tab",
+  "cycleModelForward": "alt+]",
+  "cycleModelBackward": "alt+[",
   "cycleThinkingLevel": "ctrl+t",
   "toggleThinking": "ctrl+shift+t",
   "selectModel": "ctrl+l"
