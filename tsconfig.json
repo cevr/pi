@@ -108,7 +108,6 @@
       "@cvr/pi-ls": ["./packages/extensions/ls/index.ts"],
       "@cvr/pi-mentions-extension": ["./packages/extensions/mentions/index.ts"],
       "@cvr/pi-mermaid": ["./packages/extensions/mermaid/index.ts"],
-      "@cvr/pi-oracle": ["./packages/extensions/oracle/index.ts"],
       "@cvr/pi-read": ["./packages/extensions/read/index.ts"],
       "@cvr/pi-read-session": ["./packages/extensions/read-session/index.ts"],
       "@cvr/pi-search-sessions": ["./packages/extensions/search-sessions/index.ts"],

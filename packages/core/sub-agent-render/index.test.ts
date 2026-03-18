@@ -394,8 +394,8 @@ describe("subAgentResult", () => {
 
   it("sets isError when passed true", () => {
     const details = {
-      agent: "oracle",
-      task: "advise",
+      agent: "counsel",
+      task: "review",
       exitCode: 1,
       messages: [] as Message[],
       usage: {

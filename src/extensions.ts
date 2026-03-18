@@ -15,7 +15,6 @@ export { default as librarian } from "../packages/extensions/librarian/index";
 export { default as ls } from "../packages/extensions/ls/index";
 export { default as mentions } from "../packages/extensions/mentions/index";
 export { default as mermaid } from "../packages/extensions/mermaid/index";
-export { default as oracle } from "../packages/extensions/oracle/index";
 export { default as modes } from "../packages/extensions/modes/index";
 export { default as read } from "../packages/extensions/read/index";
 export { default as readSession } from "../packages/extensions/read-session/index";

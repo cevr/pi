@@ -5,7 +5,7 @@
  * a pi sub-agent with the opposite vendor's model for adversarial review.
  * writes the review to ~/.pi/counsel/<id>.md for durability.
  *
- * follows the oracle pattern: PiSpawnService + ManagedRuntime + getEnabledExtensionConfig.
+ * follows the dedicated sub-agent pattern: PiSpawnService + ManagedRuntime + getEnabledExtensionConfig.
  */
 
 // @effect-diagnostics-next-line effect/nodeBuiltinImport:off
@@ -236,7 +236,7 @@ export function createCounselTool(
       "- To catch bugs or edge cases you might miss\n" +
       "- When the user asks for /counsel or a second opinion\n\n" +
       "WHEN NOT TO USE COUNSEL:\n" +
-      "- For simple questions (use oracle instead)\n" +
+      "- For simple questions you can answer directly\n" +
       "- For codebase exploration (use librarian or finder)\n" +
       "- For trivial changes that don't need review\n\n" +
       "USAGE:\n" +

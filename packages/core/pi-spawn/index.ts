@@ -3,7 +3,7 @@
  *
  * extracts the spawn-parse-collect loop from the generic subagent
  * extension into a reusable function. each dedicated tool (finder,
- * oracle, Task) calls piSpawn() with its own config.
+ * counsel, Task) calls piSpawn() with its own config.
  *
  * uses shared interpolation from @cvr/pi-interpolate for template variables
  * ({cwd}, {roots}, {date}, etc.) in system prompts.

@@ -1,8 +1,4 @@
 {
-  "@cvr/pi-oracle": {
-    "enabled": true,
-    "model": "claude-opus-4-6"
-  },
   "@cvr/pi-handoff": {
     "enabled": true,
     "threshold": 0.85,
