@@ -79,7 +79,6 @@ describe("handoffReducer — GenerateComplete", () => {
       prompt: "the handoff prompt",
       parentSessionFile: "/sessions/p.jsonl",
     });
-    expect(hasEffect(r.effects, "setEditorText")).toBe(true);
     expect(hasEffect(r.effects, "setEditorLabel")).toBe(true);
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
     expect(hasEffect(r.effects, "notify")).toBe(true);
@@ -130,7 +129,6 @@ describe("handoffReducer — ManualReady", () => {
       prompt: "manual prompt",
       parentSessionFile: "/sessions/m.jsonl",
     });
-    expect(hasEffect(r.effects, "setEditorText")).toBe(true);
     expect(hasEffect(r.effects, "setEditorLabel")).toBe(true);
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
   });
@@ -146,6 +144,25 @@ describe("handoffReducer — ManualReady", () => {
       prompt: "new prompt",
       parentSessionFile: "/sessions/new.jsonl",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SwitchStart
+// ---------------------------------------------------------------------------
+
+describe("handoffReducer — Dismiss", () => {
+  it("Ready → Idle, clears status + label", () => {
+    const r = handoffReducer(ready("p", "/sessions/x.jsonl"), { _tag: "Dismiss" });
+    expect(r.state).toEqual({ _tag: "Idle" });
+    expect(hasEffect(r.effects, "setStatus")).toBe(true);
+    expect(hasEffect(r.effects, "removeEditorLabel")).toBe(true);
+  });
+
+  it("Idle + Dismiss is no-op", () => {
+    const state = idle();
+    const r = handoffReducer(state, { _tag: "Dismiss" });
+    expect(r.state).toBe(state);
   });
 });
 

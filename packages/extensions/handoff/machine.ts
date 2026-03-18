@@ -25,6 +25,7 @@ export type HandoffEvent =
   | { _tag: "GenerateComplete"; prompt: string }
   | { _tag: "GenerateFail"; error: string }
   | { _tag: "ManualReady"; prompt: string; parentSessionFile: string }
+  | { _tag: "Dismiss" }
   | { _tag: "SwitchStart" }
   | { _tag: "SwitchComplete" }
   | { _tag: "SwitchCancelled" }
@@ -35,7 +36,6 @@ export type HandoffEvent =
 // ---------------------------------------------------------------------------
 
 export type HandoffEffect =
-  | { type: "setEditorText"; text: string }
   | { type: "setEditorLabel"; key: string; text: string; position: string; align: string }
   | { type: "removeEditorLabel"; key: string }
   | { type: "clearWidget"; key: string };
@@ -74,7 +74,6 @@ export const handoffReducer: Reducer<HandoffState, HandoffEvent, HandoffEffect> 
       return {
         state: next,
         effects: [
-          { type: "setEditorText", text: "/handoff" },
           {
             type: "setEditorLabel",
             key: "handoff",
@@ -85,7 +84,7 @@ export const handoffReducer: Reducer<HandoffState, HandoffEvent, HandoffEffect> 
           { type: "setStatus", key: "handoff", text: "handoff ready" },
           {
             type: "notify",
-            message: "handoff prompt generated. press enter to continue in a new session.",
+            message: "handoff prompt generated. choose whether to hand off now, skip, or edit.",
             level: "warning",
           },
         ],
@@ -112,7 +111,6 @@ export const handoffReducer: Reducer<HandoffState, HandoffEvent, HandoffEffect> 
           parentSessionFile: event.parentSessionFile,
         },
         effects: [
-          { type: "setEditorText", text: "/handoff" },
           {
             type: "setEditorLabel",
             key: "handoff",
@@ -121,6 +119,18 @@ export const handoffReducer: Reducer<HandoffState, HandoffEvent, HandoffEffect> 
             align: "right",
           },
           { type: "setStatus", key: "handoff", text: "handoff ready" },
+        ],
+      };
+    }
+
+    // ----- Dismiss -----
+    case "Dismiss": {
+      if (state._tag !== "Ready") return { state };
+      return {
+        state: { _tag: "Idle" },
+        effects: [
+          { type: "setStatus", key: "handoff" },
+          { type: "removeEditorLabel", key: "handoff" },
         ],
       };
     }

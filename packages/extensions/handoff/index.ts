@@ -346,6 +346,69 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
     // Machine
     // -----------------------------------------------------------------------
 
+    let machine: { send: (event: HandoffEvent) => void; getState: () => HandoffState };
+
+    async function performHandoff(
+      ctx: ExtensionContext,
+      prompt: string,
+      parentSessionFile: string,
+    ): Promise<void> {
+      machine.send({ _tag: "SwitchStart" });
+
+      const switchResult = await ctx.newSession({ parentSession: parentSessionFile });
+      if (switchResult.cancelled) {
+        machine.send({ _tag: "SwitchCancelled" });
+        ctx.ui.notify("session switch cancelled", "info");
+        return;
+      }
+
+      machine.send({ _tag: "SwitchComplete" });
+      if (ctx.hasUI) ctx.ui.setEditorText("");
+      if (parentSessionFile) showProvenance(ctx, parentSessionFile);
+      pi.sendUserMessage(prompt);
+    }
+
+    async function resolveReadyHandoff(state: Extract<HandoffState, { _tag: "Ready" }>, ctx: ExtensionContext) {
+      if (!ctx.hasUI) {
+        await performHandoff(ctx, state.prompt, state.parentSessionFile);
+        return;
+      }
+
+      const choice = await ctx.ui.select("Handoff ready — what next?", [
+        "Handoff now",
+        "Do not handoff",
+        "Edit handoff message",
+      ]);
+
+      if (choice === "Handoff now") {
+        await performHandoff(ctx, state.prompt, state.parentSessionFile);
+        return;
+      }
+
+      if (choice === "Edit handoff message") {
+        const edited = await ctx.ui.editor(
+          "handoff prompt — review/edit before switching",
+          state.prompt,
+        );
+        if (!edited) {
+          ctx.ui.notify("handoff edit cancelled", "info");
+          return;
+        }
+        await performHandoff(ctx, edited, state.parentSessionFile);
+        return;
+      }
+
+      machine.send({ _tag: "Dismiss" });
+      ctx.ui.notify("handoff dismissed", "info");
+    }
+
+    const readyObserver: StateObserver<HandoffState, HandoffEvent> = {
+      match: (state) => state._tag === "Ready",
+      handler: async (state, _sendIfCurrent, ctx) => {
+        await resolveReadyHandoff(state, ctx);
+      },
+    };
+
     const machineConfig: MachineConfig<HandoffState, HandoffEvent, HandoffEffect> = {
       id: "handoff",
       initial: { _tag: "Idle" },
@@ -408,16 +471,14 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
           toEvent: (): HandoffEvent => ({ _tag: "Reset" }),
         },
       },
+      observers: [readyObserver],
     };
 
-    const machine = register<HandoffState, HandoffEvent, HandoffEffect>(
+    machine = register<HandoffState, HandoffEvent, HandoffEffect>(
       pi,
       machineConfig,
       (effect, _pi, ctx) => {
         switch (effect.type) {
-          case "setEditorText":
-            ctx.ui.setEditorText(effect.text);
-            break;
           case "setEditorLabel":
             pi.events.emit("editor:set-label", {
               key: effect.key,
@@ -480,7 +541,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
           }
 
           machine.send({ _tag: "ManualReady", prompt: result, parentSessionFile: parentFile });
-          state = machine.getState();
+          return;
         }
 
         if (state._tag !== "Ready") {
@@ -488,33 +549,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
           return;
         }
 
-        // let user review/edit the handoff prompt before sending
-        const edited = await ctx.ui.editor(
-          "handoff prompt — ⏎ to handoff ␛ to cancel",
-          state.prompt,
-        );
-
-        if (!edited) {
-          ctx.ui.notify("handoff cancelled", "info");
-          return;
-        }
-
-        const prompt = edited;
-        const parent = state.parentSessionFile;
-
-        machine.send({ _tag: "SwitchStart" });
-
-        const switchResult = await ctx.newSession({ parentSession: parent });
-        if (switchResult.cancelled) {
-          machine.send({ _tag: "SwitchCancelled" });
-          ctx.ui.notify("session switch cancelled", "info");
-          return;
-        }
-
-        machine.send({ _tag: "SwitchComplete" });
-
-        if (parent) showProvenance(ctx, parent);
-        pi.sendUserMessage(prompt);
+        await resolveReadyHandoff(state, ctx);
       },
     });
 
@@ -526,7 +561,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
       name: "handoff",
       label: "Handoff",
       description:
-        "Hand off to a new session. Generates a handoff prompt from the current conversation and stages /handoff in the editor. The user presses Enter to review the prompt, then confirms to switch sessions.",
+        "Hand off to a new session. Generates a handoff prompt from the current conversation, then lets the user hand off immediately, dismiss it, or edit the message before switching.",
       promptSnippet: "Hand off to a new session with a generated context transfer prompt",
       promptGuidelines: [
         "Use this when context is getting crowded or the user asks to continue in a fresh session.",
@@ -564,7 +599,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
           content: [
             {
               type: "text",
-              text: `handoff prompt generated for: "${p.goal}". staged /handoff — press Enter to continue in a new session.`,
+              text: `handoff prompt generated for: "${p.goal}". choose whether to hand off now, dismiss it, or edit the message before switching.`,
             },
           ],
           details: undefined,
