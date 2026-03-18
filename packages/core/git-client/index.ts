@@ -42,8 +42,11 @@ export class GitClient extends ServiceMap.Service<
     /** git log with format: sha, date, subject */
     readonly log: (
       cwd: string,
-      opts?: { maxCount?: number },
+      opts?: { maxCount?: number; all?: boolean },
     ) => Effect.Effect<GitLogEntry[], GitError>;
+
+    /** git rev-parse --show-toplevel */
+    readonly root: (cwd: string) => Effect.Effect<Option.Option<string>, GitError>;
 
     /** git diff --stat */
     readonly diffStat: (
@@ -105,9 +108,13 @@ export class GitClient extends ServiceMap.Service<
       return {
         exec: git,
 
-        log: (cwd: string, opts?: { maxCount?: number }) => {
-          const maxCount = opts?.maxCount ?? 50;
-          return git(["log", `--max-count=${maxCount}`, "--format=%H\t%aI\t%s"], cwd).pipe(
+        log: (cwd: string, opts?: { maxCount?: number; all?: boolean }) => {
+          const args = ["log"];
+          if (opts?.all) args.push("--all");
+          if (opts?.maxCount !== undefined) args.push(`--max-count=${opts.maxCount}`);
+          args.push("--format=%H\t%aI\t%s");
+
+          return git(args, cwd).pipe(
             Effect.map((stdout) =>
               stdout
                 .trim()
@@ -120,6 +127,12 @@ export class GitClient extends ServiceMap.Service<
             ),
           );
         },
+
+        root: (cwd: string) =>
+          git(["rev-parse", "--show-toplevel"], cwd).pipe(
+            Effect.map((s) => Option.some(s.trim())),
+            Effect.catch(() => Effect.succeed(Option.none())),
+          ),
 
         diffStat: (cwd: string, opts?: { timeoutMs?: number }) =>
           git(["diff", "--stat"], cwd, opts),
@@ -151,6 +164,7 @@ export class GitClient extends ServiceMap.Service<
    */
   static layerTest = (responses?: {
     log?: GitLogEntry[];
+    root?: string;
     diffStat?: string;
     remoteUrl?: string;
     headSha?: string;
@@ -160,6 +174,8 @@ export class GitClient extends ServiceMap.Service<
       exec: (_args: string[], _cwd: string) => Effect.succeed(""),
 
       log: () => Effect.succeed(responses?.log ?? []),
+
+      root: () => Effect.succeed(responses?.root ? Option.some(responses.root) : Option.none()),
 
       diffStat: () => Effect.succeed(responses?.diffStat ?? ""),
 

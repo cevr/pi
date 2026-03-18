@@ -1,10 +1,10 @@
 /** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 import { describe, expect, it, afterEach } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, ManagedRuntime, Option } from "effect";
 import { ProcessRunner } from "@cvr/pi-process-runner";
 import { GitClient } from "./index";
 
@@ -40,9 +40,22 @@ afterEach(() => {
 });
 
 const liveLayer = GitClient.layer.pipe(Layer.provide(ProcessRunner.layer));
+const liveRuntime = ManagedRuntime.make(liveLayer);
 
 const runWithGit = <A, E>(effect: Effect.Effect<A, E, GitClient>): Promise<A> =>
-  Effect.runPromise(Effect.provide(effect, liveLayer));
+  liveRuntime.runPromise(effect);
+
+async function runWithGitLayer<A, E>(
+  layer: Layer.Layer<GitClient, never, never>,
+  effect: Effect.Effect<A, E, GitClient>,
+): Promise<A> {
+  const runtime = ManagedRuntime.make(layer);
+  try {
+    return await runtime.runPromise(effect);
+  } finally {
+    await runtime.dispose();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // real git tests
@@ -82,6 +95,17 @@ describe("GitClient (real)", () => {
       }),
     );
     expect(result).toBe(sha);
+  });
+
+  it("returns repo root", async () => {
+    const repo = createRepo();
+    const result = await runWithGit(
+      Effect.gen(function* () {
+        const git = yield* GitClient;
+        return yield* git.root(repo);
+      }),
+    );
+    expect(Option.getOrUndefined(result)).toBe(realpathSync(repo));
   });
 
   it("reads git log", async () => {
@@ -130,22 +154,24 @@ describe("GitClient (layerTest)", () => {
         committedAt: "2026-01-01",
       },
     ];
-    const result = await Effect.runPromise(
+    const result = await runWithGitLayer(
+      GitClient.layerTest({ log: entries }),
       Effect.gen(function* () {
         const git = yield* GitClient;
         return yield* git.log("/repo");
-      }).pipe(Effect.provide(GitClient.layerTest({ log: entries }))),
+      }),
     );
 
     expect(result).toEqual(entries);
   });
 
   it("returns canned isRepo", async () => {
-    const result = await Effect.runPromise(
+    const result = await runWithGitLayer(
+      GitClient.layerTest({ isRepo: false }),
       Effect.gen(function* () {
         const git = yield* GitClient;
         return yield* git.isRepo("/fake");
-      }).pipe(Effect.provide(GitClient.layerTest({ isRepo: false }))),
+      }),
     );
 
     expect(result).toBe(false);

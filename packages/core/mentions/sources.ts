@@ -1,10 +1,6 @@
 import type { AutocompleteItem } from "@mariozechner/pi-tui";
-import {
-  getCommitIndex,
-  lookupCommitByPrefix,
-  resolveGitRoot,
-  type CommitIndex,
-} from "./commit-index";
+import { getCommitIndex, resolveGitRoot } from "./commit-index-sync";
+import { lookupCommitByPrefix, type CommitIndex } from "./commit-index";
 import type { MentionableSession } from "./session-index";
 import { type MentionKind, type MentionToken, type ResolvedMention } from "./types";
 

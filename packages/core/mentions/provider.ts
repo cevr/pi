@@ -1,5 +1,5 @@
 import type { AutocompleteItem, AutocompleteProvider } from "@mariozechner/pi-tui";
-import { resolveGitRoot } from "./commit-index";
+import { resolveGitRoot } from "./commit-index-sync";
 import { detectMentionPrefix } from "./parse";
 import {
   getMentionKindDescription,

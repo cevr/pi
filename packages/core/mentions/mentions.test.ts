@@ -5,17 +5,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AutocompleteProvider } from "@mariozechner/pi-tui";
 import { afterEach, describe, expect, it } from "bun:test";
+import { Effect, Layer, ManagedRuntime } from "effect";
+import { GitClient } from "@cvr/pi-git-client";
 import { detectMentionPrefix, parseMentions } from "./parse";
 import { MentionAwareProvider } from "./provider";
 import { resolveMentions } from "./resolve";
 import { toResolvedSessionMention } from "./types";
 import { renderResolvedMentionsBlock, renderResolvedMentionsText } from "./render";
-import {
-  clearCommitIndexCache,
-  getCommitIndex,
-  lookupCommitByPrefix,
-  parseCommitLog,
-} from "./commit-index";
+import { CommitIndexService, lookupCommitByPrefix, parseCommitLog } from "./commit-index";
+import { clearCommitIndexCache, getCommitIndex } from "./commit-index-sync";
 import {
   clearSessionMentionCache,
   resolveMentionableSession,
@@ -466,6 +464,48 @@ describe("lookupCommitByPrefix", () => {
         shortSha: sha.slice(0, 12).toLowerCase(),
         subject: "first commit",
       }),
+    });
+  });
+});
+
+describe("CommitIndexService", () => {
+  it("builds an index from GitClient results", async () => {
+    const sha = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const runtime = ManagedRuntime.make(
+      CommitIndexService.layer.pipe(
+        Layer.provide(
+          GitClient.layerTest({
+            root: "/repo/root",
+            log: [
+              {
+                sha,
+                shortSha: sha.slice(0, 12),
+                subject: "first commit",
+                committedAt: "2026-03-06T16:00:00.000Z",
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    const index = await runtime.runPromise(
+      Effect.gen(function* () {
+        const commits = yield* CommitIndexService;
+        return yield* commits.getIndex("/repo/worktree");
+      }),
+    );
+    await runtime.dispose();
+
+    expect(index).toEqual({
+      root: "/repo/root",
+      commits: [
+        {
+          sha: sha.toLowerCase(),
+          shortSha: sha.slice(0, 12).toLowerCase(),
+          subject: "first commit",
+          committedAt: "2026-03-06T16:00:00.000Z",
+        },
+      ],
     });
   });
 });
