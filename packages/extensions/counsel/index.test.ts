@@ -146,9 +146,41 @@ describe("detectModelFamily", () => {
     expect(detectModelFamily("openrouter", "openai/gpt-5.4")).toBe("openai");
   });
 
-  it("detects openai from o1/o3 model ids", () => {
+  it("detects openai from o-series model ids", () => {
     expect(detectModelFamily("openrouter", "openai/o3-pro")).toBe("openai");
+    expect(detectModelFamily("requesty", "o3")).toBe("openai");
     expect(detectModelFamily("openrouter", "openai/o1-preview")).toBe("openai");
+  });
+
+  it("detects openai from codex model ids", () => {
+    expect(detectModelFamily("requesty", "codex-mini-latest")).toBe("openai");
+  });
+
+  it("detects from api when provider and model id are ambiguous", () => {
+    expect(detectModelFamily("requesty", "assistant", "openai-codex-responses")).toBe("openai");
+    expect(detectModelFamily("portkey", "sonnet-4", "anthropic-messages")).toBe("anthropic");
+  });
+
+  it("detects from model name and base url as fallbacks", () => {
+    expect(detectModelFamily("requesty", "assistant", undefined, "GPT-5 via proxy")).toBe("openai");
+    expect(detectModelFamily("gateway", "assistant", undefined, "Sonnet 4 via proxy")).toBe(
+      "anthropic",
+    );
+    expect(
+      detectModelFamily(
+        "gateway",
+        "assistant",
+        undefined,
+        undefined,
+        "https://api.anthropic.com/v1",
+      ),
+    ).toBe("anthropic");
+  });
+
+  it("detects more openai api and model aliases", () => {
+    expect(detectModelFamily("azure", "assistant", "azure-openai-responses")).toBe("openai");
+    expect(detectModelFamily("gateway", "o4-mini")).toBe("openai");
+    expect(detectModelFamily("gateway", "computer-use-preview")).toBe("openai");
   });
 
   it("returns null for unknown provider and model", () => {
@@ -190,6 +222,116 @@ describe("createCounselTool", () => {
       expect(typeof calls[0]!.sessionPath).toBe("string");
       expect(result.isError).toBeUndefined();
       expect(result.content[0].text).toBe(`Session: ${calls[0]!.sessionPath}`);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("uses the anthropic counsel model when the parent model is openai", async () => {
+    const calls: PiSpawnConfig[] = [];
+    const runtime = createRuntime((config) => {
+      calls.push(config);
+      return makeAssistantResult("Looks good.");
+    });
+
+    try {
+      const tool = createCounselTool({}, runtime, () => "");
+      await (tool as any).execute(
+        "call-1",
+        { prompt: "Review this change." },
+        undefined,
+        undefined,
+        makeCtx(),
+      );
+
+      expect(calls[0]!.model).toBe(CONFIG_DEFAULTS.oppositeModels.openai);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("detects openai parents from api metadata when provider and id are ambiguous", async () => {
+    const calls: PiSpawnConfig[] = [];
+    const runtime = createRuntime((config) => {
+      calls.push(config);
+      return makeAssistantResult("Looks good.");
+    });
+
+    try {
+      const tool = createCounselTool({}, runtime, () => "");
+      await (tool as any).execute(
+        "call-1",
+        { prompt: "Review this change." },
+        undefined,
+        undefined,
+        makeCtx({
+          model: {
+            provider: "requesty",
+            id: "assistant",
+            api: "openai-codex-responses",
+            name: "Assistant via proxy",
+            baseUrl: "https://gateway.example.com/v1",
+          },
+        }),
+      );
+
+      expect(calls[0]!.model).toBe(CONFIG_DEFAULTS.oppositeModels.openai);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("uses the openai counsel model when the parent model is anthropic", async () => {
+    const calls: PiSpawnConfig[] = [];
+    const runtime = createRuntime((config) => {
+      calls.push(config);
+      return makeAssistantResult("Looks good.");
+    });
+
+    try {
+      const tool = createCounselTool({}, runtime, () => "");
+      await (tool as any).execute(
+        "call-1",
+        { prompt: "Review this change." },
+        undefined,
+        undefined,
+        makeCtx({ model: { provider: "anthropic", id: "claude-opus-4-6" } }),
+      );
+
+      expect(calls[0]!.model).toBe(CONFIG_DEFAULTS.oppositeModels.anthropic);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("includes parent model metadata when detection is ambiguous", async () => {
+    const runtime = createRuntime(() => {
+      throw new Error("should not spawn when model detection fails");
+    });
+
+    try {
+      const tool = createCounselTool({}, runtime, () => "");
+      const result = await (tool as any).execute(
+        "call-1",
+        { prompt: "Review this change." },
+        undefined,
+        undefined,
+        makeCtx({
+          model: {
+            provider: "gateway",
+            id: "assistant",
+            api: "custom-api",
+            name: "Helper",
+            baseUrl: "https://gateway.example.com/v1",
+          },
+        }),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Current model metadata was ambiguous");
+      expect(result.content[0].text).toContain('provider="gateway"');
+      expect(result.content[0].text).toContain('id="assistant"');
+      expect(result.content[0].text).toContain('api="custom-api"');
     } finally {
       await runtime.dispose();
     }

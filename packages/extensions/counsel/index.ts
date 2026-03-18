@@ -55,7 +55,9 @@ type CounselExtensionDeps = {
 export const CONFIG_DEFAULTS: CounselExtConfig = {
   model: "",
   oppositeModels: {
+    // use when the current model family is anthropic
     anthropic: "openai-codex/gpt-5.4",
+    // use when the current model family is openai
     openai: "anthropic/claude-opus-4-6",
   },
   extensionTools: ["read", "grep", "find", "ls", "bash"],
@@ -112,24 +114,82 @@ function generateCounselSessionPath(): string {
 
 type ModelFamily = "anthropic" | "openai";
 
+const ANTHROPIC_TEXT_HINTS = [/\bclaude\b/, /\banthropic\b/, /\bsonnet\b/, /\bhaiku\b/, /\bopus\b/];
+const OPENAI_TEXT_HINTS = [
+  /\bopenai\b/,
+  /\bgpt\b/,
+  /\bchatgpt\b/,
+  /\bcodex\b/,
+  /\bcomputer-use-preview\b/,
+  /\bo[1-9](?:\b|[-/])/,
+];
+const OPENAI_API_HINTS = new Set([
+  "openai-completions",
+  "openai-responses",
+  "azure-openai-responses",
+  "openai-codex-responses",
+]);
+
 /**
- * detect model family from provider + id.
- * handles gateway providers like openrouter that carry models from both vendors.
+ * detect model family from model metadata.
+ * prefers model id/name, then falls back to provider/api/baseUrl.
+ * handles gateways and custom providers that proxy OpenAI or Anthropic models.
  */
+function detectModelFamilyFromText(text: string | undefined): ModelFamily | null {
+  const value = (text ?? "").toLowerCase();
+  if (!value) return null;
+
+  if (ANTHROPIC_TEXT_HINTS.some((pattern) => pattern.test(value))) return "anthropic";
+  if (OPENAI_TEXT_HINTS.some((pattern) => pattern.test(value))) return "openai";
+
+  return null;
+}
+
+function detectModelFamilyFromApi(api: string | undefined): ModelFamily | null {
+  const value = (api ?? "").toLowerCase();
+  if (!value) return null;
+
+  if (value === "anthropic-messages") return "anthropic";
+  if (OPENAI_API_HINTS.has(value)) return "openai";
+
+  return detectModelFamilyFromText(value);
+}
+
+function formatParentModelMetadata(model: ExtensionContext["model"]): string {
+  if (!model) return "(no active parent model)";
+
+  const parts = [
+    ["provider", model.provider],
+    ["id", model.id],
+    ["api", model.api],
+    ["name", model.name],
+    ["baseUrl", model.baseUrl],
+  ].flatMap(([key, value]) => (value ? [`${key}=${JSON.stringify(value)}`] : []));
+
+  return parts.join(", ") || "(no active parent model)";
+}
+
 export function detectModelFamily(
   provider: string | undefined,
   modelId: string | undefined,
+  api?: string | undefined,
+  modelName?: string | undefined,
+  baseUrl?: string | undefined,
 ): ModelFamily | null {
-  const p = (provider ?? "").toLowerCase();
-  const id = (modelId ?? "").toLowerCase();
+  for (const hint of [modelId, modelName]) {
+    const family = detectModelFamilyFromText(hint);
+    if (family) return family;
+  }
 
-  // check model id first — more specific than provider
-  if (id.includes("claude") || id.includes("anthropic")) return "anthropic";
-  if (id.includes("gpt") || id.includes("openai") || /\bo[1-9][-/]/.test(id)) return "openai";
+  const providerFamily = detectModelFamilyFromText(provider);
+  if (providerFamily) return providerFamily;
 
-  // fall back to provider
-  if (p.includes("anthropic")) return "anthropic";
-  if (p.includes("openai")) return "openai";
+  const apiFamily = detectModelFamilyFromApi(api);
+  if (apiFamily) return apiFamily;
+
+  const url = (baseUrl ?? "").toLowerCase();
+  if (url.includes("anthropic.com")) return "anthropic";
+  if (url.includes("openai.com") || url.includes(".openai.azure.com")) return "openai";
 
   return null;
 }
@@ -141,10 +201,16 @@ function resolveOppositeModel(
   // explicit override
   if (config.model) return config.model;
 
-  const family = detectModelFamily(ctx.model?.provider, ctx.model?.id);
+  const family = detectModelFamily(
+    ctx.model?.provider,
+    ctx.model?.id,
+    ctx.model?.api,
+    ctx.model?.name,
+    ctx.model?.baseUrl,
+  );
   if (!family) return null;
 
-  return family === "anthropic" ? config.oppositeModels.openai : config.oppositeModels.anthropic;
+  return family === "anthropic" ? config.oppositeModels.anthropic : config.oppositeModels.openai;
 }
 
 function getSpawnErrorText(result: PiSpawnResult): string {
@@ -275,7 +341,8 @@ export function createCounselTool(
 
       if (!oppositeModel) {
         return subAgentResult(
-          "Could not determine the opposite model. Current model provider/id is ambiguous. " +
+          "Could not determine the opposite model. Current model metadata was ambiguous: " +
+            `${formatParentModelMetadata(ctx.model)}. ` +
             "Configure @cvr/pi-counsel.model or oppositeModels in settings.",
           { agent: "counsel", task: p.prompt, exitCode: 1, messages: [], usage: zeroUsage() },
           true,
