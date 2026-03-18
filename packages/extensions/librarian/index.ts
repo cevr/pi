@@ -57,7 +57,7 @@ export const CONFIG_DEFAULTS: LibrarianExtConfig = {
  */
 export async function repoFetch(
   spec: string,
-  runtime: ManagedRuntime.ManagedRuntime<ProcessRunner | PiSpawnService, never>,
+  runtime: ManagedRuntime.ManagedRuntime<ProcessRunner, never>,
   signal?: AbortSignal,
 ): Promise<string | null> {
   try {
@@ -171,11 +171,12 @@ export function createLibrarianTool(
       const p = params as LibrarianParams;
 
       // Fetch repo locally
+      const toolRuntime = runtime;
       let localRepoPath: string | null = null;
-      if (runtime) {
-        localRepoPath = await repoFetch(p.repo, runtime, signal);
+      if (toolRuntime) {
+        localRepoPath = await repoFetch(p.repo, toolRuntime, signal);
       }
-      if (!localRepoPath) {
+      if (!localRepoPath || !toolRuntime) {
         return {
           content: [{ type: "text" as const, text: `Failed to fetch repo: ${p.repo}` }],
           isError: true,
@@ -201,7 +202,7 @@ export function createLibrarianTool(
         usage: zeroUsage(),
       };
 
-      return runtime.runPromise(
+      return toolRuntime.runPromise(
         Effect.gen(function* () {
           const svc = yield* PiSpawnService;
           const result = yield* svc.spawn({

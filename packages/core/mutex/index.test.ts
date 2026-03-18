@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { Effect, Ref } from "effect";
+import { Effect, ManagedRuntime, Ref } from "effect";
 import { Mutex } from "./index";
 
+const mutexRuntime = ManagedRuntime.make(Mutex.layer);
+
 const runWithMutex = <A, E>(effect: Effect.Effect<A, E, Mutex>): Promise<A> =>
-  Effect.runPromise(Effect.provide(effect, Mutex.layer));
+  mutexRuntime.runPromise(effect);
 
 describe("Mutex service", () => {
   it("executes effect and returns result", async () => {
@@ -102,14 +104,16 @@ describe("Mutex service", () => {
     const logRef = Ref.makeUnsafe<Array<string>>([]);
     const testLayer = Mutex.layerTest(logRef);
 
-    const result = await Effect.runPromise(
+    const runtime = ManagedRuntime.make(testLayer);
+    const result = await runtime.runPromise(
       Effect.gen(function* () {
         const mutex = yield* Mutex;
         yield* mutex.withLock("/a.txt", Effect.succeed("one"));
         yield* mutex.withLock("/b.txt", Effect.succeed("two"));
         return yield* Ref.get(logRef);
-      }).pipe(Effect.provide(testLayer)),
+      }),
     );
+    await runtime.dispose();
 
     expect(result).toHaveLength(2);
     expect(result[0]).toContain("a.txt");

@@ -5,7 +5,7 @@
  * Zero pi imports beyond the state machine framework.
  */
 
-import type { Reducer, TransitionResult } from "@cvr/pi-state-machine";
+import type { BuiltinEffect, Reducer, TransitionResult } from "@cvr/pi-state-machine";
 import type { SkillCatalogEntry } from "@cvr/pi-diff-context";
 
 export type { SkillCatalogEntry, DiffContext } from "@cvr/pi-diff-context";

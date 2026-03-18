@@ -342,7 +342,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
             const handoffModel = getHandoffModel(ctx);
             if (!handoffModel) return null;
 
-            const parentFile = ctx.sessionManager.getSessionFile();
+            const parentFile = ctx.sessionManager.getSessionFile() ?? "";
 
             // async generation — fire GenerateStart, then async work feeds back
             generateHandoffPrompt(
@@ -417,7 +417,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
             return;
           }
 
-          const parentFile = ctx.sessionManager.getSessionFile();
+          const parentFile = ctx.sessionManager.getSessionFile() ?? "";
 
           const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
             const loader = new BorderedLoader(
@@ -509,7 +509,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
           throw new Error("no model available for handoff extraction");
         }
 
-        const parentFile = _ctx.sessionManager.getSessionFile();
+        const parentFile = _ctx.sessionManager.getSessionFile() ?? "";
 
         const prompt = await generateHandoffPrompt(
           _ctx,

@@ -1,5 +1,6 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it } from "bun:test";
+import type { Message } from "@mariozechner/pi-ai";
 import { getFinalOutput, getDisplayItems, subAgentResult, formatUsageStats } from "./index";
 
 describe("formatUsageStats", () => {

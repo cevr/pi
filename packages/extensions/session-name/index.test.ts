@@ -4,6 +4,8 @@ import { describe, expect, it, afterEach, mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
 import { CONFIG_DEFAULTS, sessionNameExtension } from "./index";
 

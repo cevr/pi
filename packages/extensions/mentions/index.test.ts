@@ -1,6 +1,15 @@
 // Extracted from index.ts — review imports
 import { describe, expect, it, beforeEach, mock } from "bun:test";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+  clearCommitIndexCache,
+  clearSessionMentionCache,
+  renderResolvedMentionsText,
+  resolveMentions,
+} from "@cvr/pi-mentions";
 import { createMentionsExtension, CUSTOM_TYPE } from "./index";
+
+type MentionAdapterDeps = Parameters<typeof createMentionsExtension>[0];
 
 type RegisteredHandler = (...args: any[]) => any;
 

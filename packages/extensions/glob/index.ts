@@ -20,7 +20,7 @@ import { Type } from "@sinclair/typebox";
 import { formatHeadTail } from "@cvr/pi-output-buffer";
 import { boxRendererWindowed, textSection, type Excerpt } from "@cvr/pi-box-format";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
-import { ProcessRunner, CommandAborted } from "@cvr/pi-process-runner";
+import { ProcessRunner } from "@cvr/pi-process-runner";
 import { Effect, ManagedRuntime } from "effect";
 
 const COLLAPSED_EXCERPTS: Excerpt[] = [
@@ -212,7 +212,7 @@ export function createGlobTool(
           details: { header: p.filePattern },
         } as any;
       } catch (err) {
-        if (err instanceof CommandAborted) {
+        if (err != null && typeof err === "object" && "_tag" in err && err._tag === "CommandAborted") {
           return {
             content: [{ type: "text" as const, text: "search aborted" }],
             isError: true,

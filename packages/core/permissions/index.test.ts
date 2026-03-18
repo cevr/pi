@@ -3,7 +3,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effect } from "effect";
+import { Effect, Layer, ManagedRuntime } from "effect";
 import {
   evaluatePermission,
   decodePermissionsFile,
@@ -118,17 +118,30 @@ describe("evaluatePermission", () => {
   });
 });
 
+async function runWithPermissionsLayer<A, E>(
+  layer: Layer.Layer<Permissions, never, never>,
+  effect: Effect.Effect<A, E, Permissions>,
+): Promise<A> {
+  const runtime = ManagedRuntime.make(layer);
+  try {
+    return await runtime.runPromise(effect);
+  } finally {
+    await runtime.dispose();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Effect Permissions service tests
 // ---------------------------------------------------------------------------
 
 describe("Permissions service", () => {
   it("evaluates rules via layerTest", async () => {
-    const result = await Effect.runPromise(
+    const result = await runWithPermissionsLayer(
+      Permissions.layerTest(RULES),
       Effect.gen(function* () {
         const perms = yield* Permissions;
         return yield* perms.evaluate("Bash", { cmd: "git add -A" });
-      }).pipe(Effect.provide(Permissions.layerTest(RULES))),
+      }),
     );
 
     expect(result.action).toBe("reject");
@@ -136,11 +149,12 @@ describe("Permissions service", () => {
   });
 
   it("loads rules via layerTest", async () => {
-    const result = await Effect.runPromise(
+    const result = await runWithPermissionsLayer(
+      Permissions.layerTest(RULES),
       Effect.gen(function* () {
         const perms = yield* Permissions;
         return yield* perms.loadRules();
-      }).pipe(Effect.provide(Permissions.layerTest(RULES))),
+      }),
     );
 
     expect(result).toHaveLength(4);
@@ -148,11 +162,12 @@ describe("Permissions service", () => {
   });
 
   it("allows everything with empty rules", async () => {
-    const result = await Effect.runPromise(
+    const result = await runWithPermissionsLayer(
+      Permissions.layerTest([]),
       Effect.gen(function* () {
         const perms = yield* Permissions;
         return yield* perms.evaluate("Bash", { cmd: "rm -rf /" });
-      }).pipe(Effect.provide(Permissions.layerTest([]))),
+      }),
     );
 
     expect(result.action).toBe("allow");
@@ -173,22 +188,24 @@ describe("permissions boundary", () => {
 
   it("loads valid JSON from disk via production layer", async () => {
     const p = tmpFile(JSON.stringify([{ tool: "Bash", action: "reject" }]));
-    const result = await Effect.runPromise(
+    const result = await runWithPermissionsLayer(
+      Permissions.layer(p),
       Effect.gen(function* () {
         const perms = yield* Permissions;
         return yield* perms.loadRules();
-      }).pipe(Effect.provide(Permissions.layer(p))),
+      }),
     );
     expect(result).toHaveLength(1);
     expect(result[0]!.action).toBe("reject");
   });
 
   it("returns [] when file is missing (allow all)", async () => {
-    const result = await Effect.runPromise(
+    const result = await runWithPermissionsLayer(
+      Permissions.layer("/nonexistent/permissions.json"),
       Effect.gen(function* () {
         const perms = yield* Permissions;
         return yield* perms.loadRules();
-      }).pipe(Effect.provide(Permissions.layer("/nonexistent/permissions.json"))),
+      }),
     );
     expect(result).toHaveLength(0);
   });
@@ -196,11 +213,12 @@ describe("permissions boundary", () => {
   it("fails closed on malformed JSON (reject all)", async () => {
     const p = tmpFile("NOT VALID JSON {{{");
     const errSpy = spyOn(console, "error").mockImplementation(() => undefined);
-    const result = await Effect.runPromise(
+    const result = await runWithPermissionsLayer(
+      Permissions.layer(p),
       Effect.gen(function* () {
         const perms = yield* Permissions;
         return yield* perms.evaluate("Bash", { cmd: "ls" });
-      }).pipe(Effect.provide(Permissions.layer(p))),
+      }),
     );
     expect(result.action).toBe("reject");
     expect(result.message).toContain("malformed");
@@ -211,11 +229,12 @@ describe("permissions boundary", () => {
   it("fails closed on invalid schema shape (reject all)", async () => {
     const p = tmpFile(JSON.stringify([{ tool: 123, action: "maybe" }]));
     const errSpy = spyOn(console, "error").mockImplementation(() => undefined);
-    const result = await Effect.runPromise(
+    const result = await runWithPermissionsLayer(
+      Permissions.layer(p),
       Effect.gen(function* () {
         const perms = yield* Permissions;
         return yield* perms.evaluate("Read", { cmd: "/etc/passwd" });
-      }).pipe(Effect.provide(Permissions.layer(p))),
+      }),
     );
     expect(result.action).toBe("reject");
     errSpy.mockRestore();

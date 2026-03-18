@@ -4,7 +4,8 @@ import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { discoverAgentsMd, formatGuidance, AgentsGuidance } from "./index";
+import { discoverAgentsMd, formatGuidance } from "./index";
+import type { AgentsGuidance } from "./index";
 
 // test directory structure:
 // tmp/

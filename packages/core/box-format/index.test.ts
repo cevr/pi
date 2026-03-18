@@ -4,11 +4,11 @@ import {
   formatBoxesWindowed,
   textSection,
   osc8Link,
-  BoxSection,
   chromeWidth,
   visibleWidth,
   truncateToWidth,
 } from "./index";
+import type { BoxSection } from "./index";
 
 describe("visibleWidth", () => {
   it("counts plain text characters", () => {
