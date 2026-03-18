@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 // Extracted from index.ts — review imports
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
 import { describe, expect, test, afterEach } from "bun:test";

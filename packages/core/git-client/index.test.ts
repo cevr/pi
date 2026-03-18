@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 import { describe, expect, it, afterEach } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

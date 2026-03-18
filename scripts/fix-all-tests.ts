@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * Comprehensive test file fixer:
  * 1. Move all imports to the top of the file (after the header comment)

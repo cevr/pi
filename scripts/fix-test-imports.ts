@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * Fix extracted test files by adding missing imports from sibling source files.
  *

@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * grep tool — replaces pi's built-in with tighter limits and context lines.
  *

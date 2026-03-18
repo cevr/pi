@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * file change tracker — persists before/after content to disk for undo_edit.
  *

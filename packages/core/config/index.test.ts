@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -77,9 +78,10 @@ describe("getExtensionConfig", () => {
     });
     setGlobalSettingsPath(settingsPath);
 
-    const result = getExtensionConfig("@cvr/pi-test", {
+    const defaults: { nested: { a: number; b: number; c?: number } } = {
       nested: { a: 1, b: 0 },
-    });
+    };
+    const result = getExtensionConfig("@cvr/pi-test", defaults);
     expect(result).toEqual({ nested: { a: 1, b: 2, c: 3 } });
   });
 
@@ -305,7 +307,7 @@ describe("getGlobalConfig", () => {
       promptVariables: { foo: { literal: "bar" } },
     });
     setGlobalSettingsPath(settingsPath);
-    expect(getGlobalConfig("promptVariables")).toEqual({
+    expect(getGlobalConfig<{ foo: { literal: string } }>("promptVariables")).toEqual({
       foo: { literal: "bar" },
     });
   });

@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * brain principles reader — loads engineering principles from ~/.brain/principles/.
  *

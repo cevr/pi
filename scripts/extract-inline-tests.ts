@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * Extract `if (import.meta.vitest) { ... }` blocks from source files
  * into dedicated .test.ts files, then strip the block from source.

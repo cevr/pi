@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 import { execFileSync } from "node:child_process";
 import { createCache, getOrSet } from "./cache";
 import type { ResolvedCommitMention } from "./types";

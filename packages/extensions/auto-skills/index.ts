@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * Auto-Skills Extension — model-pruned skill hints.
  *

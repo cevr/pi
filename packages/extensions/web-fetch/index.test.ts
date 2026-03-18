@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -151,7 +152,11 @@ describe("web_fetch tool", () => {
 
     try {
       const tool = createWebFetchTool(CONFIG_DEFAULTS, runtime);
-      const result = await (tool as any).execute("call-1", { url: "https://example.com/docs" }, undefined);
+      const result = await (tool as any).execute(
+        "call-1",
+        { url: "https://example.com/docs" },
+        undefined,
+      );
 
       expect(result.isError).toBeUndefined();
       expect(result.content[0].text).toContain("# Docs");
@@ -179,7 +184,11 @@ describe("web_fetch tool", () => {
 
     try {
       const tool = createWebFetchTool(CONFIG_DEFAULTS, runtime);
-      const result = await (tool as any).execute("call-1", { url: "https://example.com/image.png" }, undefined);
+      const result = await (tool as any).execute(
+        "call-1",
+        { url: "https://example.com/image.png" },
+        undefined,
+      );
 
       expect(result.isError).toBeUndefined();
       expect(result.content[0].type).toBe("image");
@@ -204,7 +213,11 @@ describe("web_fetch tool", () => {
 
     try {
       const tool = createWebFetchTool(CONFIG_DEFAULTS, runtime);
-      const result = await (tool as any).execute("call-1", { url: "https://example.com/file.pdf" }, undefined);
+      const result = await (tool as any).execute(
+        "call-1",
+        { url: "https://example.com/file.pdf" },
+        undefined,
+      );
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toBe("request failed");

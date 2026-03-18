@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import * as os from "node:os";
 import * as fs from "node:fs";

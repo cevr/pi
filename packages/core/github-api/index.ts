@@ -7,6 +7,7 @@
  * shorthand "owner/repo".
  */
 
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import { spawnSync } from "node:child_process";
 import { Effect, Layer, Schema, ServiceMap } from "effect";
 

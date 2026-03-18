@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * skill mentions — `$skill-name` token expansion with picker overlay.
  *

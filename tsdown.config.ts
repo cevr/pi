@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 import { defineConfig } from "tsdown";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";

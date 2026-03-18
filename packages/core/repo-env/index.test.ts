@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -32,7 +33,9 @@ function makePackageRoot(): { root: string; nested: string; filePath: string } {
 }
 
 function repoEnvLayer(start: string | URL) {
-  return layerRepoEnv(start).pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)));
+  return layerRepoEnv(start).pipe(
+    Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)),
+  );
 }
 
 function repoPathLayer() {
@@ -108,7 +111,10 @@ describe("repo-env", () => {
     const { nested } = makePackageRoot();
     setEnv("PARALLEL_API_KEY", undefined);
 
-    const apiKey = await readConfigValue(nested, Config.option(Config.redacted("PARALLEL_API_KEY")));
+    const apiKey = await readConfigValue(
+      nested,
+      Config.option(Config.redacted("PARALLEL_API_KEY")),
+    );
 
     expect(apiKey).toEqual(Option.none());
   });

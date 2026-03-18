@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * create_file tool — replaces pi's built-in write with enhanced file creation.
  *

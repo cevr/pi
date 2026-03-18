@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * undo_edit tool — reverts the last edit made to a file.
  *

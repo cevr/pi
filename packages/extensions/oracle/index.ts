@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * oracle tool — expert technical advisor via gpt-5.2 sub-agent.
  *

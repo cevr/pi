@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * search_sessions tool — find session branches by keyword, file, or date.
  *

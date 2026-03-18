@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * bash tool — replaces pi's built-in with enhanced command execution.
  *

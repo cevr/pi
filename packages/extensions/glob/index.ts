@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * glob tool — replaces pi's built-in find with enhanced file finding.
  *

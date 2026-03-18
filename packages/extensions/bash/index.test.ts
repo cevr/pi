@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 // Extracted from index.ts — review imports
 import { describe, expect, it, afterEach } from "bun:test";
 import * as fs from "node:fs";

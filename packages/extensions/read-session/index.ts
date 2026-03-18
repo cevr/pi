@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * read_session tool — extract relevant context from a pi session via sub-agent.
  *

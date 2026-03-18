@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * AGENTS.md discovery — walks directory hierarchy to find guidance files.
  *

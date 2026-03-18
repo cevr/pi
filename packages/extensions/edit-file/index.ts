@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * edit tool — replaces pi's built-in with enhanced file editing.
  *

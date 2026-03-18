@@ -1,3 +1,4 @@
+/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * skill tool — load a skill by name, returning its content for
  * injection into the conversation context.
