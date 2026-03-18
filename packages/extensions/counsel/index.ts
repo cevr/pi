@@ -3,7 +3,12 @@
  *
  * detects the current model's vendor (anthropic vs openai) and spawns
  * a pi sub-agent with the opposite vendor's model for adversarial review.
- * writes the review to ~/.pi/counsel/<id>.md for durability.
+ * persists the full exchange to a pi session file for later inspection.
+ * returns only the session path to keep parent-agent context lean.
+ *
+ * important: counsel is intentionally single-shot JSON mode, not RPC stdin.
+ * it's a one-prompt reviewer, and returning the session path avoids hauling
+ * the full review back into the parent context.
  *
  * follows the dedicated sub-agent pattern: PiSpawnService + ManagedRuntime + getEnabledExtensionConfig.
  */
@@ -17,7 +22,7 @@ import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechn
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
-import { PiSpawnService, zeroUsage, type PiSpawnConfig, type PiSpawnResult } from "@cvr/pi-spawn";
+import { PiSpawnService, zeroUsage, type PiSpawnResult } from "@cvr/pi-spawn";
 import { withPromptPatch } from "@cvr/pi-prompt-patch";
 import { readPrinciples } from "@cvr/pi-brain-principles";
 import {
@@ -107,9 +112,6 @@ function generateCounselSessionPath(): string {
 
 type ModelFamily = "anthropic" | "openai";
 
-const MISSING_INPUT_ERROR_RE =
-  /invalid_request_error[\s\S]*(input|previous_response_id|prompt|conversation_id)[\s\S]*must be provided/i;
-
 /**
  * detect model family from provider + id.
  * handles gateway providers like openrouter that carry models from both vendors.
@@ -147,10 +149,6 @@ function resolveOppositeModel(
 
 function getSpawnErrorText(result: PiSpawnResult): string {
   return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "";
-}
-
-function shouldRetryCounsel(result: PiSpawnResult): boolean {
-  return MISSING_INPUT_ERROR_RE.test(getSpawnErrorText(result));
 }
 
 // --- tool ---
@@ -242,8 +240,8 @@ export function createCounselTool(
       "USAGE:\n" +
       "- Be specific about what you want reviewed\n" +
       "- Provide relevant context and file references\n" +
-      "- The review is written to ~/.pi/counsel/ for durability\n" +
-      "- When getting a review from counsel, show it to the user in full, do not summarize it.",
+      "- The full review is persisted to a session file for durability\n" +
+      "- This tool returns the session path so the caller can inspect the full transcript.",
 
     parameters: Type.Object({
       prompt: Type.String({
@@ -307,7 +305,9 @@ export function createCounselTool(
       return runtime.runPromise(
         Effect.gen(function* () {
           const svc = yield* PiSpawnService;
-          const spawnConfig: PiSpawnConfig = {
+          // keep counsel single-shot + token-efficient: persist the full transcript,
+          // return only the session path, let the caller read the session if needed.
+          const result = yield* svc.spawn({
             cwd: ctx.cwd,
             task: fullTask,
             model: oppositeModel,
@@ -317,7 +317,6 @@ export function createCounselTool(
             signal,
             sessionId,
             sessionPath: counselSessionPath,
-            promptViaStdin: true,
             onUpdate: (partial) => {
               singleResult.messages = partial.messages;
               singleResult.usage = partial.usage;
@@ -329,24 +328,14 @@ export function createCounselTool(
                   content: [
                     {
                       type: "text",
-                      text: getFinalOutput(partial.messages) || "(reviewing...)",
+                      text: `Session: ${counselSessionPath}`,
                     },
                   ],
                   details: singleResult,
                 } as any);
               }
             },
-          };
-
-          let result = yield* svc.spawn(spawnConfig);
-          let usedRetry = false;
-          if (shouldRetryCounsel(result)) {
-            usedRetry = true;
-            result = yield* svc.spawn({
-              ...spawnConfig,
-              sessionPath: undefined,
-            });
-          }
+          });
 
           singleResult.exitCode = result.exitCode;
           singleResult.messages = result.messages;
@@ -365,10 +354,7 @@ export function createCounselTool(
             return subAgentResult(getSpawnErrorText(result) || output, singleResult, true);
           }
 
-          const sessionRef = usedRetry
-            ? "Session: ephemeral retry (session file unavailable)"
-            : `Session: ${counselSessionPath}`;
-          return subAgentResult(`${sessionRef}\n\n${output}`, singleResult);
+          return subAgentResult(`Session: ${counselSessionPath}`, singleResult);
         }),
       );
     },
@@ -380,7 +366,7 @@ export function createCounselTool(
           : args.prompt
         : "...";
       return new Text(
-        theme.fg("toolTitle", theme.bold("counsel ")) + theme.fg("dim", preview),
+        theme.fg("toolTitle", theme.bold("counsel ")) + theme.fg("muted", preview),
         0,
         0,
       );

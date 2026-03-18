@@ -168,7 +168,7 @@ describe("detectModelFamily", () => {
 });
 
 describe("createCounselTool", () => {
-  it("uses stdin RPC prompt delivery for counsel runs", async () => {
+  it("uses json-mode spawning with a persisted session file", async () => {
     const calls: PiSpawnConfig[] = [];
     const runtime = createRuntime((config) => {
       calls.push(config);
@@ -186,32 +186,17 @@ describe("createCounselTool", () => {
       );
 
       expect(calls).toHaveLength(1);
-      expect(calls[0]!.promptViaStdin).toBe(true);
+      expect(calls[0]!.promptViaStdin).toBeUndefined();
       expect(typeof calls[0]!.sessionPath).toBe("string");
       expect(result.isError).toBeUndefined();
-      expect(result.content[0].text).toContain("Looks good.");
+      expect(result.content[0].text).toBe(`Session: ${calls[0]!.sessionPath}`);
     } finally {
       await runtime.dispose();
     }
   });
 
-  it("retries once without a session file when prompt delivery fails upstream", async () => {
-    const calls: PiSpawnConfig[] = [];
-    const errorText = `400 {"type":"error","error":{"type":"invalid_request_error","message":"One of "input" or "previous_response_id"or 'prompt'or 'conversation_id' must be provided"}}`;
-    const runtime = createRuntime((config) => {
-      calls.push(config);
-      if (calls.length === 1) {
-        return {
-          exitCode: 1,
-          messages: [],
-          stderr: errorText,
-          usage: zeroUsage(),
-          stopReason: "error",
-          errorMessage: errorText,
-        };
-      }
-      return makeAssistantResult("Retry succeeded.");
-    });
+  it("returns only the session path, not the full review text", async () => {
+    const runtime = createRuntime(() => makeAssistantResult("Detailed review body."));
 
     try {
       const tool = createCounselTool({}, runtime, () => "");
@@ -223,14 +208,9 @@ describe("createCounselTool", () => {
         makeCtx(),
       );
 
-      expect(calls).toHaveLength(2);
-      expect(calls[0]!.promptViaStdin).toBe(true);
-      expect(typeof calls[0]!.sessionPath).toBe("string");
-      expect(calls[1]!.promptViaStdin).toBe(true);
-      expect(calls[1]!.sessionPath).toBeUndefined();
       expect(result.isError).toBeUndefined();
-      expect(result.content[0].text).toContain("ephemeral retry");
-      expect(result.content[0].text).toContain("Retry succeeded.");
+      expect(result.content[0].text).toContain("Session: ");
+      expect(result.content[0].text).not.toContain("Detailed review body.");
     } finally {
       await runtime.dispose();
     }
