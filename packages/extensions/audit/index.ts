@@ -11,6 +11,12 @@
  *   /audit @packages/core/fs "check ts"  — force path parsing + focus
  */
 
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
+import * as fs from "node:fs";
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
+import * as os from "node:os";
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
+import * as path from "node:path";
 import type { AssistantMessage, Message as PiMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readPrinciples } from "@cvr/pi-brain-principles";
@@ -21,7 +27,6 @@ import { ProcessRunner } from "@cvr/pi-process-runner";
 import { PiSpawnService } from "@cvr/pi-spawn";
 import { getFinalOutput } from "@cvr/pi-sub-agent-render";
 import { register, type MachineConfig } from "@cvr/pi-state-machine";
-import { renderTaskWidget } from "@cvr/pi-task-widget";
 import type { Command } from "@cvr/pi-state-machine";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import {
@@ -109,6 +114,7 @@ function normalizeHydratedConcernTasks(
             ? metadata.skills.filter((value): value is string => typeof value === "string")
             : [],
           notes: typeof metadata.notes === "string" ? metadata.notes : undefined,
+          sessionPath: typeof metadata.sessionPath === "string" ? metadata.sessionPath : undefined,
         },
       },
     ];
@@ -131,17 +137,25 @@ function normalizeHydratedConcernCursor(value: unknown): GraphExecutionCursor | 
   return {
     phase: cursor.phase,
     total: cursor.total,
-    frontierTaskIds: cursor.frontierTaskIds.filter((taskId): taskId is string => typeof taskId === "string"),
-    activeTaskIds: cursor.activeTaskIds.filter((taskId): taskId is string => typeof taskId === "string"),
+    frontierTaskIds: cursor.frontierTaskIds.filter(
+      (taskId): taskId is string => typeof taskId === "string",
+    ),
+    activeTaskIds: cursor.activeTaskIds.filter(
+      (taskId): taskId is string => typeof taskId === "string",
+    ),
   };
 }
 
-function normalizeHydratedFindings(items: readonly Record<string, unknown>[] | undefined): AuditFinding[] {
+function normalizeHydratedFindings(
+  items: readonly Record<string, unknown>[] | undefined,
+): AuditFinding[] {
   return (items ?? []).flatMap((item) => {
     if (
       typeof item.file !== "string" ||
       typeof item.description !== "string" ||
-      (item.severity !== "critical" && item.severity !== "warning" && item.severity !== "suggestion")
+      (item.severity !== "critical" &&
+        item.severity !== "warning" &&
+        item.severity !== "suggestion")
     ) {
       return [];
     }
@@ -167,6 +181,49 @@ export class ConcernBatchError extends Schema.TaggedErrorClass<ConcernBatchError
 export interface ConcernBatchResult {
   taskId: string;
   notes: string;
+  sessionPath: string;
+}
+
+const AUDIT_SESSIONS_DIR = path.join(os.homedir(), ".pi", "agent", "sessions");
+
+function generateAuditConcernSessionPath(concern: AuditConcernTask): string {
+  const now = new Date();
+  const year = now.getFullYear().toString();
+  const dir = path.join(AUDIT_SESSIONS_DIR, year);
+  fs.mkdirSync(dir, { recursive: true });
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  const label =
+    concern.subject
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase() || "concern";
+  const rand = Math.random().toString(36).slice(2, 8);
+  return path.join(dir, `${timestamp}_audit-${concern.order}-${label}-${rand}.jsonl`);
+}
+
+function renderConcernLines(concerns: readonly AuditConcernTask[]): string[] {
+  return concerns.flatMap((concern) => {
+    const marker =
+      concern.status === "completed" ? "✔" : concern.status === "in_progress" ? "◼" : "○";
+    const subject =
+      concern.status === "in_progress" ? (concern.activeForm ?? concern.subject) : concern.subject;
+    const lines = [`${marker} ${subject}`];
+    if (concern.metadata.sessionPath) {
+      lines.push(`  session: ${concern.metadata.sessionPath}`);
+    }
+    return lines;
+  });
+}
+
+function buildConcernBatchError(message: string, sessionPath: string): string {
+  return `${message}\n\nConcern transcript: ${sessionPath}`;
+}
+
+function buildConcernCompletionMessage(concern: AuditConcernTask): string {
+  const sessionLine = concern.metadata.sessionPath
+    ? `\nSession: ${concern.metadata.sessionPath}`
+    : "";
+  return `Concern audit complete: ${concern.order}. ${concern.subject}${sessionLine}`;
 }
 
 function buildConcernAuditSystemPrompt(
@@ -187,8 +244,13 @@ export function runConcernBatch(
   cwd: string,
   sessionId: string,
   principles: string | undefined,
+  concernSessions: ReadonlyMap<string, string>,
   signal?: AbortSignal,
-): Effect.Effect<ReadonlyArray<ConcernBatchResult>, ConcernBatchError, GraphRuntime | PiSpawnService> {
+): Effect.Effect<
+  ReadonlyArray<ConcernBatchResult>,
+  ConcernBatchError,
+  GraphRuntime | PiSpawnService
+> {
   return Effect.gen(function* () {
     const graphRuntime = yield* GraphRuntime;
     const spawn = yield* PiSpawnService;
@@ -206,6 +268,8 @@ export function runConcernBatch(
             );
           }
 
+          const sessionPath =
+            concernSessions.get(taskId) ?? generateAuditConcernSessionPath(concern);
           const result = yield* spawn.spawn({
             cwd,
             task: buildConcernAuditPrompt(state, concern),
@@ -214,6 +278,7 @@ export function runConcernBatch(
             systemPromptBody: buildConcernAuditSystemPrompt(state, concern, principles),
             signal,
             sessionId,
+            sessionPath,
           });
           const output = getFinalOutput(result.messages).trim();
           const isError =
@@ -225,11 +290,13 @@ export function runConcernBatch(
           if (isError) {
             return yield* Effect.fail(
               new ConcernBatchError({
-                message:
+                message: buildConcernBatchError(
                   result.errorMessage ||
-                  result.stderr ||
-                  output ||
-                  `audit: concern ${concern.subject} failed`,
+                    result.stderr ||
+                    output ||
+                    `audit: concern ${concern.subject} failed`,
+                  sessionPath,
+                ),
               }),
             );
           }
@@ -237,6 +304,7 @@ export function runConcernBatch(
           return {
             taskId,
             notes: normalizeConcernAuditNotes(output),
+            sessionPath,
           } satisfies ConcernBatchResult;
         }),
       AUDIT_GRAPH_POLICY,
@@ -249,6 +317,8 @@ export function runConcernBatch(
 const AUDIT_CUSTOM_TYPES = new Set([
   "audit-context",
   "audit-trigger",
+  "audit-progress",
+  "audit-error",
   "audit-fix",
   "audit-gate",
   "audit-gate-fix",
@@ -267,8 +337,7 @@ function formatUI(state: AuditState, ctx: ExtensionContext): void {
   ctx.ui.setStatus("audit", getAuditStatusText(state));
 
   if (state._tag === "Auditing") {
-    const widget = renderTaskWidget(state.concerns, { theme: ctx.ui.theme });
-    ctx.ui.setWidget("audit-progress", widget.lines);
+    ctx.ui.setWidget("audit-progress", renderConcernLines(state.concerns));
   } else if (state._tag === "Fixing") {
     const lines = state.findings.map((finding, index) => {
       const marker =
@@ -278,6 +347,13 @@ function formatUI(state: AuditState, ctx: ExtensionContext): void {
       return `  ${marker} [${finding.severity}] ${finding.file}${phase}`;
     });
     ctx.ui.setWidget("audit-progress", lines);
+  } else if (state._tag === "Failed") {
+    ctx.ui.setWidget("audit-progress", [
+      "✖ audit failed",
+      `  phase: ${state.failedPhase}`,
+      ...state.message.split("\n").map((line) => `  ${line}`),
+      ...renderConcernLines(state.concerns),
+    ]);
   } else {
     ctx.ui.setWidget("audit-progress", undefined);
   }
@@ -289,7 +365,9 @@ function formatUI(state: AuditState, ctx: ExtensionContext): void {
 
 export default function auditExtension(pi: ExtensionAPI): void {
   const gitRuntime = ManagedRuntime.make(GitClient.layer.pipe(Layer.provide(ProcessRunner.layer)));
-  const concernRuntime = ManagedRuntime.make(Layer.mergeAll(GraphRuntime.layer, PiSpawnService.layer));
+  const concernRuntime = ManagedRuntime.make(
+    Layer.mergeAll(GraphRuntime.layer, PiSpawnService.layer),
+  );
   const executor = createInlineExecutionExecutor(pi);
   let activeConcernBatchAbort: AbortController | undefined;
 
@@ -353,6 +431,9 @@ export default function auditExtension(pi: ExtensionAPI): void {
             );
             break;
           }
+          case "Failed":
+            ctx.ui.notify(`Audit failed during ${state.failedPhase}: ${state.message}`, "error");
+            break;
         }
       },
     },
@@ -379,6 +460,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
               content = `[AUDIT MODE — DETECTION]\n\nYou are detecting which audit concerns apply to this branch's changes.${principlesBlock}`;
               break;
             case "Auditing":
+            case "Failed":
               return;
             case "Synthesizing":
               content = `[AUDIT MODE — SYNTHESIS]\n\nSynthesize findings and output structured JSON.${principlesBlock}`;
@@ -451,6 +533,8 @@ export default function auditExtension(pi: ExtensionAPI): void {
               }
               return null;
             }
+            case "Failed":
+              return null;
           }
           return null;
         },
@@ -467,10 +551,14 @@ export default function auditExtension(pi: ExtensionAPI): void {
           const mode = data?.mode;
           const scope = data?.scope === "diff" || data?.scope === "paths" ? data.scope : undefined;
           const concerns = normalizeHydratedConcernTasks(
-            Array.isArray(data?.concerns) ? (data.concerns as Record<string, unknown>[]) : undefined,
+            Array.isArray(data?.concerns)
+              ? (data.concerns as Record<string, unknown>[])
+              : undefined,
           );
           const findings = normalizeHydratedFindings(
-            Array.isArray(data?.findings) ? (data.findings as Record<string, unknown>[]) : undefined,
+            Array.isArray(data?.findings)
+              ? (data.findings as Record<string, unknown>[])
+              : undefined,
           );
           const skillCatalog = normalizeHydratedSkillCatalog(
             Array.isArray(data?.skillCatalog)
@@ -484,6 +572,8 @@ export default function auditExtension(pi: ExtensionAPI): void {
             data?.phase === "running" || data?.phase === "gating" || data?.phase === "counseling"
               ? data.phase
               : undefined;
+          const failedPhase = data?.failedPhase === "auditing" ? data.failedPhase : undefined;
+          const message = typeof data?.message === "string" ? data.message : undefined;
 
           return {
             _tag: "Hydrate",
@@ -500,6 +590,8 @@ export default function auditExtension(pi: ExtensionAPI): void {
             findings,
             currentFinding,
             phase,
+            failedPhase,
+            message,
           };
         },
       },
@@ -512,7 +604,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
       input: {
         mode: "reply" as const,
         handle: (state, event) => {
-          if (state._tag !== "Idle" && event.source === "interactive") {
+          if (state._tag !== "Idle" && state._tag !== "Failed" && event.source === "interactive") {
             queueMicrotask(() => machine.send({ _tag: "Cancel" }));
           }
           return { action: "continue" as const };
@@ -545,25 +637,68 @@ export default function auditExtension(pi: ExtensionAPI): void {
         activeConcernBatchAbort = batchAbort;
         const principles = readPrinciples();
         const sessionId = ctx.sessionManager?.getSessionId?.() ?? "";
+        const sessionEntries = effect.state.cursor.frontierTaskIds.flatMap((taskId) => {
+          const concern = effect.state.concerns.find((item) => item.id === taskId);
+          if (!concern) return [];
+          return [{ taskId, sessionPath: generateAuditConcernSessionPath(concern) }];
+        });
+        const concernSessions = new Map(
+          sessionEntries.map(({ taskId, sessionPath }) => [taskId, sessionPath] as const),
+        );
+        const preparedState: Extract<AuditState, { _tag: "Auditing" }> = {
+          ...effect.state,
+          concerns: effect.state.concerns.map((concern) => ({
+            ...concern,
+            metadata: {
+              ...concern.metadata,
+              sessionPath: concernSessions.get(concern.id) ?? concern.metadata.sessionPath,
+            },
+          })),
+        };
+
+        if (sessionEntries.length > 0) {
+          machine.send({ _tag: "ConcernSessionsPrepared", sessions: sessionEntries });
+        }
 
         concernRuntime
           .runPromise(
             runConcernBatch(
-              effect.state,
+              preparedState,
               ctx.cwd,
               sessionId,
               principles,
+              concernSessions,
               batchAbort.signal,
             ),
           )
           .then((results) => {
             if (activeConcernBatchAbort !== batchAbort || batchAbort.signal.aborted) return;
             for (const result of results) {
+              const concern = preparedState.concerns.find((item) => item.id === result.taskId);
               machine.send({
                 _tag: "ConcernAudited",
                 taskId: result.taskId,
                 notes: result.notes,
+                sessionPath: result.sessionPath,
               });
+
+              if (concern) {
+                executor.execute(
+                  {
+                    customType: "audit-progress",
+                    content: buildConcernCompletionMessage({
+                      ...concern,
+                      metadata: {
+                        ...concern.metadata,
+                        sessionPath: result.sessionPath,
+                      },
+                    }),
+                    display: true,
+                    triggerTurn: false,
+                  },
+                  ctx,
+                );
+              }
             }
             if (activeConcernBatchAbort === batchAbort) {
               activeConcernBatchAbort = undefined;

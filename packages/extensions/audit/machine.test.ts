@@ -52,10 +52,7 @@ function detecting(userPrompt = "", scope: "diff" | "paths" = "diff"): AuditStat
   };
 }
 
-function createConcernTasks(
-  concerns = CONCERNS,
-  currentConcern = 1,
-): AuditConcernTask[] {
+function createConcernTasks(concerns = CONCERNS, currentConcern = 1): AuditConcernTask[] {
   return concerns.map((concern, index) => ({
     id: String(index + 1),
     order: index + 1,
@@ -121,6 +118,10 @@ function getEffect<T extends Effect>(
   return effects?.find((e) => e.type === type) as T | undefined;
 }
 
+function getEffects<T extends Effect>(effects: readonly Effect[] | undefined, type: string): T[] {
+  return (effects?.filter((e) => e.type === type) as T[]) ?? [];
+}
+
 function getPersistPayload(effects: readonly Effect[] | undefined): PersistPayload | undefined {
   return getEffect<AuditEffect & { type: "persistState" }>(effects, "persistState")?.state;
 }
@@ -146,7 +147,10 @@ describe("auditReducer — Start", () => {
       expect(r.state.userPrompt).toBe("check react");
     }
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
-    expect(hasEffect(r.effects, "executeTurn")).toBe(true);
+    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
+    expect(turns).toHaveLength(2);
+    expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
+    expect(turns[1]?.request).toMatchObject({ customType: "audit-trigger", triggerTurn: true });
     expect(hasEffect(r.effects, "updateUI")).toBe(true);
     expect(getPersistPayload(r.effects)).toMatchObject({
       mode: "Detecting",
@@ -179,7 +183,10 @@ describe("auditReducer — ConcernsDetected", () => {
     const r = auditReducer(detecting(), { _tag: "ConcernsDetected", concerns: CONCERNS });
     expect(r.state._tag).toBe("Auditing");
     if (r.state._tag === "Auditing") {
-      expect(r.state.concerns.map((concern) => concern.subject)).toEqual(["correctness", "frontend"]);
+      expect(r.state.concerns.map((concern) => concern.subject)).toEqual([
+        "correctness",
+        "frontend",
+      ]);
       expect(r.state.concerns.every((concern) => concern.status === "in_progress")).toBe(true);
       expect(r.state.cursor).toEqual({
         phase: "running",
@@ -188,7 +195,10 @@ describe("auditReducer — ConcernsDetected", () => {
         total: 2,
       });
     }
-    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(r.effects, "runConcernBatch");
+    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(
+      r.effects,
+      "runConcernBatch",
+    );
     expect(batch?.state._tag).toBe("Auditing");
     expect(batch?.state.cursor).toEqual({
       phase: "running",
@@ -196,6 +206,10 @@ describe("auditReducer — ConcernsDetected", () => {
       activeTaskIds: ["1", "2"],
       total: 2,
     });
+    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
+    expect(turns[0]?.request.content).toContain("Detected 2 audit concerns");
     expect(hasEffect(r.effects, "updateUI")).toBe(true);
     expect(getPersistPayload(r.effects)).toMatchObject({
       mode: "Auditing",
@@ -257,12 +271,34 @@ describe("auditReducer — DetectionFailed", () => {
 // ConcernAudited
 // ---------------------------------------------------------------------------
 
+describe("auditReducer — ConcernSessionsPrepared", () => {
+  it("stores per-concern session paths and emits a visible transcript message", () => {
+    const r = auditReducer(auditing(), {
+      _tag: "ConcernSessionsPrepared",
+      sessions: [
+        { taskId: "1", sessionPath: "/tmp/audit-1.jsonl" },
+        { taskId: "2", sessionPath: "/tmp/audit-2.jsonl" },
+      ],
+    });
+    expect(r.state._tag).toBe("Auditing");
+    if (r.state._tag === "Auditing") {
+      expect(r.state.concerns[0]?.metadata.sessionPath).toBe("/tmp/audit-1.jsonl");
+      expect(r.state.concerns[1]?.metadata.sessionPath).toBe("/tmp/audit-2.jsonl");
+    }
+    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
+    expect(turns[0]?.request.content).toContain("Concern audit transcripts");
+  });
+});
+
 describe("auditReducer — ConcernAudited", () => {
   it("Auditing → advances to the next concern batch and stores notes", () => {
     const r = auditReducer(auditing(), {
       _tag: "ConcernAudited",
       taskId: "1",
       notes: "found issues in src/app.tsx",
+      sessionPath: "/tmp/audit-1.jsonl",
     });
     expect(r.state._tag).toBe("Auditing");
     if (r.state._tag === "Auditing") {
@@ -271,7 +307,10 @@ describe("auditReducer — ConcernAudited", () => {
       expect(r.state.concerns[0]!.metadata.notes).toBe("found issues in src/app.tsx");
       expect(r.state.concerns[1]!.status).toBe("in_progress");
     }
-    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(r.effects, "runConcernBatch");
+    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(
+      r.effects,
+      "runConcernBatch",
+    );
     expect(batch?.state._tag).toBe("Auditing");
     expect(batch?.state.cursor).toEqual(createConcernCursor(2, 2));
   });
@@ -285,14 +324,21 @@ describe("auditReducer — ConcernAudited", () => {
       _tag: "ConcernAudited",
       taskId: "2",
       notes: "frontend looks fine",
+      sessionPath: "/tmp/audit-2.jsonl",
     });
     expect(r.state._tag).toBe("Synthesizing");
     if (r.state._tag === "Synthesizing") {
-      expect(r.state.concerns.map((concern) => concern.subject)).toEqual(["correctness", "frontend"]);
+      expect(r.state.concerns.map((concern) => concern.subject)).toEqual([
+        "correctness",
+        "frontend",
+      ]);
       expect(r.state.concerns.every((concern) => concern.status === "completed")).toBe(true);
       expect(r.state.concerns[1]!.metadata.notes).toBe("frontend looks fine");
     }
-    expect(hasEffect(r.effects, "executeTurn")).toBe(true);
+    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
+    expect(turns).toHaveLength(2);
+    expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
+    expect(turns[1]?.request).toMatchObject({ customType: "audit-trigger", triggerTurn: true });
   });
 
   it("non-Auditing + ConcernAudited is no-op", () => {
@@ -301,23 +347,31 @@ describe("auditReducer — ConcernAudited", () => {
       _tag: "ConcernAudited",
       taskId: "1",
       notes: "ignored",
+      sessionPath: "/tmp/ignored.jsonl",
     });
     expect(r.state).toBe(state);
   });
 });
 
 describe("auditReducer — ConcernAuditFailed", () => {
-  it("Auditing → Idle with error notify", () => {
+  it("Auditing → Failed with visible error details", () => {
     const r = auditReducer(auditing(), {
       _tag: "ConcernAuditFailed",
-      message: "audit: concern batch failed",
+      message: "audit: concern batch failed\n\nConcern transcript: /tmp/audit-1.jsonl",
     });
-    expect(r.state._tag).toBe("Idle");
+    expect(r.state._tag).toBe("Failed");
+    if (r.state._tag === "Failed") {
+      expect(r.state.failedPhase).toBe("auditing");
+      expect(r.state.message).toContain("Concern transcript: /tmp/audit-1.jsonl");
+    }
     const notify = getEffect<BuiltinEffect>(r.effects, "notify");
     expect(notify).toMatchObject({
       level: "error",
-      message: "audit: concern batch failed",
+      message: "audit: concern batch failed\n\nConcern transcript: /tmp/audit-1.jsonl",
     });
+    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.request).toMatchObject({ customType: "audit-error", triggerTurn: false });
   });
 
   it("non-Auditing + ConcernAuditFailed is no-op", () => {
@@ -343,7 +397,10 @@ describe("auditReducer — SynthesisComplete", () => {
       expect(r.state.phase).toBe("running");
       expect(r.state.findings).toEqual(FINDINGS);
     }
-    expect(hasEffect(r.effects, "executeTurn")).toBe(true);
+    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
+    expect(turns).toHaveLength(2);
+    expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
+    expect(turns[1]?.request).toMatchObject({ customType: "audit-fix", triggerTurn: true });
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
     expect(getPersistPayload(r.effects)).toMatchObject({
       mode: "Fixing",
@@ -407,7 +464,9 @@ describe("auditReducer — FixSkip", () => {
     expect(r.state._tag).toBe("Idle");
     const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
     expect(send).toMatchObject({ request: { customType: "audit-commit" } });
-    expect(send?.request.content).toContain("Commit the fix for src/utils.ts, then say \"AUDIT_LOOP_DONE\".");
+    expect(send?.request.content).toContain(
+      'Commit the fix for src/utils.ts, then say "AUDIT_LOOP_DONE".',
+    );
   });
 });
 
@@ -458,7 +517,9 @@ describe("auditReducer — FixCounselPass", () => {
     expect(hasEffect(r.effects, "notify")).toBe(true);
     const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
     expect(send).toMatchObject({ request: { customType: "audit-commit" } });
-    expect(send?.request.content).toContain("Commit the fix for src/utils.ts, then say \"AUDIT_LOOP_DONE\".");
+    expect(send?.request.content).toContain(
+      'Commit the fix for src/utils.ts, then say "AUDIT_LOOP_DONE".',
+    );
   });
 
   it("wrong phase → no-op", () => {
@@ -539,7 +600,10 @@ describe("auditReducer — Hydrate", () => {
       expect(result.state.concerns[1]!.status).toBe("in_progress");
       expect(result.state.userPrompt).toBe("focus on correctness");
     }
-    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(result.effects, "runConcernBatch");
+    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(
+      result.effects,
+      "runConcernBatch",
+    );
     expect(batch?.state._tag).toBe("Auditing");
     expect(hasEffect(result.effects, "setStatus")).toBe(true);
     expect(hasEffect(result.effects, "updateUI")).toBe(true);

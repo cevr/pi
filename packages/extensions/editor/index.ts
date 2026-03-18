@@ -85,14 +85,14 @@ class LabeledEditor extends CustomEditor {
   }
 
   private chrome(str: string): string {
-    return this.appTheme.fg(this.mode === "spec" ? "warning" : "muted", str);
+    return this.appTheme.fg(this.mode === "spec" ? "toolTitle" : "muted", str);
   }
 
   setMode(mode: EditorMode): void {
     this.mode = mode;
     this.setLabel(
       "mode",
-      this.appTheme.fg(mode === "spec" ? "warning" : "muted", mode.toUpperCase()),
+      this.appTheme.fg(mode === "spec" ? "toolTitle" : "muted", mode.toUpperCase()),
       "bottom",
       "left",
     );

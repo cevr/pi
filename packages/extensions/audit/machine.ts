@@ -50,6 +50,7 @@ export interface AuditConcernTaskMetadata {
   description: string;
   skills: string[];
   notes?: string;
+  sessionPath?: string;
 }
 
 export interface AuditConcernTask extends TaskListItem {
@@ -96,6 +97,12 @@ export type AuditState =
       findings: AuditFinding[];
       currentFinding: number;
       phase: FixPhase;
+    }
+  | {
+      _tag: "Failed";
+      failedPhase: "auditing";
+      concerns: AuditConcernTask[];
+      message: string;
     };
 
 // ---------------------------------------------------------------------------
@@ -113,7 +120,11 @@ export type AuditEvent =
     }
   | { _tag: "ConcernsDetected"; concerns: AuditConcern[] }
   | { _tag: "DetectionFailed" }
-  | { _tag: "ConcernAudited"; taskId: string; notes: string }
+  | {
+      _tag: "ConcernSessionsPrepared";
+      sessions: ReadonlyArray<{ taskId: string; sessionPath: string }>;
+    }
+  | { _tag: "ConcernAudited"; taskId: string; notes: string; sessionPath: string }
   | { _tag: "ConcernAuditFailed"; message: string }
   | { _tag: "SynthesisComplete"; findings: AuditFinding[] }
   | { _tag: "FindingFixed" }
@@ -136,6 +147,8 @@ export type AuditEvent =
       findings?: AuditFinding[];
       currentFinding?: number;
       phase?: FixPhase;
+      failedPhase?: "auditing";
+      message?: string;
     }
   | { _tag: "Reset" };
 
@@ -161,6 +174,8 @@ export interface PersistPayload {
   findings?: AuditFinding[];
   currentFinding?: number;
   phase?: FixPhase;
+  failedPhase?: "auditing";
+  message?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +290,54 @@ export function buildFixCounselPrompt(): string {
   return `Gate passed. Run counsel for a cross-vendor review of the fix. Report FIX_COUNSEL_PASS if approved, FIX_COUNSEL_FAIL if issues found.`;
 }
 
+function formatConcernList(concerns: readonly AuditConcernTask[]): string {
+  return concerns
+    .map((concern) => `- ${concern.order}. ${concern.subject} — ${concern.metadata.description}`)
+    .join("\n");
+}
+
+function summarizeAuditTargets(targetPaths: readonly string[]): string {
+  if (targetPaths.length === 0) return "No explicit targets";
+  if (targetPaths.length === 1) return targetPaths[0]!;
+  return `${targetPaths[0]!} +${targetPaths.length - 1} more`;
+}
+
+export function buildAuditPhaseMessage(
+  state: Extract<
+    AuditState,
+    { _tag: "Detecting" | "Auditing" | "Synthesizing" | "Fixing" | "Failed" }
+  >,
+): string {
+  switch (state._tag) {
+    case "Detecting":
+      return `Audit started. Detecting concerns for ${summarizeAuditTargets(state.targetPaths)}.`;
+    case "Auditing":
+      return `Detected ${state.concerns.length} audit concern${state.concerns.length === 1 ? "" : "s"}. Launching concern audits.\n\n${formatConcernList(state.concerns)}`;
+    case "Synthesizing":
+      return `Concern audits complete. Synthesizing findings from ${state.concerns.length} concern${state.concerns.length === 1 ? "" : "s"}.`;
+    case "Fixing": {
+      const finding = state.findings[state.currentFinding];
+      return finding
+        ? `Audit synthesis complete. Starting fix ${state.currentFinding + 1}/${state.findings.length}: [${finding.severity}] ${finding.file} — ${finding.description}`
+        : `Audit synthesis complete. Starting fix loop for ${state.findings.length} finding${state.findings.length === 1 ? "" : "s"}.`;
+    }
+    case "Failed":
+      return `Audit failed during ${state.failedPhase}.\n\n${state.message}`;
+  }
+}
+
+export function buildConcernSessionMessage(
+  concerns: readonly AuditConcernTask[],
+  sessions: ReadonlyArray<{ taskId: string; sessionPath: string }>,
+): string {
+  const lines = sessions.map(({ taskId, sessionPath }) => {
+    const concern = concerns.find((item) => item.id === taskId);
+    const label = concern ? `${concern.order}. ${concern.subject}` : taskId;
+    return `- ${label}: ${sessionPath}`;
+  });
+  return `Concern audit transcripts:\n${lines.join("\n")}`;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -325,6 +388,13 @@ function persist(state: AuditState): AuditEffect {
           currentFinding: state.currentFinding,
           phase: state.phase,
         };
+      case "Failed":
+        return {
+          mode: "Failed",
+          failedPhase: state.failedPhase,
+          concerns: state.concerns,
+          message: state.message,
+        };
     }
   })();
 
@@ -353,6 +423,8 @@ export function getAuditStatusText(state: AuditState): string | undefined {
         : state.phase === "counseling"
           ? `audit: counsel fix ${state.currentFinding + 1}/${state.findings.length}`
           : `audit: fix ${state.currentFinding + 1}/${state.findings.length}`;
+    case "Failed":
+      return `audit: failed (${state.failedPhase})`;
   }
 }
 
@@ -371,6 +443,15 @@ function displayMessage(content: string, customType = "audit-trigger"): Executio
     content,
     display: true,
     triggerTurn: true,
+  });
+}
+
+function visibleMessage(content: string, customType = "audit-progress"): ExecutionEffect {
+  return executeTurn({
+    customType,
+    content,
+    display: true,
+    triggerTurn: false,
   });
 }
 
@@ -405,6 +486,7 @@ function cloneConcernTask(concern: AuditConcernTask): AuditConcernTask {
       description: concern.metadata.description,
       skills: [...concern.metadata.skills],
       notes: concern.metadata.notes,
+      sessionPath: concern.metadata.sessionPath,
     },
   };
 }
@@ -447,6 +529,24 @@ function setConcernNotes(
   );
 }
 
+function setConcernSessionPaths(
+  concerns: readonly AuditConcernTask[],
+  sessions: ReadonlyArray<{ taskId: string; sessionPath: string }>,
+): AuditConcernTask[] {
+  const byTaskId = new Map(sessions.map((session) => [session.taskId, session.sessionPath]));
+  return cloneConcernTasks(concerns).map((concern) => {
+    const sessionPath = byTaskId.get(concern.id);
+    if (!sessionPath) return concern;
+    return {
+      ...concern,
+      metadata: {
+        ...concern.metadata,
+        sessionPath,
+      },
+    };
+  });
+}
+
 function getActiveAuditConcerns(
   state: Extract<AuditState, { _tag: "Auditing" }>,
 ): AuditConcernTask[] {
@@ -461,9 +561,11 @@ function getConcernForCursor(
   return concernId === undefined ? undefined : concerns.find((concern) => concern.id === concernId);
 }
 
-function startConcernExecution(
-  concerns: readonly AuditConcernTask[],
-): { concerns: AuditConcernTask[]; cursor: GraphExecutionCursor; concern: AuditConcernTask } | null {
+function startConcernExecution(concerns: readonly AuditConcernTask[]): {
+  concerns: AuditConcernTask[];
+  cursor: GraphExecutionCursor;
+  concern: AuditConcernTask;
+} | null {
   const cursor = startGraphExecution(concerns, AUDIT_GRAPH_POLICY);
   if (!cursor) return null;
 
@@ -599,6 +701,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         state: next,
         effects: [
           statusEffectForState(next),
+          visibleMessage(buildAuditPhaseMessage(next)),
           triggerMessage(buildDetectionPrompt(next)),
           UI,
           persist(next),
@@ -654,7 +757,13 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       };
       return {
         state: next,
-        effects: [statusEffectForState(next), runConcernBatch(next), UI, persist(next)],
+        effects: [
+          statusEffectForState(next),
+          visibleMessage(buildAuditPhaseMessage(next)),
+          runConcernBatch(next),
+          UI,
+          persist(next),
+        ],
       };
     }
 
@@ -671,6 +780,23 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
             level: "error",
           },
           statusEffectForState(next),
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
+    // ----- ConcernSessionsPrepared -----
+    case "ConcernSessionsPrepared": {
+      if (state._tag !== "Auditing") return { state };
+      const next: AuditState = {
+        ...state,
+        concerns: setConcernSessionPaths(state.concerns, event.sessions),
+      };
+      return {
+        state: next,
+        effects: [
+          visibleMessage(buildConcernSessionMessage(next.concerns, event.sessions)),
           UI,
           persist(next),
         ],
@@ -712,6 +838,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           state: next,
           effects: [
             statusEffectForState(next),
+            visibleMessage(buildAuditPhaseMessage(next)),
             triggerMessage(buildSynthesisPrompt(next)),
             UI,
             persist(next),
@@ -733,11 +860,17 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
     // ----- ConcernAuditFailed -----
     case "ConcernAuditFailed": {
       if (state._tag !== "Auditing") return { state };
-      const next: AuditState = { _tag: "Idle" };
+      const next: AuditState = {
+        _tag: "Failed",
+        failedPhase: "auditing",
+        concerns: state.concerns,
+        message: event.message,
+      };
       return {
         state: next,
         effects: [
           { type: "notify", message: event.message, level: "error" },
+          visibleMessage(buildAuditPhaseMessage(next), "audit-error"),
           statusEffectForState(next),
           UI,
           persist(next),
@@ -755,6 +888,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           state: next,
           effects: [
             { type: "notify", message: "audit complete — no findings to fix", level: "info" },
+            visibleMessage("Audit complete. No actionable findings."),
             statusEffectForState(next),
             UI,
             persist(next),
@@ -774,6 +908,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         state: next,
         effects: [
           statusEffectForState(next),
+          visibleMessage(buildAuditPhaseMessage(next)),
           displayMessage(buildFixPrompt(first, 0, event.findings.length), "audit-fix"),
           UI,
           persist(next),
@@ -942,7 +1077,10 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       }
 
       if (event.mode === "Auditing" && event.scope && (event.concerns?.length ?? 0) > 0) {
-        const concernExecution = getHydratedConcernExecution(event.concerns ?? [], event.concernCursor);
+        const concernExecution = getHydratedConcernExecution(
+          event.concerns ?? [],
+          event.concernCursor,
+        );
         if (!concernExecution) {
           const next: AuditState = { _tag: "Idle" };
           return {
@@ -988,6 +1126,21 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           findings,
           currentFinding,
           phase,
+        };
+        return { state: next, effects: [statusEffectForState(next), UI] };
+      }
+
+      if (
+        event.mode === "Failed" &&
+        (event.concerns?.length ?? 0) > 0 &&
+        event.failedPhase &&
+        event.message
+      ) {
+        const next: AuditState = {
+          _tag: "Failed",
+          failedPhase: event.failedPhase,
+          concerns: event.concerns ?? [],
+          message: event.message,
         };
         return { state: next, effects: [statusEffectForState(next), UI] };
       }

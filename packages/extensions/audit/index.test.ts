@@ -155,9 +155,10 @@ describe("runConcernBatch", () => {
     const seenTasks: string[] = [];
 
     const results = await runConcernBatchWithSpawn(
-      runConcernBatch(state, "/tmp", "session-123", "Follow principles"),
+      runConcernBatch(state, "/tmp", "session-123", "Follow principles", new Map()),
       (config) => {
         seenTasks.push(config.task);
+        expect(config.sessionPath).toEqual(expect.stringContaining("_audit-"));
         const text = config.task.includes("correctness")
           ? "Found a null bug in src/app.tsx\n\nCONCERN_AUDITED"
           : "Frontend looks clean\nCONCERN_AUDITED";
@@ -174,8 +175,16 @@ describe("runConcernBatch", () => {
     expect(seenTasks[0]).toContain("Audit concern 1/2: correctness");
     expect(seenTasks[1]).toContain("Audit concern 2/2: frontend");
     expect(results).toEqual([
-      { taskId: "1", notes: "Found a null bug in src/app.tsx" },
-      { taskId: "2", notes: "Frontend looks clean" },
+      {
+        taskId: "1",
+        notes: "Found a null bug in src/app.tsx",
+        sessionPath: expect.stringContaining("_audit-1-correctness-"),
+      },
+      {
+        taskId: "2",
+        notes: "Frontend looks clean",
+        sessionPath: expect.stringContaining("_audit-2-frontend-"),
+      },
     ]);
   });
 
@@ -183,7 +192,7 @@ describe("runConcernBatch", () => {
     const state = createAuditingState(["1"]);
 
     const error = await runConcernBatchWithSpawn(
-      runConcernBatch(state, "/tmp", "session-123", undefined).pipe(Effect.flip),
+      runConcernBatch(state, "/tmp", "session-123", undefined, new Map()).pipe(Effect.flip),
       () =>
         Effect.succeed({
           exitCode: 0,
@@ -195,14 +204,15 @@ describe("runConcernBatch", () => {
     );
 
     expect(error).toBeInstanceOf(ConcernBatchError);
-    expect(error.message).toBe("subagent omitted completion marker");
+    expect(error.message).toContain("subagent omitted completion marker");
+    expect(error.message).toContain("Concern transcript:");
   });
 
   it("fails when the frontier references a missing concern", async () => {
     const state = createAuditingState(["3"]);
 
     const error = await runConcernBatchWithSpawn(
-      runConcernBatch(state, "/tmp", "session-123", undefined).pipe(Effect.flip),
+      runConcernBatch(state, "/tmp", "session-123", undefined, new Map()).pipe(Effect.flip),
       () =>
         Effect.succeed({
           exitCode: 0,
@@ -221,7 +231,7 @@ describe("runConcernBatch", () => {
     const state = createAuditingState(["1"]);
 
     const withErrorMessage = await runConcernBatchWithSpawn(
-      runConcernBatch(state, "/tmp", "session-123", undefined).pipe(Effect.flip),
+      runConcernBatch(state, "/tmp", "session-123", undefined, new Map()).pipe(Effect.flip),
       () =>
         Effect.succeed({
           exitCode: 1,
@@ -234,7 +244,7 @@ describe("runConcernBatch", () => {
     );
 
     const withStderr = await runConcernBatchWithSpawn(
-      runConcernBatch(state, "/tmp", "session-123", undefined).pipe(Effect.flip),
+      runConcernBatch(state, "/tmp", "session-123", undefined, new Map()).pipe(Effect.flip),
       () =>
         Effect.succeed({
           exitCode: 1,
@@ -246,7 +256,7 @@ describe("runConcernBatch", () => {
     );
 
     const withRawOutput = await runConcernBatchWithSpawn(
-      runConcernBatch(state, "/tmp", "session-123", undefined).pipe(Effect.flip),
+      runConcernBatch(state, "/tmp", "session-123", undefined, new Map()).pipe(Effect.flip),
       () =>
         Effect.succeed({
           exitCode: 1,
@@ -258,11 +268,14 @@ describe("runConcernBatch", () => {
     );
 
     expect(withErrorMessage).toBeInstanceOf(ConcernBatchError);
-    expect(withErrorMessage.message).toBe("typed failure");
+    expect(withErrorMessage.message).toContain("typed failure");
+    expect(withErrorMessage.message).toContain("Concern transcript:");
     expect(withStderr).toBeInstanceOf(ConcernBatchError);
-    expect(withStderr.message).toBe("stderr output");
+    expect(withStderr.message).toContain("stderr output");
+    expect(withStderr.message).toContain("Concern transcript:");
     expect(withRawOutput).toBeInstanceOf(ConcernBatchError);
-    expect(withRawOutput.message).toBe("raw output");
+    expect(withRawOutput.message).toContain("raw output");
+    expect(withRawOutput.message).toContain("Concern transcript:");
   });
 });
 
@@ -330,9 +343,12 @@ describe("audit extension", () => {
       sessionStart!.handler({}, ctx);
 
       expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: concern 2/2");
-      expect(ctx.ui.setWidget).toHaveBeenCalledWith("audit-progress", [
+      const widgetCalls = (ctx.ui.setWidget as ReturnType<typeof mock>).mock.calls;
+      expect(widgetCalls.at(-1)?.[0]).toBe("audit-progress");
+      expect(widgetCalls.at(-1)?.[1]).toEqual([
         "✔ correctness",
         "◼ Auditing frontend",
+        expect.stringContaining("session: /Users/cvr/.pi/agent/sessions/"),
       ]);
     });
   });
@@ -433,6 +449,54 @@ describe("audit extension", () => {
     expect(ctx.ui.setWidget).toHaveBeenCalledWith("audit-progress", [
       "  ✓ [critical] src/app.tsx",
       "  ▸ [warning] src/lib.ts (gating)",
+    ]);
+  });
+
+  it("restores persisted Failed state on session start with concern transcript paths", () => {
+    const harness = createMockExtensionApiHarness();
+    harness.setSessionEntries([
+      {
+        type: "custom",
+        customType: "audit",
+        data: {
+          mode: "Failed",
+          failedPhase: "auditing",
+          message: "spawn failure\n\nConcern transcript: /tmp/audit-1.jsonl",
+          concerns: [
+            {
+              id: "1",
+              order: 1,
+              subject: "correctness",
+              activeForm: "Auditing correctness",
+              status: "in_progress",
+              blockedBy: [],
+              metadata: {
+                description: "Bugs and soundness",
+                skills: ["code-review"],
+                sessionPath: "/tmp/audit-1.jsonl",
+              },
+            },
+          ],
+        },
+      },
+    ]);
+    auditExtension(harness.pi);
+
+    const ctx = harness.createContext();
+    const sessionStart = harness.getListener("session_start");
+    expect(sessionStart).toBeDefined();
+
+    sessionStart!.handler({}, ctx);
+
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: failed (auditing)");
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith("audit-progress", [
+      "✖ audit failed",
+      "  phase: auditing",
+      "  spawn failure",
+      "  ",
+      "  Concern transcript: /tmp/audit-1.jsonl",
+      "◼ Auditing correctness",
+      "  session: /tmp/audit-1.jsonl",
     ]);
   });
 });

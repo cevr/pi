@@ -213,11 +213,11 @@ function formatUI(state: ModesState, pi: ExtensionAPI, ctx: ExtensionContext): v
       break;
     }
     case "Spec":
-      ctx.ui.setStatus("modes", ctx.ui.theme.fg("warning", "⏸ spec"));
+      ctx.ui.setStatus("modes", ctx.ui.theme.fg("toolTitle", "⏸ spec"));
       ctx.ui.setWidget("modes-todos", undefined);
       break;
     case "AwaitingChoice":
-      ctx.ui.setStatus("modes", ctx.ui.theme.fg("warning", "⏸ task list"));
+      ctx.ui.setStatus("modes", ctx.ui.theme.fg("toolTitle", "⏸ task list"));
       ctx.ui.setWidget("modes-todos", undefined);
       break;
     case "Auto":
