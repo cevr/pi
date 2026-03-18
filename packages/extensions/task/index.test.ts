@@ -19,6 +19,8 @@ function writeTmpJson(dir: string, filename: string, data: unknown): string {
 function createMockExtensionApiHarness() {
   const tools: ToolDefinition[] = [];
   const listeners: Record<string, Function[]> = {};
+  const sentMessages: Array<{ message: unknown; options: unknown }> = [];
+  const emittedEvents: Array<{ channel: string; data: unknown }> = [];
 
   const pi = {
     registerTool(tool: ToolDefinition) {
@@ -27,12 +29,25 @@ function createMockExtensionApiHarness() {
     on(event: string, handler: Function) {
       (listeners[event] ??= []).push(handler);
     },
+    sendMessage(message: unknown, options?: unknown) {
+      sentMessages.push({ message, options });
+    },
+    events: {
+      emit(channel: string, data: unknown) {
+        emittedEvents.push({ channel, data });
+      },
+      on() {
+        return () => {};
+      },
+    },
   } as unknown as ExtensionAPI;
 
   return {
     pi,
     tools,
     listeners,
+    sentMessages,
+    emittedEvents,
     getTool(name: string) {
       const tool = tools.find((candidate) => candidate.name === name);
       if (!tool) {
@@ -79,6 +94,7 @@ describe("task extension", () => {
       "steer_task",
     ]);
     expect(withPromptPatchSpy).toHaveBeenCalledTimes(3);
+    expect(harness.listeners.context).toHaveLength(1);
     expect(harness.listeners.session_switch).toHaveLength(1);
     expect(harness.listeners.session_shutdown).toHaveLength(1);
   });
@@ -138,6 +154,7 @@ describe("task extension", () => {
       onToolActivity: () => () => {},
       onTextDelta: () => () => {},
       onSessionCreated: () => () => {},
+      onCompletion: () => () => {},
     };
     const getEnabledExtensionConfigSpy = mock(
       <T extends Record<string, unknown>>(_namespace: string, defaults: T) => ({
@@ -182,6 +199,176 @@ describe("task extension", () => {
       activeTools: ["read(demo.txt)"],
       latestTextDelta: "halfway there",
     });
+  });
+
+  it("pushes a completion notification for background tasks", async () => {
+    const record = {
+      id: "task-2",
+      description: "bg task",
+      prompt: "do the thing",
+      status: "completed",
+      startedAt: 1,
+      completedAt: 2,
+      messages: [],
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 },
+      output: "done",
+      outputFilePath: "/tmp/task.output.jsonl",
+      sessionFilePath: "/tmp/task.session.jsonl",
+      progress: {
+        phase: "completed",
+        turnCount: 1,
+        activeTools: [],
+        textDelta: "done",
+      },
+    };
+    let completionListener: ((record: typeof record) => void) | undefined;
+    let completionUnsubscribed = false;
+    const handle = {
+      id: "task-2",
+      result: Promise.resolve(record),
+      getRecord: () => ({ ...record, status: "running" as const, completedAt: undefined, progress: { ...record.progress, phase: "starting" as const } }),
+      wait: async () => record,
+      steer: async () => true,
+      abort: async () => {},
+      dispose: () => {},
+      onToolActivity: () => () => {},
+      onTextDelta: () => () => {},
+      onSessionCreated: () => () => {},
+      onCompletion: (listener: (record: typeof record) => void) => {
+        completionListener = listener;
+        return () => {
+          completionUnsubscribed = true;
+        };
+      },
+    };
+    const getEnabledExtensionConfigSpy = mock(
+      <T extends Record<string, unknown>>(_namespace: string, defaults: T) => ({
+        enabled: true,
+        config: defaults,
+      }),
+    );
+    const createTaskRunnerSpy = mock(() => handle);
+    const withPromptPatchSpy = mock((tool: ToolDefinition) => tool);
+    const extension = createTaskExtension({
+      createTaskRunner: createTaskRunnerSpy as typeof DEFAULT_DEPS.createTaskRunner,
+      getEnabledExtensionConfig:
+        getEnabledExtensionConfigSpy as typeof DEFAULT_DEPS.getEnabledExtensionConfig,
+      withPromptPatch: withPromptPatchSpy as typeof DEFAULT_DEPS.withPromptPatch,
+    });
+    const harness = createMockExtensionApiHarness();
+
+    extension(harness.pi);
+
+    const taskTool = harness.getTool("Task");
+    await taskTool.execute(
+      "tc-3",
+      { prompt: "do the thing", description: "bg task", background: true },
+      undefined,
+      undefined,
+      { cwd: process.cwd(), model: undefined, modelRegistry: { find: () => undefined } } as any,
+    );
+
+    completionListener?.(record);
+
+    expect(completionUnsubscribed).toBe(true);
+    expect(harness.emittedEvents).toEqual([
+      {
+        channel: "task:background-completed",
+        data: expect.objectContaining({
+          taskId: "task-2",
+          description: "bg task",
+          status: "completed",
+          output: "done",
+        }),
+      },
+    ]);
+    expect(harness.sentMessages).toEqual([
+      {
+        message: expect.objectContaining({
+          customType: "task-background-notification",
+          content: expect.stringContaining("Background task task-2 completed."),
+          details: expect.objectContaining({ taskId: "task-2", status: "completed" }),
+        }),
+        options: { deliverAs: "nextTurn" },
+      },
+    ]);
+  });
+
+  it("detaches completion notifications before session cleanup aborts tasks", async () => {
+    const record = {
+      id: "task-3",
+      description: "bg task",
+      prompt: "do the thing",
+      status: "completed",
+      startedAt: 1,
+      completedAt: 2,
+      messages: [],
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 },
+      output: "done",
+      outputFilePath: "/tmp/task.output.jsonl",
+      sessionFilePath: "/tmp/task.session.jsonl",
+      progress: {
+        phase: "completed",
+        turnCount: 1,
+        activeTools: [],
+        textDelta: "done",
+      },
+    };
+    let completionListener: ((record: typeof record) => void) | undefined;
+    let unsubscribed = false;
+    const handle = {
+      id: "task-3",
+      result: Promise.resolve(record),
+      getRecord: () => ({ ...record, status: "running" as const, completedAt: undefined, progress: { ...record.progress, phase: "starting" as const } }),
+      wait: async () => record,
+      steer: async () => true,
+      abort: async () => {
+        completionListener?.(record);
+      },
+      dispose: () => {},
+      onToolActivity: () => () => {},
+      onTextDelta: () => () => {},
+      onSessionCreated: () => () => {},
+      onCompletion: (listener: (record: typeof record) => void) => {
+        completionListener = listener;
+        return () => {
+          unsubscribed = true;
+          completionListener = undefined;
+        };
+      },
+    };
+    const getEnabledExtensionConfigSpy = mock(
+      <T extends Record<string, unknown>>(_namespace: string, defaults: T) => ({
+        enabled: true,
+        config: defaults,
+      }),
+    );
+    const createTaskRunnerSpy = mock(() => handle);
+    const withPromptPatchSpy = mock((tool: ToolDefinition) => tool);
+    const extension = createTaskExtension({
+      createTaskRunner: createTaskRunnerSpy as typeof DEFAULT_DEPS.createTaskRunner,
+      getEnabledExtensionConfig:
+        getEnabledExtensionConfigSpy as typeof DEFAULT_DEPS.getEnabledExtensionConfig,
+      withPromptPatch: withPromptPatchSpy as typeof DEFAULT_DEPS.withPromptPatch,
+    });
+    const harness = createMockExtensionApiHarness();
+
+    extension(harness.pi);
+
+    const taskTool = harness.getTool("Task");
+    await taskTool.execute(
+      "tc-4",
+      { prompt: "do the thing", description: "bg task", background: true },
+      undefined,
+      undefined,
+      { cwd: process.cwd(), model: undefined, modelRegistry: { find: () => undefined } } as any,
+    );
+
+    await harness.listeners.session_switch[0]?.();
+
+    expect(unsubscribed).toBe(true);
+    expect(harness.emittedEvents).toEqual([]);
+    expect(harness.sentMessages).toEqual([]);
   });
 
   it("falls back to defaults for invalid config and still registers", () => {

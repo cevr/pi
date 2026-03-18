@@ -103,10 +103,26 @@ export interface TaskConfig {
 
 type BackgroundState = {
   tasks: Map<string, TaskRunnerHandle>;
+  completionListeners: Map<string, () => void>;
 };
 
+interface TaskBackgroundNotificationDetails {
+  taskId: string;
+  description: string;
+  status: TaskRunnerStatus;
+  phase: TaskRecord["progress"]["phase"];
+  turnCount: number;
+  outputFilePath: string | null;
+  sessionFilePath: string | null;
+  output: string;
+  errorMessage?: string;
+}
+
+const TASK_BACKGROUND_NOTIFICATION_TYPE = "task-background-notification";
+const TASK_BACKGROUND_COMPLETED_EVENT = "task:background-completed";
+
 function createBackgroundState(): BackgroundState {
-  return { tasks: new Map() };
+  return { tasks: new Map(), completionListeners: new Map() };
 }
 
 function cloneMessageArray(messages: readonly Message[]): Message[] {
@@ -175,6 +191,62 @@ function getStatusLabel(status: TaskRunnerStatus): string {
   }
 }
 
+function getCompletionVerb(status: Exclude<TaskRunnerStatus, "running">): string {
+  switch (status) {
+    case "aborted":
+      return "aborted";
+    case "error":
+      return "failed";
+    default:
+      return "completed";
+  }
+}
+
+function truncateNotificationOutput(value: string, maxLength = 400): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLength) return trimmed;
+  return `${trimmed.slice(0, maxLength)}…`;
+}
+
+function buildBackgroundNotificationDetails(record: TaskRecord): TaskBackgroundNotificationDetails {
+  return {
+    taskId: record.id,
+    description: record.description,
+    status: record.status,
+    phase: record.progress.phase,
+    turnCount: record.progress.turnCount,
+    outputFilePath: record.outputFilePath,
+    sessionFilePath: record.sessionFilePath,
+    output: record.output,
+    errorMessage: record.errorMessage,
+  };
+}
+
+function isTaskBackgroundNotification(message: unknown): boolean {
+  if (typeof message !== "object" || message === null) return false;
+  const record = message as { role?: unknown; customType?: unknown };
+  return record.role === "custom" && record.customType === TASK_BACKGROUND_NOTIFICATION_TYPE;
+}
+
+function formatBackgroundCompletionMessage(record: TaskRecord): string {
+  if (record.status === "running") {
+    return `Background task ${record.id} is still running.`;
+  }
+
+  const verb = getCompletionVerb(record.status);
+  const references = buildReferenceBlock(record);
+  const output = truncateNotificationOutput(record.output || record.errorMessage || "(no output)");
+  return [
+    `Background task ${record.id} ${verb}.`,
+    `Task: ${record.description}`,
+    `Status: ${getStatusLabel(record.status)}`,
+    references || null,
+    `Output: ${output}`,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
 function formatProgressBlock(record: TaskRecord): string {
   const lines: string[] = [];
   const { progress } = record;
@@ -231,16 +303,51 @@ function renderTaskToolResult(result: any, expanded: boolean, theme: any, label:
   return container;
 }
 
+function detachBackgroundTaskCompletion(state: BackgroundState, taskId: string): void {
+  const unsubscribe = state.completionListeners.get(taskId);
+  if (!unsubscribe) return;
+  state.completionListeners.delete(taskId);
+  unsubscribe();
+}
+
 async function cleanupBackgroundTasks(state: BackgroundState): Promise<void> {
   const handles = [...state.tasks.values()];
   state.tasks.clear();
+  for (const handle of handles) {
+    detachBackgroundTaskCompletion(state, handle.id);
+  }
   await Promise.all(handles.map((handle) => handle.abort().catch(() => undefined)));
   for (const handle of handles) {
     handle.dispose();
   }
 }
 
+function registerBackgroundTaskCompletion(pi: ExtensionAPI, handle: TaskRunnerHandle): () => void {
+  let unsubscribe: (() => void) | undefined;
+  unsubscribe = handle.onCompletion((record) => {
+    if (record.status === "running") return;
+    unsubscribe?.();
+    unsubscribe = undefined;
+    const details = buildBackgroundNotificationDetails(record);
+    pi.events.emit(TASK_BACKGROUND_COMPLETED_EVENT, details);
+    pi.sendMessage(
+      {
+        customType: TASK_BACKGROUND_NOTIFICATION_TYPE,
+        content: formatBackgroundCompletionMessage(record),
+        display: true,
+        details,
+      },
+      { deliverAs: "nextTurn" },
+    );
+  });
+  return () => {
+    unsubscribe?.();
+    unsubscribe = undefined;
+  };
+}
+
 function createTaskTool(
+  pi: ExtensionAPI,
   backgroundState: BackgroundState,
   config: TaskConfig = {},
   createTaskRunnerFn: typeof createTaskRunner,
@@ -330,6 +437,7 @@ function createTaskTool(
 
       if (p.background) {
         backgroundState.tasks.set(handle.id, handle);
+        backgroundState.completionListeners.set(handle.id, registerBackgroundTaskCompletion(pi, handle));
         const record = handle.getRecord();
         const references = buildReferenceBlock(record);
         const progress = formatProgressBlock(record);
@@ -438,6 +546,7 @@ function createGetTaskResultTool(backgroundState: BackgroundState): ToolDefiniti
       }
 
       backgroundState.tasks.delete(record.id);
+      detachBackgroundTaskCompletion(backgroundState, record.id);
       handle.dispose();
 
       const statusLine = `Task ${record.id} ${getStatusLabel(record.status)}.`;
@@ -554,8 +663,12 @@ export function createTaskExtension(
       extensionTools: cfg.extensionTools,
     };
 
+    pi.on("context", async (event) => ({
+      messages: event.messages.filter((message) => !isTaskBackgroundNotification(message)),
+    }));
+
     for (const tool of [
-      createTaskTool(backgroundState, extensionConfig, deps.createTaskRunner),
+      createTaskTool(pi, backgroundState, extensionConfig, deps.createTaskRunner),
       createGetTaskResultTool(backgroundState),
       createSteerTaskTool(backgroundState),
     ]) {

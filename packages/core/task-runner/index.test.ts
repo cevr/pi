@@ -174,6 +174,7 @@ describe("createTaskRunner", () => {
     const toolProgress: string[][] = [];
     const textDeltas: string[] = [];
     const sessionCreated: string[] = [];
+    const completions: string[] = [];
 
     session.promptImpl = async () => {
       session.emit({ type: "turn_start", turnIndex: 0, timestamp: 1 } as AgentSessionEvent);
@@ -234,10 +235,14 @@ describe("createTaskRunner", () => {
         sessionCreated.push(record.outputFilePath);
       }
     });
+    handle.onCompletion((record) => {
+      completions.push(record.status);
+    });
 
     const result = await handle.wait();
 
     expect(sessionCreated).toHaveLength(1);
+    expect(completions).toEqual(["completed"]);
     expect(toolProgress).toEqual([["read(demo.txt)"], []]);
     expect(textDeltas).toEqual(["done"]);
     expect(result.progress).toMatchObject({

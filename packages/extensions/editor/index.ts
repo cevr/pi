@@ -14,7 +14,7 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner/pi-coding-agent";
 import { CustomEditor, Theme, estimateTokens } from "@mariozechner/pi-coding-agent";
 import type { TUI, EditorTheme, AutocompleteProvider } from "@mariozechner/pi-tui";
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { boxBorderLR, boxRow } from "@cvr/pi-box-chrome";
 import {
   composeEditorAutocompleteProvider,
@@ -52,8 +52,16 @@ interface SetModePayload {
   mode: EditorMode;
 }
 
+interface TaskBackgroundCompletedPayload {
+  taskId: string;
+  description: string;
+  status: "completed" | "error" | "aborted";
+}
+
 const SEPARATOR = " · ";
 const HORIZONTAL = "─";
+const BACKGROUND_TASK_SEGMENT_ID = "task-background";
+const BACKGROUND_TASK_SEGMENT_TTL_MS = 12_000;
 
 class LabeledEditor extends CustomEditor {
   private labels: Map<string, Label> = new Map();
@@ -432,6 +440,14 @@ function formatElapsed(ms: number): string {
   return `${m}m${rem > 0 ? `${rem}s` : ""}`;
 }
 
+export function formatBackgroundTaskSegmentText(payload: TaskBackgroundCompletedPayload): string {
+  const icon =
+    payload.status === "completed" ? "✓" : payload.status === "error" ? "✕" : "⊘";
+  const verb =
+    payload.status === "completed" ? "done" : payload.status === "error" ? "failed" : "aborted";
+  return `${icon} bg: ${payload.description} (${verb})`;
+}
+
 /**
  * shorten a tool name for display: "tool_execution" → "tool_execution",
  * but we also extract a meaningful arg when possible (e.g. file path).
@@ -494,6 +510,7 @@ function editorExtension(pi: ExtensionAPI): void {
   let gitBranch: string | null = null;
   let branchUnsub: (() => void) | null = null;
   let statusRow: WidgetRowRegistry | null = null;
+  let backgroundTaskClearTimer: ReturnType<typeof setTimeout> | null = null;
   const activity = createActivityState();
   const gitRuntime = ManagedRuntime.make(GitClient.layer.pipe(Layer.provide(ProcessRunner.layer)));
 
@@ -619,6 +636,31 @@ function editorExtension(pi: ExtensionAPI): void {
     });
   };
 
+  const clearBackgroundTaskSegment = (): void => {
+    if (backgroundTaskClearTimer) {
+      clearTimeout(backgroundTaskClearTimer);
+      backgroundTaskClearTimer = null;
+    }
+    statusRow?.remove(BACKGROUND_TASK_SEGMENT_ID);
+  };
+
+  const showBackgroundTaskSegment = (payload: TaskBackgroundCompletedPayload): void => {
+    if (!statusRow) return;
+    const text = formatBackgroundTaskSegmentText(payload);
+    statusRow.set(BACKGROUND_TASK_SEGMENT_ID, {
+      align: "center",
+      priority: 0,
+      renderInline: (maxWidth) => truncateToWidth(text, maxWidth),
+    });
+    if (backgroundTaskClearTimer) {
+      clearTimeout(backgroundTaskClearTimer);
+    }
+    backgroundTaskClearTimer = setTimeout(() => {
+      backgroundTaskClearTimer = null;
+      statusRow?.remove(BACKGROUND_TASK_SEGMENT_ID);
+    }, BACKGROUND_TASK_SEGMENT_TTL_MS);
+  };
+
   pi.on("agent_start", async (_event, ctx) => {
     // suppress native spinner text — we render our own below the editor
     ctx.ui.setWorkingMessage(" ");
@@ -669,22 +711,35 @@ function editorExtension(pi: ExtensionAPI): void {
     updateGitSegment(diffStats);
   });
 
-  pi.events.on("editor:set-label", (data: unknown) => {
+  const removeEditorSetLabelListener = pi.events.on("editor:set-label", (data: unknown) => {
     const payload = data as SetLabelPayload;
     if (!payload.key || !payload.text) return;
     editor?.setLabel(payload.key, payload.text, payload.position ?? "top", payload.align ?? "left");
   });
 
-  pi.events.on("editor:remove-label", (data: unknown) => {
+  const removeEditorRemoveLabelListener = pi.events.on("editor:remove-label", (data: unknown) => {
     const payload = data as RemoveLabelPayload;
     if (!payload.key) return;
     editor?.removeLabel(payload.key);
   });
 
-  pi.events.on("editor:set-mode", (data: unknown) => {
+  const removeEditorSetModeListener = pi.events.on("editor:set-mode", (data: unknown) => {
     const payload = data as SetModePayload;
     if (payload.mode !== "auto" && payload.mode !== "spec") return;
     editor?.setMode(payload.mode);
+  });
+
+  const removeBackgroundTaskListener = pi.events.on("task:background-completed", (data: unknown) => {
+    if (typeof data !== "object" || data === null) return;
+    const payload = data as Partial<TaskBackgroundCompletedPayload>;
+    if (
+      typeof payload.taskId !== "string" ||
+      typeof payload.description !== "string" ||
+      (payload.status !== "completed" && payload.status !== "error" && payload.status !== "aborted")
+    ) {
+      return;
+    }
+    showBackgroundTaskSegment(payload as TaskBackgroundCompletedPayload);
   });
 
   pi.on("model_select", async (_event, ctx) => {
@@ -699,12 +754,25 @@ function editorExtension(pi: ExtensionAPI): void {
     branchUnsub = null;
     gitBranch = null;
     stopSpinner();
+    clearBackgroundTaskSegment();
     activity.phase = "idle";
     activity.activeTools.clear();
     statusRow?.clear();
     statsCacheBranchLen.value = -1;
     editor?.setMode("auto");
     if (editor) updateStatsLabels(editor, pi, ctx, statsCacheBranchLen);
+  });
+
+  pi.on("session_shutdown", async () => {
+    removeBackgroundTaskListener();
+    removeEditorSetModeListener();
+    removeEditorRemoveLabelListener();
+    removeEditorSetLabelListener();
+    branchUnsub?.();
+    branchUnsub = null;
+    stopSpinner();
+    clearBackgroundTaskSegment();
+    await gitRuntime.dispose();
   });
 }
 

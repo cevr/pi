@@ -74,6 +74,7 @@ export interface TaskRunnerHandle {
   onToolActivity(listener: (progress: TaskRunnerProgress) => void): () => void;
   onTextDelta(listener: (delta: string, progress: TaskRunnerProgress) => void): () => void;
   onSessionCreated(listener: (record: TaskRecord) => void): () => void;
+  onCompletion(listener: (record: TaskRecord) => void): () => void;
 }
 
 export type TaskRunnerThinkingLevel =
@@ -368,12 +369,19 @@ type TaskRunnerMachineEffect =
   | { type: "emitSessionCreated" }
   | { type: "emitToolActivity" }
   | { type: "emitTextDelta"; delta: string }
+  | { type: "emitCompletion" }
   | { type: "flushTranscript" };
 
 function isActiveState(
   state: TaskRunnerMachineState,
 ): state is Extract<TaskRunnerMachineState, { _tag: "Starting" | "Running" | "Aborting" }> {
   return state._tag === "Starting" || state._tag === "Running" || state._tag === "Aborting";
+}
+
+function isTerminalState(
+  state: TaskRunnerMachineState,
+): state is Extract<TaskRunnerMachineState, { _tag: "Completed" | "Errored" | "Aborted" }> {
+  return state._tag === "Completed" || state._tag === "Errored" || state._tag === "Aborted";
 }
 
 function getStateRecord(state: TaskRunnerMachineState): TaskRecord {
@@ -540,7 +548,7 @@ const taskRunnerReducer: Reducer<
             _tag: "Aborted",
             record: withCompletion(state.record, "aborted", event.completedAt),
           },
-          effects: [{ type: "emitUpdate" }],
+          effects: [{ type: "emitUpdate" }, { type: "emitCompletion" }],
         };
       }
 
@@ -554,7 +562,7 @@ const taskRunnerReducer: Reducer<
               : "Aborted";
         return {
           state: { _tag: nextTag, record },
-          effects: [{ type: "emitUpdate" }],
+          effects: [{ type: "emitUpdate" }, { type: "emitCompletion" }],
         };
       }
 
@@ -569,7 +577,7 @@ const taskRunnerReducer: Reducer<
             _tag: "Aborted",
             record: withCompletion(record, "aborted", event.completedAt),
           },
-          effects: [{ type: "emitUpdate" }],
+          effects: [{ type: "emitUpdate" }, { type: "emitCompletion" }],
         };
       }
 
@@ -583,7 +591,7 @@ const taskRunnerReducer: Reducer<
         );
         return {
           state: { _tag: "Errored", record },
-          effects: [{ type: "emitUpdate" }],
+          effects: [{ type: "emitUpdate" }, { type: "emitCompletion" }],
         };
       }
   }
@@ -625,6 +633,7 @@ export function createTaskRunner(
   const toolActivityListeners = new Set<(progress: TaskRunnerProgress) => void>();
   const textDeltaListeners = new Set<(delta: string, progress: TaskRunnerProgress) => void>();
   const sessionCreatedListeners = new Set<(record: TaskRecord) => void>();
+  const completionListeners = new Set<(record: TaskRecord) => void>();
 
   const getRecordSnapshot = () => cloneRecord(getStateRecord(state));
 
@@ -669,6 +678,17 @@ export function createTaskRunner(
     }
   };
 
+  const emitCompletion = () => {
+    const snapshot = getRecordSnapshot();
+    for (const listener of completionListeners) {
+      try {
+        listener(snapshot);
+      } catch {
+        // ignore listener failures
+      }
+    }
+  };
+
   const flushTranscript = () => {
     if (!session) return;
     const record = getStateRecord(state);
@@ -696,6 +716,9 @@ export function createTaskRunner(
       case "emitTextDelta":
         emitTextDelta(effect.delta);
         break;
+      case "emitCompletion":
+        emitCompletion();
+        break;
       case "flushTranscript":
         flushTranscript();
         break;
@@ -721,6 +744,7 @@ export function createTaskRunner(
     toolActivityListeners.clear();
     textDeltaListeners.clear();
     sessionCreatedListeners.clear();
+    completionListeners.clear();
   };
 
   const flushPendingSteers = async () => {
@@ -841,6 +865,19 @@ export function createTaskRunner(
       }
       return () => {
         sessionCreatedListeners.delete(listener);
+      };
+    },
+    onCompletion(listener) {
+      completionListeners.add(listener);
+      if (isTerminalState(state)) {
+        try {
+          listener(getRecordSnapshot());
+        } catch {
+          // ignore listener failures
+        }
+      }
+      return () => {
+        completionListeners.delete(listener);
       };
     },
   };

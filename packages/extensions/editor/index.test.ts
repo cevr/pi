@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { ManagedRuntime } from "effect";
 import { GitClient } from "@cvr/pi-git-client";
-import { formatModelDisplay, getGitDiffStats } from "./index";
+import { formatBackgroundTaskSegmentText, formatModelDisplay, getGitDiffStats } from "./index";
 
 describe("editor extension", () => {
   describe("formatModelDisplay", () => {
@@ -15,6 +15,34 @@ describe("editor extension", () => {
       expect(formatModelDisplay("openrouter", "z-ai/glm-5")).toBe("(openrouter) z-ai/glm-5");
 
       expect(formatModelDisplay(undefined, "some-model")).toBe("some-model");
+    });
+  });
+
+  describe("formatBackgroundTaskSegmentText", () => {
+    it("formats completion states for the status row", () => {
+      expect(
+        formatBackgroundTaskSegmentText({
+          taskId: "task-1",
+          description: "index task progress",
+          status: "completed",
+        }),
+      ).toBe("✓ bg: index task progress (done)");
+
+      expect(
+        formatBackgroundTaskSegmentText({
+          taskId: "task-2",
+          description: "index task progress",
+          status: "error",
+        }),
+      ).toBe("✕ bg: index task progress (failed)");
+
+      expect(
+        formatBackgroundTaskSegmentText({
+          taskId: "task-3",
+          description: "index task progress",
+          status: "aborted",
+        }),
+      ).toBe("⊘ bg: index task progress (aborted)");
     });
   });
 
