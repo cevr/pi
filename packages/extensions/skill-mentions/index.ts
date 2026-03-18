@@ -7,7 +7,7 @@
  * on submit, `$skill-name` tokens matching known skills are expanded:
  * SKILL.md content is loaded and injected as hidden context.
  *
- * replaces the auto-skills extension (haiku-pruned hints). the `skill` tool
+ * replaces the auto-skills extension (model-pruned hints). the `skill` tool
  * remains registered separately for backward compat / model-initiated loading.
  */
 

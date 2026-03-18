@@ -43,7 +43,7 @@ type LibrarianExtensionDeps = {
 };
 
 export const CONFIG_DEFAULTS: LibrarianExtConfig = {
-  model: "anthropic/claude-sonnet-4-6",
+  model: "openai-codex/gpt-5.4-mini",
   extensionTools: ["read", "grep", "find", "ls", "bash", "web_search", "web_fetch"],
   builtinTools: ["read", "bash", "grep", "find", "ls"],
   promptFile: "",

@@ -4,7 +4,7 @@
  * fires on the `input` event so the name appears while the agent is still
  * thinking. names the session on the first message, then re-evaluates
  * every `renameInterval` messages (default 10) as the conversation topic
- * may drift. uses haiku for speed/cost.
+ * may drift. uses a compact model for speed/cost.
  */
 
 import * as piAi from "@mariozechner/pi-ai";
@@ -19,8 +19,8 @@ type SessionNameExtConfig = {
 
 export const CONFIG_DEFAULTS: SessionNameExtConfig = {
   model: {
-    provider: "anthropic",
-    id: "claude-haiku-4-5-20251001",
+    provider: "openai-codex",
+    id: "gpt-5.4-mini",
   },
   renameInterval: 10,
 };

@@ -55,8 +55,8 @@ type HandoffExtConfig = {
 export const CONFIG_DEFAULTS: HandoffExtConfig = {
   threshold: 0.85,
   model: {
-    provider: "anthropic",
-    id: "claude-sonnet-4-6",
+    provider: "openai-codex",
+    id: "gpt-5.4-mini",
   },
   promptFile: "",
   promptString: "",

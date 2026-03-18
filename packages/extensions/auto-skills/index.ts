@@ -3,7 +3,7 @@
  * Auto-Skills Extension — model-pruned skill hints.
  *
  * On session_start, gathers project signals (package.json deps, file markers)
- * and the full skill catalog. Spawns a cheap model (haiku) in the background
+ * and the full skill catalog. Spawns a cheap model in the background
  * to select which skills are relevant. Caches the result by project hash.
  *
  * The pruned hint list is injected via before_agent_start — identical every
@@ -26,7 +26,7 @@ import { Effect, ManagedRuntime } from "effect";
 // ---------------------------------------------------------------------------
 
 const CACHE_DIR = path.join(os.homedir(), ".pi", "auto-skills");
-const PRUNER_MODEL = "anthropic/claude-haiku-4-5-20251001";
+const PRUNER_MODEL = "openai-codex/gpt-5.4-mini";
 
 // ---------------------------------------------------------------------------
 // Project signal gathering
@@ -217,7 +217,7 @@ export default function autoSkillsExtension(pi: ExtensionAPI): void {
       return;
     }
 
-    // Background: spawn haiku to prune skills
+    // Background: spawn a small model to prune skills
     const catalog = getSkillCatalog(cwd);
     if (catalog.length === 0) return;
 
