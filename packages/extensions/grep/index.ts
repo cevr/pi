@@ -14,6 +14,7 @@
  * shadows pi's built-in `grep` tool via same-name registration.
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
@@ -85,8 +86,50 @@ function truncateLine(line: string, maxChars: number): string {
   return line.slice(0, maxChars) + "...";
 }
 
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+const BINARY_SNIFF_BYTES = 8_000;
+
 function looksLikeRegex(pattern: string): boolean {
   return /[{}()[\]|\\+*?^$]/.test(pattern);
+}
+
+function isImagePath(filePath: string): boolean {
+  return IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+function isProbablyBinaryFile(filePath: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(BINARY_SNIFF_BYTES);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+
+    for (let i = 0; i < bytesRead; i++) {
+      if (buffer[i] === 0) return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      fs.closeSync(fd);
+    }
+  }
+}
+
+function getUnsupportedSearchTarget(filePath: string): "image" | "binary" | undefined {
+  if (!fs.existsSync(filePath)) return undefined;
+
+  try {
+    if (!fs.statSync(filePath).isFile()) return undefined;
+  } catch {
+    return undefined;
+  }
+
+  if (isImagePath(filePath)) return "image";
+  if (isProbablyBinaryFile(filePath)) return "binary";
+  return undefined;
 }
 
 // --- structured data for visual rendering ---
@@ -99,6 +142,7 @@ interface GrepMatch {
 
 interface GrepFile {
   path: string;
+  absolutePath: string;
   matches: GrepMatch[];
   hitLimit: boolean;
 }
@@ -225,6 +269,23 @@ export function createGrepTool(
           ? p.path
           : path.resolve(ctx.cwd, p.path)
         : ctx.cwd;
+      const runnerCwd = p.path ? path.dirname(searchPath) : ctx.cwd;
+      const unsupportedTarget = p.path ? getUnsupportedSearchTarget(searchPath) : undefined;
+
+      if (unsupportedTarget) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                unsupportedTarget === "image"
+                  ? `grep can't search image files: ${searchPath}\n\nuse read on this absolute path instead so pi can inspect the image.`
+                  : `grep can't search binary files: ${searchPath}\n\nuse read on this absolute path instead, or point grep at a text file/directory.`,
+            },
+          ],
+          isError: true,
+        } as any;
+      }
 
       if (!runtime) {
         return {
@@ -260,7 +321,7 @@ export function createGrepTool(
             const runner = yield* ProcessRunner;
             return yield* runner.run("rg", {
               args,
-              cwd: searchPath,
+              cwd: runnerCwd,
               signal,
             });
           }),
@@ -283,10 +344,14 @@ export function createGrepTool(
 
           if (event.type !== "match" && event.type !== "context") continue;
 
-          const filePath: string | undefined = event.data?.path?.text;
+          const rawFilePath: string | undefined = event.data?.path?.text;
           const lineNumber: number | undefined = event.data?.line_number;
           const lineText: string = (event.data?.lines?.text ?? "").replace(/\r?\n$/, "");
-          if (!filePath || typeof lineNumber !== "number") continue;
+          if (!rawFilePath || typeof lineNumber !== "number") continue;
+
+          const filePath = path.isAbsolute(rawFilePath)
+            ? rawFilePath
+            : path.resolve(runnerCwd, rawFilePath);
 
           if (event.type === "match") {
             totalMatches++;
@@ -385,6 +450,7 @@ export function createGrepTool(
 
           const grepFile: GrepFile = {
             path: displayPath,
+            absolutePath: filePath,
             matches: [],
             hitLimit: matchesInFile > config.maxPerFile,
           };
@@ -510,7 +576,6 @@ export function createGrepTool(
     renderResult(result: any, { expanded }: { expanded: boolean }, _theme: any) {
       const fileGroups: GrepFile[] | undefined = result.details?.fileGroups;
       const notices: string[] = result.details?.notices ?? [];
-      const basePath: string | undefined = result.details?.searchPath;
 
       // fallback for old results or error results without fileGroups
       if (!fileGroups?.length) {
@@ -520,19 +585,14 @@ export function createGrepTool(
 
       const sections = grepToSections(fileGroups, config.maxPerFile);
 
-      // wrap section headers in OSC 8 file:// links
-      if (basePath) {
-        for (let i = 0; i < sections.length; i++) {
-          const fg = fileGroups[i];
-          const section = sections[i];
-          if (!fg || !section) continue;
-          const relPath = fg.path;
-          const absPath = basePath + "/" + relPath;
-          sections[i] = {
-            ...section,
-            header: osc8Link(`file://${absPath}`, section.header ?? ""),
-          };
-        }
+      for (let i = 0; i < sections.length; i++) {
+        const fg = fileGroups[i];
+        const section = sections[i];
+        if (!fg || !section) continue;
+        sections[i] = {
+          ...section,
+          header: osc8Link(`file://${fg.absolutePath}`, section.header ?? ""),
+        };
       }
 
       return boxRendererWindowed(
