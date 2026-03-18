@@ -1,5 +1,5 @@
 /**
- * Plan Mode Extension — thin wiring layer.
+ * Modes extension — thin wiring layer.
  *
  * Delegates all state transitions to machine.ts via pi-state-machine.
  * Handles pi API interactions, theme formatting, file I/O, and async UI.
@@ -21,11 +21,11 @@ import { register } from "@cvr/pi-state-machine";
 import type { Command, StateObserver } from "@cvr/pi-state-machine";
 import { Layer, ManagedRuntime } from "effect";
 import {
-  PLAN_MODE_TOOLS,
-  planReducer,
-  type PlanEffect,
-  type PlanEvent,
-  type PlanState,
+  PLAN_TOOLS,
+  modesReducer,
+  type ModesEffect,
+  type ModesEvent,
+  type ModesState,
   type PersistPayload,
 } from "./machine";
 import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils";
@@ -35,6 +35,8 @@ import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } fr
 // ---------------------------------------------------------------------------
 
 const PLANS_DIR = path.join(os.homedir(), ".pi", "plans");
+
+type EditorMode = "auto" | "plan";
 
 function ensurePlansDir(): void {
   fs.mkdirSync(PLANS_DIR, { recursive: true });
@@ -53,21 +55,19 @@ function generatePlanPath(firstStep: string): string {
 function writePlanFileToDisk(planPath: string, fullText: string, items: TodoItem[]): void {
   ensurePlansDir();
   const checklist = items
-    .map((t) => `- [${t.completed ? "x" : " "}] ${t.step}. ${t.text}`)
+    .map((todo) => `- [${todo.completed ? "x" : " "}] ${todo.step}. ${todo.text}`)
     .join("\n");
-  fs.writeFileSync(
-    planPath,
-    `# Plan\n\n${checklist}\n\n---\n\n## Full Plan\n\n${fullText}\n`,
-    "utf-8",
-  );
+  fs.writeFileSync(planPath, `# Plan\n\n${checklist}\n\n---\n\n## Full Plan\n\n${fullText}\n`, "utf-8");
 }
 
 function updatePlanFileToDisk(planPath: string, items: TodoItem[]): void {
   if (!fs.existsSync(planPath)) return;
+
   const content = fs.readFileSync(planPath, "utf-8");
   const checklist = items
-    .map((t) => `- [${t.completed ? "x" : " "}] ${t.step}. ${t.text}`)
+    .map((todo) => `- [${todo.completed ? "x" : " "}] ${todo.step}. ${todo.text}`)
     .join("\n");
+
   fs.writeFileSync(
     planPath,
     content.replace(/# Plan\n\n[\s\S]*?\n\n---/, `# Plan\n\n${checklist}\n\n---`),
@@ -79,8 +79,8 @@ function updatePlanFileToDisk(planPath: string, items: TodoItem[]): void {
 // Message helpers
 // ---------------------------------------------------------------------------
 
-function isAssistantMessage(m: PiMessage): m is AssistantMessage {
-  return m.role === "assistant" && Array.isArray(m.content);
+function isAssistantMessage(message: PiMessage): message is AssistantMessage {
+  return message.role === "assistant" && Array.isArray(message.content);
 }
 
 function getTextContent(message: AssistantMessage): string {
@@ -90,41 +90,46 @@ function getTextContent(message: AssistantMessage): string {
     .join("\n");
 }
 
+function getEditorMode(state: ModesState): EditorMode {
+  return state._tag === "Auto" ? "auto" : "plan";
+}
+
 // ---------------------------------------------------------------------------
 // UI formatting (theme-dependent — can't live in pure reducer)
 // ---------------------------------------------------------------------------
 
-function formatUI(state: PlanState, ctx: ExtensionContext): void {
+function formatUI(state: ModesState, pi: ExtensionAPI, ctx: ExtensionContext): void {
+  pi.events.emit("editor:set-mode", { mode: getEditorMode(state) });
+  if (!ctx.hasUI) return;
+
   switch (state._tag) {
     case "Executing": {
-      if (state.todoItems.length > 0) {
-        const completed = state.todoItems.filter((t) => t.completed).length;
-        const phaseSuffix =
-          state.phase !== "running" ? ` ${state.phase === "gating" ? "⚙ gate" : "🔍 counsel"}` : "";
-        ctx.ui.setStatus(
-          "plan-mode",
-          ctx.ui.theme.fg("accent", `📋 ${completed}/${state.todoItems.length}${phaseSuffix}`),
-        );
-        ctx.ui.setWidget(
-          "plan-todos",
-          state.todoItems.map((item) =>
-            item.completed
-              ? ctx.ui.theme.fg("success", "☑ ") +
-                ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(item.text))
-              : `${ctx.ui.theme.fg("muted", "☐ ")}${item.text}`,
-          ),
-        );
-      }
+      const completed = state.todoItems.filter((todo) => todo.completed).length;
+      const phaseSuffix =
+        state.phase !== "running" ? ` ${state.phase === "gating" ? "⚙ gate" : "🔍 counsel"}` : "";
+      ctx.ui.setStatus(
+        "modes",
+        ctx.ui.theme.fg("accent", `📋 ${completed}/${state.todoItems.length}${phaseSuffix}`),
+      );
+      ctx.ui.setWidget(
+        "modes-todos",
+        state.todoItems.map((todo) =>
+          todo.completed
+            ? ctx.ui.theme.fg("success", "☑ ") +
+              ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(todo.text))
+            : `${ctx.ui.theme.fg("muted", "☐ ")}${todo.text}`,
+        ),
+      );
       break;
     }
     case "Planning":
     case "AwaitingChoice":
-      ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "⏸ plan"));
-      ctx.ui.setWidget("plan-todos", undefined);
+      ctx.ui.setStatus("modes", ctx.ui.theme.fg("warning", "⏸ plan"));
+      ctx.ui.setWidget("modes-todos", undefined);
       break;
-    case "Inactive":
-      ctx.ui.setStatus("plan-mode", undefined);
-      ctx.ui.setWidget("plan-todos", undefined);
+    case "Auto":
+      ctx.ui.setStatus("modes", undefined);
+      ctx.ui.setWidget("modes-todos", undefined);
       break;
   }
 }
@@ -133,21 +138,23 @@ function formatUI(state: PlanState, ctx: ExtensionContext): void {
 // Diff context formatting
 // ---------------------------------------------------------------------------
 
-function buildDiffContextBlock(dc: DiffContext): string {
-  if (dc.changedFiles.length === 0) return "";
-  const files = dc.changedFiles.map((f) => `- ${f}`).join("\n");
+function buildDiffContextBlock(diffContext: DiffContext): string {
+  if (diffContext.changedFiles.length === 0) return "";
+
+  const files = diffContext.changedFiles.map((file) => `- ${file}`).join("\n");
   const skills =
-    dc.skillCatalog.length > 0
-      ? `\n\n## Available Skills\n${dc.skillCatalog.map((s) => `- ${s.name}: ${s.description}`).join("\n")}`
+    diffContext.skillCatalog.length > 0
+      ? `\n\n## Available Skills\n${diffContext.skillCatalog.map((skill) => `- ${skill.name}: ${skill.description}`).join("\n")}`
       : "";
-  return `\n\n## Branch Changes (vs ${dc.baseBranch})\n${dc.diffStat}\n\n${files}${skills}`;
+
+  return `\n\n## Branch Changes (vs ${diffContext.baseBranch})\n${diffContext.diffStat}\n\n${files}${skills}`;
 }
 
 // ---------------------------------------------------------------------------
 // Extension factory
 // ---------------------------------------------------------------------------
 
-export default function planModeExtension(pi: ExtensionAPI): void {
+export default function modesExtension(pi: ExtensionAPI): void {
   const gitRuntime = ManagedRuntime.make(GitClient.layer.pipe(Layer.provide(ProcessRunner.layer)));
 
   pi.on("session_shutdown" as any, async () => {
@@ -155,7 +162,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
   });
 
   // ----- Effect interpreter -----
-  function interpretEffect(effect: PlanEffect, _pi: ExtensionAPI, ctx: ExtensionContext): void {
+  function interpretEffect(effect: ModesEffect, pi: ExtensionAPI, ctx: ExtensionContext): void {
     switch (effect.type) {
       case "writePlanFile":
         writePlanFileToDisk(effect.planFilePath, effect.planText, effect.todoItems);
@@ -164,16 +171,16 @@ export default function planModeExtension(pi: ExtensionAPI): void {
         updatePlanFileToDisk(effect.planFilePath, effect.todoItems);
         break;
       case "persistState":
-        pi.appendEntry("plan-mode", effect.state);
+        pi.appendEntry("modes", effect.state);
         break;
       case "updateUI":
-        formatUI(machine.getState(), ctx);
+        formatUI(machine.getState(), pi, ctx);
         break;
     }
   }
 
   // ----- Commands -----
-  const commands: Command<PlanState, PlanEvent>[] = [
+  const commands: Command<ModesState, ModesEvent>[] = [
     {
       mode: "query",
       name: "todos",
@@ -192,7 +199,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
           return;
         }
         const list = todoItems
-          .map((item, i) => `${i + 1}. ${item.completed ? "✓" : "○"} ${item.text}`)
+          .map((item, index) => `${index + 1}. ${item.completed ? "✓" : "○"} ${item.text}`)
           .join("\n");
         const planFilePath =
           state._tag === "Planning"
@@ -209,16 +216,17 @@ export default function planModeExtension(pi: ExtensionAPI): void {
   ];
 
   // ----- Observer: AwaitingChoice async UI -----
-  const awaitingChoiceObserver: StateObserver<PlanState, PlanEvent> = {
-    match: (s) => s._tag === "AwaitingChoice",
+  const awaitingChoiceObserver: StateObserver<ModesState, ModesEvent> = {
+    match: (state) => state._tag === "AwaitingChoice",
     handler: async (_state, sendIfCurrent, ctx) => {
       if (!ctx.hasUI) {
         sendIfCurrent({ _tag: "ChooseExecute" });
         return;
       }
-      const choice = await ctx.ui.select("Plan mode - what next?", [
+
+      const choice = await ctx.ui.select("PLAN mode — what next?", [
         "Execute the plan",
-        "Stay in plan mode",
+        "Stay in PLAN mode",
         "Refine the plan",
       ]);
 
@@ -232,19 +240,18 @@ export default function planModeExtension(pi: ExtensionAPI): void {
           sendIfCurrent({ _tag: "ChooseStay" });
         }
       } else {
-        // "Stay in plan mode" or dismissed — transition back to Planning
         sendIfCurrent({ _tag: "ChooseStay" });
       }
     },
   };
 
   // ----- Register machine -----
-  const machine = register<PlanState, PlanEvent, PlanEffect>(
+  const machine = register<ModesState, ModesEvent, ModesEffect>(
     pi,
     {
-      id: "plan-mode",
-      initial: { _tag: "Inactive" },
-      reducer: planReducer,
+      id: "modes",
+      initial: { _tag: "Auto" },
+      reducer: modesReducer,
 
       events: {
         tool_call: {
@@ -256,7 +263,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
             if (!isSafeCommand(command)) {
               return {
                 block: true,
-                reason: `Plan mode: command blocked (not allowlisted). Use /plan to disable plan mode first.\nCommand: ${command}`,
+                reason: `PLAN mode: command blocked (not allowlisted). Use Shift+Tab or /plan to return to AUTO mode first.\nCommand: ${command}`,
               };
             }
           },
@@ -265,20 +272,22 @@ export default function planModeExtension(pi: ExtensionAPI): void {
         context: {
           mode: "reply",
           handle: (state, event) => ({
-            messages: event.messages.filter((m: any) => {
-              if (m.customType === "plan-mode-context") return false;
-              if (m.customType === "plan-execution-context") return false;
-              if (typeof m.customType === "string" && m.customType.startsWith("plan-gate"))
+            messages: event.messages.filter((message: any) => {
+              if (message.customType === "modes-context") return false;
+              if (message.customType === "modes-execution-context") return false;
+              if (typeof message.customType === "string" && message.customType.startsWith("modes-gate")) {
                 return false;
-              if (typeof m.customType === "string" && m.customType.startsWith("plan-counsel"))
+              }
+              if (typeof message.customType === "string" && message.customType.startsWith("modes-counsel")) {
                 return false;
-              if (m.role !== "user") return true;
-              if (state._tag === "Inactive") {
-                const content = m.content;
+              }
+              if (message.role !== "user") return true;
+              if (state._tag === "Auto") {
+                const content = message.content;
                 if (typeof content === "string") return !content.includes("[PLAN MODE ACTIVE]");
                 if (Array.isArray(content)) {
                   return !content.some(
-                    (c: any) => c.type === "text" && c.text?.includes("[PLAN MODE ACTIVE]"),
+                    (block: any) => block.type === "text" && block.text?.includes("[PLAN MODE ACTIVE]"),
                   );
                 }
               }
@@ -299,12 +308,12 @@ export default function planModeExtension(pi: ExtensionAPI): void {
                   : "";
               return {
                 message: {
-                  customType: "plan-mode-context",
+                  customType: "modes-context",
                   content: `[PLAN MODE ACTIVE]
 You are in plan mode - a read-only exploration mode for safe code analysis.
 
 Restrictions:
-- You can only use: ${PLAN_MODE_TOOLS.join(", ")}
+- You can only use: ${PLAN_TOOLS.join(", ")}
 - You CANNOT use: edit, write (file modifications are disabled)
 - Bash is restricted to an allowlist of read-only commands
 - Use the interview tool to ask the user clarifying questions about scope
@@ -326,14 +335,14 @@ Do NOT attempt to make changes - just describe what you would do.${diffBlock}${p
             if (state._tag === "Executing" && state.todoItems.length > 0) {
               const principles = readPrinciples();
               const principlesBlock = principles ? `\n\n${principles}` : "";
-              const remaining = state.todoItems.filter((t) => !t.completed);
-              const todoList = remaining.map((t) => `${t.step}. ${t.text}`).join("\n");
+              const remaining = state.todoItems.filter((todo) => !todo.completed);
+              const todoList = remaining.map((todo) => `${todo.step}. ${todo.text}`).join("\n");
               const planRef = state.planFilePath
                 ? `\n\nThe full plan is saved at: ${state.planFilePath}\nRead it if you need the full context.`
                 : "";
               return {
                 message: {
-                  customType: "plan-execution-context",
+                  customType: "modes-execution-context",
                   content: `[EXECUTING PLAN - Full tool access enabled]
 
 Remaining steps:
@@ -352,15 +361,14 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
 
         turn_end: {
           mode: "fire",
-          toEvent: (state, event): PlanEvent | null => {
+          toEvent: (state, event): ModesEvent | null => {
             if (state._tag !== "Executing" || state.todoItems.length === 0) return null;
             if (!isAssistantMessage(event.message)) return null;
 
             const text = getTextContent(event.message);
-            const updatedItems = state.todoItems.map((t) => ({ ...t }));
+            const updatedItems = state.todoItems.map((todo) => ({ ...todo }));
             const marked = markCompletedSteps(text, updatedItems);
             if (marked > 0) {
-              // Fire TaskDone after updating todo state to trigger gating
               queueMicrotask(() => {
                 if (state.phase === "running") {
                   machine.send({ _tag: "TaskDone" });
@@ -374,12 +382,11 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
 
         agent_end: {
           mode: "fire",
-          toEvent: (state, event, _ctx): PlanEvent | null => {
+          toEvent: (state, event): ModesEvent | null => {
             if (state._tag === "Executing" && state.todoItems.length > 0) {
               const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
               const text = lastAssistant ? getTextContent(lastAssistant) : "";
 
-              // Gated sub-phase detection
               if (state.phase === "gating") {
                 if (/GATE_PASS/i.test(text)) return { _tag: "GatePass" };
                 if (/GATE_FAIL/i.test(text)) return { _tag: "GateFail" };
@@ -391,7 +398,7 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
                 return null;
               }
 
-              return state.todoItems.every((t) => t.completed)
+              return state.todoItems.every((todo) => todo.completed)
                 ? { _tag: "ExecutionComplete" }
                 : null;
             }
@@ -416,45 +423,41 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
 
         session_switch: {
           mode: "fire",
-          toEvent: (): PlanEvent => ({ _tag: "Reset" }),
+          toEvent: (): ModesEvent => {
+            pi.events.emit("editor:set-mode", { mode: "auto" });
+            return { _tag: "Reset" };
+          },
         },
 
         session_start: {
           mode: "fire",
-          toEvent: (_state, _event, ctx): PlanEvent => {
+          toEvent: (_state, _event, ctx): ModesEvent => {
             const entries = ctx.sessionManager.getEntries();
-            const planModeEntry = entries
-              .filter((e: any) => e.type === "custom" && e.customType === "plan-mode")
+            const modesEntry = entries
+              .filter((entry: any) => entry.type === "custom" && entry.customType === "modes")
               .pop() as { data?: PersistPayload } | undefined;
 
-            const data = planModeEntry?.data;
+            const data = modesEntry?.data;
             const mode = data?.mode;
             const pending = data?.pending;
-            let todoItems = pending?.todoItems ?? data?.todos ?? [];
-            const executing = data?.executing ?? mode === "Executing";
+            let todoItems = pending?.todoItems ?? data?.todoItems ?? [];
             const planFilePath = pending?.planFilePath ?? data?.planFilePath ?? null;
             const savedTools = data?.savedTools ?? null;
-            const enabled = data?.enabled ?? (mode === "Planning" || mode === "AwaitingChoice");
             const flagPlan = pi.getFlag("plan") === true;
 
-            // Re-scan messages for completion markers on resume
-            if (planModeEntry && executing && todoItems.length > 0) {
-              todoItems = todoItems.map((t) => ({ ...t }));
+            if (modesEntry && mode === "Executing" && todoItems.length > 0) {
+              todoItems = todoItems.map((todo) => ({ ...todo }));
               let executeIndex = -1;
-              for (let i = entries.length - 1; i >= 0; i--) {
-                if ((entries[i] as any).customType === "plan-mode-execute") {
-                  executeIndex = i;
+              for (let index = entries.length - 1; index >= 0; index--) {
+                if ((entries[index] as any).customType === "modes-execute") {
+                  executeIndex = index;
                   break;
                 }
               }
               const messages: AssistantMessage[] = [];
-              for (let i = executeIndex + 1; i < entries.length; i++) {
-                const entry = entries[i] as any;
-                if (
-                  entry.type === "message" &&
-                  "message" in entry &&
-                  isAssistantMessage(entry.message)
-                ) {
+              for (let index = executeIndex + 1; index < entries.length; index++) {
+                const entry = entries[index] as any;
+                if (entry.type === "message" && "message" in entry && isAssistantMessage(entry.message)) {
                   messages.push(entry.message as AssistantMessage);
                 }
               }
@@ -464,9 +467,7 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
             return {
               _tag: "Hydrate",
               mode,
-              enabled,
               todoItems,
-              executing,
               planFilePath,
               savedTools,
               pending,
@@ -481,9 +482,9 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
 
       shortcuts: [
         {
-          key: Key.ctrlAlt("p"),
-          description: "Toggle plan mode",
-          toEvent: (): PlanEvent => ({ _tag: "Toggle", currentTools: pi.getActiveTools() }),
+          key: Key.shift("tab"),
+          description: "Toggle AUTO/PLAN mode",
+          toEvent: (): ModesEvent => ({ _tag: "Toggle", currentTools: pi.getActiveTools() }),
         },
       ],
 
@@ -492,7 +493,7 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
       flags: [
         {
           name: "plan",
-          description: "Start in plan mode (read-only exploration)",
+          description: "Start in PLAN mode (read-only exploration)",
           type: "boolean",
           default: false,
         },
@@ -503,19 +504,20 @@ After completing a step, include a [DONE:n] tag in your response.${principlesBlo
 
   // ----- /plan command (imperative — async diff context gathering) -----
   pi.registerCommand("plan", {
-    description: "Toggle plan mode. /plan <prompt> enters plan mode and sends the prompt.",
+    description: "Toggle PLAN mode. Shift+Tab also toggles it. /plan <prompt> enters PLAN mode and sends the prompt.",
     handler: async (args, ctx) => {
       const prompt = args.trim();
       const currentTools = pi.getActiveTools();
-
-      // If toggling off, no need for diff context
       const state = machine.getState();
-      if (!prompt && (state._tag === "Planning" || state._tag === "AwaitingChoice")) {
+
+      if (
+        !prompt &&
+        (state._tag === "Planning" || state._tag === "AwaitingChoice" || state._tag === "Executing")
+      ) {
         machine.send({ _tag: "Toggle", currentTools });
         return;
       }
 
-      // Gather diff context (best-effort — don't block on failure)
       let diffContext: DiffContext | undefined;
       try {
         diffContext = await gatherDiffContext(ctx.cwd, gitRuntime);

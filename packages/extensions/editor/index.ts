@@ -46,12 +46,19 @@ interface RemoveLabelPayload {
   key: string;
 }
 
+type EditorMode = "auto" | "plan";
+
+interface SetModePayload {
+  mode: EditorMode;
+}
+
 const SEPARATOR = " · ";
 const HORIZONTAL = "─";
 
 class LabeledEditor extends CustomEditor {
   private labels: Map<string, Label> = new Map();
   private appTheme: Theme;
+  private mode: EditorMode = "auto";
   private baseAutocompleteProvider: AutocompleteProvider | null = null;
   private borderCache: Record<"top" | "bottom", { key: string; line: string } | null> = {
     top: null,
@@ -69,9 +76,22 @@ class LabeledEditor extends CustomEditor {
     this.appTheme = appTheme;
   }
 
-  /** always-dim color for box chrome (corners, lines, rails) */
-  private dim(str: string): string {
-    return this.appTheme.fg("dim", str);
+  private chrome(str: string): string {
+    return this.appTheme.fg(this.mode === "plan" ? "warning" : "dim", str);
+  }
+
+  setMode(mode: EditorMode): void {
+    this.mode = mode;
+    this.setLabel(
+      "mode",
+      this.appTheme.fg(mode === "plan" ? "warning" : "muted", mode.toUpperCase()),
+      "bottom",
+      "left",
+    );
+    this.borderCache = {
+      top: null,
+      bottom: null,
+    };
   }
 
   setLabel(
@@ -137,11 +157,11 @@ class LabeledEditor extends CustomEditor {
 
     const rightParts = [rightText, scrollIndicator].filter(Boolean);
     const rightCombined = rightParts.join(SEPARATOR);
-    const cacheKey = `${outerWidth}|${position}|${leftText}|${rightCombined}`;
+    const cacheKey = `${this.mode}|${outerWidth}|${position}|${leftText}|${rightCombined}`;
     const cached = this.borderCache[position];
     if (cached?.key === cacheKey) return cached.line;
 
-    const chrome = { dim: (s: string) => this.dim(s) };
+    const chrome = { dim: (s: string) => this.chrome(s) };
     const innerWidth = outerWidth - 2; // strip corner characters
 
     const line = boxBorderLR({
@@ -194,7 +214,7 @@ class LabeledEditor extends CustomEditor {
     const bottomIdx = this.findBottomBorderIndex(lines);
     const result: string[] = [];
 
-    const chrome = { dim: (s: string) => this.dim(s) };
+    const chrome = { dim: (s: string) => this.chrome(s) };
 
     // top border — replace line 0
     result.push(this.buildBorderLine(width, { left: "╭", right: "╮" }, "top", lines[0]!));
@@ -500,6 +520,7 @@ function editorExtension(pi: ExtensionAPI): void {
     ctx.ui.setEditorComponent(
       (tui: TUI, editorTheme: EditorTheme, keybindings: KeybindingsManager) => {
         editor = new LabeledEditor(tui, editorTheme, keybindings, ctx.ui.theme, ctx.cwd);
+        editor.setMode("auto");
         return editor;
       },
     );
@@ -660,6 +681,12 @@ function editorExtension(pi: ExtensionAPI): void {
     editor?.removeLabel(payload.key);
   });
 
+  pi.events.on("editor:set-mode", (data: unknown) => {
+    const payload = data as SetModePayload;
+    if (payload.mode !== "auto" && payload.mode !== "plan") return;
+    editor?.setMode(payload.mode);
+  });
+
   pi.on("model_select", async (_event, ctx) => {
     // update model display when user changes model via /model or Ctrl+P
     statsCacheBranchLen.value = -1;
@@ -676,6 +703,7 @@ function editorExtension(pi: ExtensionAPI): void {
     activity.activeTools.clear();
     statusRow?.clear();
     statsCacheBranchLen.value = -1;
+    editor?.setMode("auto");
     if (editor) updateStatsLabels(editor, pi, ctx, statsCacheBranchLen);
   });
 }

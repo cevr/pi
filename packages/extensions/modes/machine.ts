@@ -1,5 +1,5 @@
 /**
- * Plan Mode — pure state machine.
+ * Modes — pure state machine.
  *
  * Zero pi imports. Tested by calling the reducer directly.
  */
@@ -12,7 +12,7 @@ import type { TodoItem } from "./utils";
 // Constants
 // ---------------------------------------------------------------------------
 
-export const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "interview"];
+export const PLAN_TOOLS = ["read", "bash", "grep", "find", "ls", "interview"];
 
 // ---------------------------------------------------------------------------
 // State
@@ -27,8 +27,8 @@ export interface PendingPlan {
 
 export type ExecutionPhase = "running" | "gating" | "counseling";
 
-export type PlanState =
-  | { _tag: "Inactive" }
+export type ModesState =
+  | { _tag: "Auto" }
   | { _tag: "Planning"; savedTools: string[]; pending?: PendingPlan; diffContext?: DiffContext }
   | { _tag: "AwaitingChoice"; savedTools: string[]; pending: PendingPlan }
   | {
@@ -42,7 +42,7 @@ export type PlanState =
 // Events
 // ---------------------------------------------------------------------------
 
-export type PlanEvent =
+export type ModesEvent =
   | { _tag: "Toggle"; currentTools: string[]; diffContext?: DiffContext }
   | { _tag: "PlanWithPrompt"; prompt: string; currentTools: string[]; diffContext?: DiffContext }
   | { _tag: "AgentEnd"; todoItems: TodoItem[]; planText: string; planFilePath: string }
@@ -53,10 +53,8 @@ export type PlanEvent =
   | { _tag: "Reset" }
   | {
       _tag: "Hydrate";
-      mode?: PlanState["_tag"];
-      enabled: boolean;
+      mode?: ModesState["_tag"];
       todoItems: TodoItem[];
-      executing: boolean;
       planFilePath: string | null;
       savedTools: string[] | null;
       pending?: PendingPlan;
@@ -74,17 +72,15 @@ export type PlanEvent =
 // Extension-specific effects
 // ---------------------------------------------------------------------------
 
-export type PlanEffect =
+export type ModesEffect =
   | { type: "writePlanFile"; planFilePath: string; planText: string; todoItems: TodoItem[] }
   | { type: "updatePlanFile"; planFilePath: string; todoItems: TodoItem[] }
   | { type: "persistState"; state: PersistPayload }
   | { type: "updateUI" };
 
 export interface PersistPayload {
-  mode: PlanState["_tag"];
-  enabled: boolean;
-  todos: TodoItem[];
-  executing: boolean;
+  mode: ModesState["_tag"];
+  todoItems: TodoItem[];
   planFilePath: string | null;
   savedTools: string[] | null;
   pending?: PendingPlan;
@@ -94,105 +90,129 @@ export interface PersistPayload {
 // Helpers
 // ---------------------------------------------------------------------------
 
-type Effect = BuiltinEffect | PlanEffect;
-type Result = TransitionResult<PlanState, PlanEffect>;
+type Effect = BuiltinEffect | ModesEffect;
+type Result = TransitionResult<ModesState, ModesEffect>;
 
-function persist(s: PlanState): PlanEffect {
+function persist(state: ModesState): ModesEffect {
   const payload: PersistPayload = (() => {
-    switch (s._tag) {
-      case "Inactive":
+    switch (state._tag) {
+      case "Auto":
         return {
-          mode: "Inactive",
-          enabled: false,
-          todos: [],
-          executing: false,
+          mode: "Auto",
+          todoItems: [],
           planFilePath: null,
           savedTools: null,
         };
       case "Planning":
         return {
           mode: "Planning",
-          enabled: true,
-          todos: s.pending?.todoItems ?? [],
-          executing: false,
-          planFilePath: s.pending?.planFilePath ?? null,
-          savedTools: s.savedTools,
-          pending: s.pending,
+          todoItems: state.pending?.todoItems ?? [],
+          planFilePath: state.pending?.planFilePath ?? null,
+          savedTools: state.savedTools,
+          pending: state.pending,
         };
       case "AwaitingChoice":
         return {
           mode: "AwaitingChoice",
-          enabled: true,
-          todos: s.pending.todoItems,
-          executing: false,
-          planFilePath: s.pending.planFilePath,
-          savedTools: s.savedTools,
-          pending: s.pending,
+          todoItems: state.pending.todoItems,
+          planFilePath: state.pending.planFilePath,
+          savedTools: state.savedTools,
+          pending: state.pending,
         };
       case "Executing":
         return {
           mode: "Executing",
-          enabled: false,
-          todos: s.todoItems,
-          executing: true,
-          planFilePath: s.planFilePath,
+          todoItems: state.todoItems,
+          planFilePath: state.planFilePath,
           savedTools: null,
         };
     }
   })();
+
   return { type: "persistState", state: payload };
 }
 
-const UI: PlanEffect = { type: "updateUI" };
+const UI: ModesEffect = { type: "updateUI" };
 
 // ---------------------------------------------------------------------------
 // Reducer
 // ---------------------------------------------------------------------------
 
-export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, event): Result => {
+export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
+  state,
+  event,
+): Result => {
   switch (event._tag) {
     // ----- Toggle -----
     case "Toggle": {
-      if (state._tag === "Inactive") {
-        const next: PlanState = {
+      if (state._tag === "Auto") {
+        const next: ModesState = {
           _tag: "Planning",
           savedTools: event.currentTools,
           diffContext: event.diffContext,
         };
+
         return {
           state: next,
           effects: [
-            { type: "setActiveTools", tools: PLAN_MODE_TOOLS },
-            { type: "notify", message: `Plan mode enabled. Tools: ${PLAN_MODE_TOOLS.join(", ")}` },
+            { type: "setActiveTools", tools: PLAN_TOOLS },
+            { type: "notify", message: `PLAN mode enabled. Tools: ${PLAN_TOOLS.join(", ")}` },
             UI,
             persist(next),
           ],
         };
       }
+
       if (state._tag === "Planning" || state._tag === "AwaitingChoice") {
-        const next: PlanState = { _tag: "Inactive" };
+        const next: ModesState = { _tag: "Auto" };
         return {
           state: next,
           effects: [
             { type: "setActiveTools", tools: state.savedTools },
-            { type: "notify", message: "Plan mode disabled. Full access restored." },
+            { type: "notify", message: "AUTO mode restored. Full access enabled." },
             UI,
             persist(next),
           ],
         };
       }
+
+      if (state._tag === "Executing") {
+        return {
+          state,
+          effects: [
+            {
+              type: "notify",
+              message: "Finish or cancel PLAN execution before returning to AUTO mode.",
+              level: "warning",
+            },
+          ],
+        };
+      }
+
       return { state };
     }
 
     // ----- PlanWithPrompt -----
     case "PlanWithPrompt": {
+      if (state._tag === "Executing") {
+        return {
+          state,
+          effects: [
+            {
+              type: "notify",
+              message: "Finish or cancel PLAN execution before drafting a new plan.",
+              level: "warning",
+            },
+          ],
+        };
+      }
+
       const savedTools =
-        state._tag === "Inactive"
+        state._tag === "Auto"
           ? event.currentTools
           : state._tag === "Planning" || state._tag === "AwaitingChoice"
             ? state.savedTools
             : event.currentTools;
-      // Preserve pending plan when already planning/awaiting (refinement via /plan <prompt>)
       const pending =
         state._tag === "Planning"
           ? state.pending
@@ -201,12 +221,13 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
             : undefined;
       const diffContext =
         event.diffContext ?? (state._tag === "Planning" ? state.diffContext : undefined);
-      const next: PlanState = { _tag: "Planning", savedTools, pending, diffContext };
+      const next: ModesState = { _tag: "Planning", savedTools, pending, diffContext };
+
       return {
         state: next,
         effects: [
-          { type: "setActiveTools", tools: PLAN_MODE_TOOLS },
-          { type: "notify", message: `Plan mode enabled. Tools: ${PLAN_MODE_TOOLS.join(", ")}` },
+          { type: "setActiveTools", tools: PLAN_TOOLS },
+          { type: "notify", message: `PLAN mode enabled. Tools: ${PLAN_TOOLS.join(", ")}` },
           UI,
           { type: "sendUserMessage", content: event.prompt, deliverAs: "followUp" },
           persist(next),
@@ -224,9 +245,11 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
         planFilePath: event.planFilePath,
         planText: event.planText,
       };
-      const next: PlanState = { _tag: "AwaitingChoice", savedTools: state.savedTools, pending };
+      const next: ModesState = { _tag: "AwaitingChoice", savedTools: state.savedTools, pending };
 
-      const todoListText = event.todoItems.map((t, i) => `${i + 1}. ☐ ${t.text}`).join("\n");
+      const todoListText = event.todoItems
+        .map((todo, index) => `${index + 1}. ☐ ${todo.text}`)
+        .join("\n");
       const pathInfo = event.planFilePath ? `\n\nSaved to: ${event.planFilePath}` : "";
 
       return {
@@ -240,7 +263,7 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
           },
           {
             type: "sendMessage",
-            customType: "plan-todo-list",
+            customType: "modes-todo-list",
             content: `**Plan Steps (${event.todoItems.length}):**\n\n${todoListText}${pathInfo}`,
             display: true,
           },
@@ -254,7 +277,7 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
       if (state._tag !== "AwaitingChoice") return { state };
 
       const { pending, savedTools } = state;
-      const next: PlanState = {
+      const next: ModesState = {
         _tag: "Executing",
         todoItems: pending.todoItems,
         planFilePath: pending.planFilePath,
@@ -272,7 +295,7 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
           UI,
           {
             type: "sendMessage",
-            customType: "plan-mode-execute",
+            customType: "modes-execute",
             content: execMessage,
             display: true,
             triggerTurn: true,
@@ -285,7 +308,13 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
     // ----- ChooseStay -----
     case "ChooseStay": {
       if (state._tag !== "AwaitingChoice") return { state };
-      const next: PlanState = { _tag: "Planning", savedTools: state.savedTools, pending: state.pending };
+
+      const next: ModesState = {
+        _tag: "Planning",
+        savedTools: state.savedTools,
+        pending: state.pending,
+      };
+
       return {
         state: next,
         effects: [UI, persist(next)],
@@ -295,7 +324,13 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
     // ----- ChooseRefine -----
     case "ChooseRefine": {
       if (state._tag !== "AwaitingChoice") return { state };
-      const next: PlanState = { _tag: "Planning", savedTools: state.savedTools, pending: state.pending };
+
+      const next: ModesState = {
+        _tag: "Planning",
+        savedTools: state.savedTools,
+        pending: state.pending,
+      };
+
       return {
         state: next,
         effects: [UI, { type: "sendUserMessage", content: event.refinement }, persist(next)],
@@ -306,7 +341,7 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
     case "TurnEnd": {
       if (state._tag !== "Executing" || state.todoItems.length === 0) return { state };
 
-      const next: PlanState = {
+      const next: ModesState = {
         _tag: "Executing",
         todoItems: event.todoItems,
         planFilePath: state.planFilePath,
@@ -327,12 +362,12 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
     case "ExecutionComplete": {
       if (state._tag !== "Executing") return { state };
 
-      const completedList = state.todoItems.map((t) => `~~${t.text}~~`).join("\n");
+      const completedList = state.todoItems.map((todo) => `~~${todo.text}~~`).join("\n");
       const pathInfo = state.planFilePath ? `\n\nPlan file: ${state.planFilePath}` : "";
       const effects: Effect[] = [
         {
           type: "sendMessage",
-          customType: "plan-complete",
+          customType: "modes-complete",
           content: `**Plan Complete!**\n\n${completedList}${pathInfo}`,
           display: true,
         },
@@ -344,7 +379,7 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
           todoItems: state.todoItems,
         });
       }
-      const next: PlanState = { _tag: "Inactive" };
+      const next: ModesState = { _tag: "Auto" };
       effects.push(UI, persist(next));
       return { state: next, effects };
     }
@@ -352,13 +387,13 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
     // ----- Gated execution events -----
     case "TaskDone": {
       if (state._tag !== "Executing" || state.phase !== "running") return { state };
-      const next: PlanState = { ...state, phase: "gating" };
+      const next: ModesState = { ...state, phase: "gating" };
       return {
         state: next,
         effects: [
           {
             type: "sendMessage",
-            customType: "plan-gate",
+            customType: "modes-gate",
             content:
               "Run the full gate (typecheck, lint, format, test). Report GATE_PASS if all pass, GATE_FAIL if any fail.",
             display: false,
@@ -372,13 +407,13 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
 
     case "GatePass": {
       if (state._tag !== "Executing" || state.phase !== "gating") return { state };
-      const next: PlanState = { ...state, phase: "counseling" };
+      const next: ModesState = { ...state, phase: "counseling" };
       return {
         state: next,
         effects: [
           {
             type: "sendMessage",
-            customType: "plan-counsel",
+            customType: "modes-counsel",
             content:
               "Gate passed. Run counsel for cross-vendor review of the changes. Report COUNSEL_PASS if approved, COUNSEL_FAIL if issues found.",
             display: false,
@@ -392,14 +427,14 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
 
     case "GateFail": {
       if (state._tag !== "Executing" || state.phase !== "gating") return { state };
-      const next: PlanState = { ...state, phase: "running" };
+      const next: ModesState = { ...state, phase: "running" };
       return {
         state: next,
         effects: [
           { type: "notify", message: "Gate failed — fix and retry", level: "warning" },
           {
             type: "sendMessage",
-            customType: "plan-gate-fix",
+            customType: "modes-gate-fix",
             content:
               "Gate failed. Fix the failures, then mark the step as done again with [DONE:n].",
             display: false,
@@ -413,14 +448,14 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
 
     case "CounselPass": {
       if (state._tag !== "Executing" || state.phase !== "counseling") return { state };
-      const next: PlanState = { ...state, phase: "running" };
+      const next: ModesState = { ...state, phase: "running" };
       return {
         state: next,
         effects: [
           { type: "notify", message: "Counsel approved — commit and continue" },
           {
             type: "sendMessage",
-            customType: "plan-counsel-pass",
+            customType: "modes-counsel-pass",
             content: "Counsel approved. Commit the changes and continue to the next step.",
             display: false,
             triggerTurn: true,
@@ -433,14 +468,14 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
 
     case "CounselFail": {
       if (state._tag !== "Executing" || state.phase !== "counseling") return { state };
-      const next: PlanState = { ...state, phase: "running" };
+      const next: ModesState = { ...state, phase: "running" };
       return {
         state: next,
         effects: [
           { type: "notify", message: "Counsel found issues — address feedback", level: "warning" },
           {
             type: "sendMessage",
-            customType: "plan-counsel-fix",
+            customType: "modes-counsel-fix",
             content:
               "Counsel found issues. Address the feedback, then mark the step as done again with [DONE:n].",
             display: false,
@@ -454,27 +489,26 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
 
     // ----- Reset -----
     case "Reset": {
-      return { state: { _tag: "Inactive" }, effects: [UI] };
+      return { state: { _tag: "Auto" }, effects: [UI] };
     }
 
     // ----- Hydrate (session resume) -----
     case "Hydrate": {
       const effects: Effect[] = [];
-      const enabled = event.enabled || event.flagPlan;
       const savedTools = event.savedTools ?? event.currentTools;
 
       if (event.mode === "AwaitingChoice" && event.pending) {
-        const next: PlanState = {
+        const next: ModesState = {
           _tag: "AwaitingChoice",
           savedTools,
           pending: event.pending,
         };
-        effects.push({ type: "setActiveTools", tools: PLAN_MODE_TOOLS }, UI);
+        effects.push({ type: "setActiveTools", tools: PLAN_TOOLS }, UI);
         return { state: next, effects };
       }
 
-      if (event.executing && event.todoItems.length > 0) {
-        const next: PlanState = {
+      if (event.mode === "Executing" && event.todoItems.length > 0) {
+        const next: ModesState = {
           _tag: "Executing",
           todoItems: event.todoItems,
           planFilePath: event.planFilePath,
@@ -491,13 +525,17 @@ export const planReducer: Reducer<PlanState, PlanEvent, PlanEffect> = (state, ev
         return { state: next, effects };
       }
 
-      if (enabled) {
-        const next: PlanState = { _tag: "Planning", savedTools, pending: event.pending };
-        effects.push({ type: "setActiveTools", tools: PLAN_MODE_TOOLS }, UI);
+      if (event.mode === "Planning" || event.flagPlan) {
+        const next: ModesState = {
+          _tag: "Planning",
+          savedTools,
+          pending: event.pending,
+        };
+        effects.push({ type: "setActiveTools", tools: PLAN_TOOLS }, UI);
         return { state: next, effects };
       }
 
-      return { state: { _tag: "Inactive" }, effects };
+      return { state: { _tag: "Auto" }, effects: [UI] };
     }
   }
 };

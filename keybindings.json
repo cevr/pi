@@ -1,5 +1,5 @@
 {
-  "cycleModelForward": "shift+tab",
+  "cycleModelForward": "ctrl+m",
   "cycleModelBackward": "shift+ctrl+tab",
   "cycleThinkingLevel": "ctrl+t",
   "toggleThinking": "ctrl+shift+t",

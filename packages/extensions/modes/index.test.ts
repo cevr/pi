@@ -1,6 +1,7 @@
 import { describe, expect, it, mock } from "bun:test";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import planModeExtension from "./index";
+import { Key } from "@mariozechner/pi-tui";
+import modesExtension from "./index";
 
 function createMockExtensionApiHarness() {
   const tools: unknown[] = [];
@@ -99,36 +100,46 @@ function createMockExtensionApiHarness() {
   };
 }
 
-describe("plan-mode extension", () => {
+describe("modes extension", () => {
   it("registers /plan and /todos commands", () => {
-    const h = createMockExtensionApiHarness();
-    planModeExtension(h.pi);
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
 
-    const names = h.commands.map((c) => c.name);
+    const names = harness.commands.map((command) => command.name);
     expect(names).toContain("plan");
     expect(names).toContain("todos");
   });
 
-  it("registers ctrl+alt+p shortcut", () => {
-    const h = createMockExtensionApiHarness();
-    planModeExtension(h.pi);
+  it("registers shift+tab shortcut", () => {
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
 
-    expect(h.shortcuts).toHaveLength(1);
+    expect(harness.shortcuts).toHaveLength(1);
+    expect(harness.shortcuts[0]!.key).toBe(Key.shift("tab"));
+  });
+
+  it("emits PLAN editor mode when shortcut enables planning", async () => {
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
+
+    await harness.shortcuts[0]!.options.handler(harness.createContext());
+
+    expect(harness.pi.events.emit).toHaveBeenCalledWith("editor:set-mode", { mode: "plan" });
   });
 
   it("registers --plan flag", () => {
-    const h = createMockExtensionApiHarness();
-    planModeExtension(h.pi);
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
 
-    expect(h.flags).toHaveLength(1);
-    expect(h.flags[0]!.name).toBe("plan");
+    expect(harness.flags).toHaveLength(1);
+    expect(harness.flags[0]!.name).toBe("plan");
   });
 
   it("registers event handlers for tool_call, context, before_agent_start, turn_end, agent_end, session_start", () => {
-    const h = createMockExtensionApiHarness();
-    planModeExtension(h.pi);
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
 
-    const events = h.listeners.map((l) => l.event);
+    const events = harness.listeners.map((listener) => listener.event);
     expect(events).toContain("tool_call");
     expect(events).toContain("context");
     expect(events).toContain("before_agent_start");
@@ -137,21 +148,21 @@ describe("plan-mode extension", () => {
     expect(events).toContain("session_start");
   });
 
-  it("does not register any tools (plan mode is commands/shortcuts only)", () => {
-    const h = createMockExtensionApiHarness();
-    planModeExtension(h.pi);
+  it("does not register any tools", () => {
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
 
-    expect(h.tools).toHaveLength(0);
+    expect(harness.tools).toHaveLength(0);
   });
 
   it("auto-executes after plan extraction when no UI is available", async () => {
-    const h = createMockExtensionApiHarness();
-    planModeExtension(h.pi);
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
 
-    const ctx = h.createContext({ hasUI: false });
-    await h.shortcuts[0]!.options.handler(ctx);
+    const ctx = harness.createContext({ hasUI: false });
+    await harness.shortcuts[0]!.options.handler(ctx);
 
-    const agentEnd = h.getListener("agent_end");
+    const agentEnd = harness.getListener("agent_end");
     expect(agentEnd).toBeDefined();
 
     agentEnd!.handler(
@@ -166,22 +177,22 @@ describe("plan-mode extension", () => {
       ctx,
     );
 
-    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-todo-list")).toBe(
+    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-todo-list")).toBe(
       true,
     );
-    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-mode-execute")).toBe(
+    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(
       true,
     );
   });
 
   it("auto-executes after bullet-plan extraction when no UI is available", async () => {
-    const h = createMockExtensionApiHarness();
-    planModeExtension(h.pi);
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
 
-    const ctx = h.createContext({ hasUI: false });
-    await h.shortcuts[0]!.options.handler(ctx);
+    const ctx = harness.createContext({ hasUI: false });
+    await harness.shortcuts[0]!.options.handler(ctx);
 
-    const agentEnd = h.getListener("agent_end");
+    const agentEnd = harness.getListener("agent_end");
     expect(agentEnd).toBeDefined();
 
     agentEnd!.handler(
@@ -196,25 +207,23 @@ describe("plan-mode extension", () => {
       ctx,
     );
 
-    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-todo-list")).toBe(
+    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-todo-list")).toBe(
       true,
     );
-    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-mode-execute")).toBe(
+    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(
       true,
     );
   });
 
   it("restores an awaiting choice session and re-prompts on session start", () => {
-    const h = createMockExtensionApiHarness();
-    h.setSessionEntries([
+    const harness = createMockExtensionApiHarness();
+    harness.setSessionEntries([
       {
         type: "custom",
-        customType: "plan-mode",
+        customType: "modes",
         data: {
           mode: "AwaitingChoice",
-          enabled: true,
-          todos: [{ step: 1, text: "Audit the flow", completed: false }],
-          executing: false,
+          todoItems: [{ step: 1, text: "Audit the flow", completed: false }],
           planFilePath: "/tmp/plan.md",
           savedTools: ["read", "bash", "edit"],
           pending: {
@@ -225,16 +234,16 @@ describe("plan-mode extension", () => {
         },
       },
     ]);
-    planModeExtension(h.pi);
+    modesExtension(harness.pi);
 
-    const sessionStart = h.getListener("session_start");
+    const sessionStart = harness.getListener("session_start");
     expect(sessionStart).toBeDefined();
 
-    sessionStart!.handler({}, h.createContext({ hasUI: false }));
+    sessionStart!.handler({}, harness.createContext({ hasUI: false }));
 
-    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-mode-execute")).toBe(
+    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(
       true,
     );
-    expect(h.getActiveTools()).toEqual(["read", "bash", "edit"]);
+    expect(harness.getActiveTools()).toEqual(["read", "bash", "edit"]);
   });
 });
