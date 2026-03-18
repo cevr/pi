@@ -4,6 +4,8 @@ import {
   hasExitPhrase,
   hasIssuesFixed,
   reviewReducer,
+  type PersistPayload,
+  type ReviewEffect,
   type ReviewState,
 } from "./machine";
 import type { BuiltinEffect } from "@cvr/pi-state-machine";
@@ -16,19 +18,34 @@ function inactive(max = DEFAULT_MAX_ITERATIONS): ReviewState {
   return { _tag: "Inactive", maxIterations: max };
 }
 
-function reviewing(iteration = 0, max = DEFAULT_MAX_ITERATIONS): ReviewState {
-  return { _tag: "Reviewing", maxIterations: max, iteration, userPrompt: "check for bugs" };
+function reviewing(
+  iteration = 0,
+  max = DEFAULT_MAX_ITERATIONS,
+  scope: "diff" | "paths" = "diff",
+): ReviewState {
+  return {
+    _tag: "Reviewing",
+    maxIterations: max,
+    iteration,
+    userPrompt: "check for bugs",
+    scope,
+    diffStat: scope === "diff" ? " 2 files changed" : "",
+    targetPaths: ["src/app.ts", "src/lib.ts"],
+  };
 }
 
-function hasEffect(effects: readonly BuiltinEffect[] | undefined, type: string): boolean {
+type Effect = BuiltinEffect | ReviewEffect;
+
+function hasEffect(effects: readonly Effect[] | undefined, type: string): boolean {
   return effects?.some((e) => e.type === type) ?? false;
 }
 
-function getEffect<T extends BuiltinEffect>(
-  effects: readonly BuiltinEffect[] | undefined,
-  type: string,
-): T | undefined {
+function getEffect<T extends Effect>(effects: readonly Effect[] | undefined, type: string): T | undefined {
   return effects?.find((e) => e.type === type) as T | undefined;
+}
+
+function getPersistPayload(effects: readonly Effect[] | undefined): PersistPayload | undefined {
+  return getEffect<ReviewEffect & { type: "persistState" }>(effects, "persistState")?.state;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,19 +73,53 @@ describe("exit/fix phrase detection", () => {
 
 describe("reviewReducer — Start", () => {
   it("Inactive → Reviewing", () => {
-    const r = reviewReducer(inactive(), { _tag: "Start", prompt: "check it" });
+    const r = reviewReducer(inactive(), {
+      _tag: "Start",
+      prompt: "check it",
+      scope: "diff",
+      diffStat: " 2 files changed",
+      targetPaths: ["a.ts", "b.ts"],
+    });
     expect(r.state._tag).toBe("Reviewing");
     if (r.state._tag === "Reviewing") {
       expect(r.state.iteration).toBe(0);
       expect(r.state.userPrompt).toBe("check it");
+      expect(r.state.scope).toBe("diff");
+      expect(r.state.targetPaths).toEqual(["a.ts", "b.ts"]);
     }
     expect(hasEffect(r.effects, "notify")).toBe(true);
     expect(hasEffect(r.effects, "sendUserMessage")).toBe(true);
+    expect(getPersistPayload(r.effects)).toMatchObject({
+      mode: "Reviewing",
+      iteration: 0,
+      userPrompt: "check it",
+      scope: "diff",
+      targetPaths: ["a.ts", "b.ts"],
+    });
+  });
+
+  it("includes diff scope in the initial follow-up prompt", () => {
+    const r = reviewReducer(inactive(), {
+      _tag: "Start",
+      prompt: "",
+      scope: "diff",
+      diffStat: " 2 files changed",
+      targetPaths: ["a.ts", "b.ts"],
+    });
+    expect(getEffect<BuiltinEffect>(r.effects, "sendUserMessage")).toMatchObject({
+      content: expect.stringContaining("Changed files: a.ts, b.ts"),
+    });
   });
 
   it("Reviewing + Start is no-op", () => {
     const state = reviewing();
-    const r = reviewReducer(state, { _tag: "Start", prompt: "x" });
+    const r = reviewReducer(state, {
+      _tag: "Start",
+      prompt: "x",
+      scope: "diff",
+      diffStat: "",
+      targetPaths: [],
+    });
     expect(r.state).toBe(state);
   });
 });
@@ -104,6 +155,7 @@ describe("reviewReducer — AgentEnd", () => {
       expect(r.state.iteration).toBe(1);
     }
     expect(hasEffect(r.effects, "sendUserMessage")).toBe(true);
+    expect(getPersistPayload(r.effects)).toMatchObject({ mode: "Reviewing", iteration: 1 });
   });
 
   it("max iterations → Inactive", () => {
@@ -160,12 +212,56 @@ describe("reviewReducer — SetMax", () => {
     expect(r.state._tag).toBe("Inactive");
     expect(r.state.maxIterations).toBe(10);
     expect(hasEffect(r.effects, "notify")).toBe(true);
+    expect(getPersistPayload(r.effects)).toMatchObject({ mode: "Inactive", maxIterations: 10 });
   });
 
   it("updates maxIterations on Reviewing", () => {
     const r = reviewReducer(reviewing(2, 5), { _tag: "SetMax", max: 20 });
     expect(r.state._tag).toBe("Reviewing");
     expect(r.state.maxIterations).toBe(20);
+    expect(getPersistPayload(r.effects)).toMatchObject({ mode: "Reviewing", maxIterations: 20 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hydrate
+// ---------------------------------------------------------------------------
+
+describe("reviewReducer — Hydrate", () => {
+  it("restores Reviewing state", () => {
+    const r = reviewReducer(inactive(), {
+      _tag: "Hydrate",
+      mode: "Reviewing",
+      maxIterations: 7,
+      iteration: 2,
+      userPrompt: "check effect stuff",
+      scope: "paths",
+      diffStat: "",
+      targetPaths: ["packages/core/fs"],
+    });
+    expect(r.state).toEqual({
+      _tag: "Reviewing",
+      maxIterations: 7,
+      iteration: 2,
+      userPrompt: "check effect stuff",
+      scope: "paths",
+      diffStat: "",
+      targetPaths: ["packages/core/fs"],
+    });
+    expect(getEffect<BuiltinEffect>(r.effects, "setStatus")).toMatchObject({
+      key: "review-loop",
+      text: "🔄 review 3/7",
+    });
+  });
+
+  it("restores Inactive with persisted maxIterations", () => {
+    const r = reviewReducer(inactive(), {
+      _tag: "Hydrate",
+      mode: "Inactive",
+      maxIterations: 9,
+    });
+    expect(r.state).toEqual({ _tag: "Inactive", maxIterations: 9 });
+    expect(getEffect<BuiltinEffect>(r.effects, "setStatus")).toMatchObject({ key: "review-loop" });
   });
 });
 

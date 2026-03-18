@@ -1,24 +1,53 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, mock } from "bun:test";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import reviewLoopExtension from "./index";
 
 function createMockExtensionApiHarness() {
-  const commands: Array<{ name: string; command: unknown }> = [];
+  const commands: Array<{ name: string; command: any }> = [];
   const listeners: Array<{ event: string; handler: Function }> = [];
+  const appendedEntries: Array<{ customType: string; data: unknown }> = [];
+  const sessionEntries: unknown[] = [];
 
   const pi = {
     registerTool() {},
-    registerCommand(name: string, command: unknown) {
+    registerCommand(name: string, command: any) {
       commands.push({ name, command });
     },
     on(event: string, handler: Function) {
       listeners.push({ event, handler });
     },
     sendUserMessage() {},
+    appendEntry(customType: string, data: unknown) {
+      appendedEntries.push({ customType, data });
+    },
     events: { emit() {} },
   } as unknown as ExtensionAPI;
 
-  return { pi, commands, listeners };
+  return {
+    pi,
+    commands,
+    listeners,
+    appendedEntries,
+    getListener: (event: string) => listeners.find((listener) => listener.event === event),
+    setSessionEntries: (entries: unknown[]) => {
+      sessionEntries.splice(0, sessionEntries.length, ...entries);
+    },
+    createContext: (overrides: Record<string, unknown> = {}) => {
+      const ui = {
+        notify: mock(() => {}),
+        setStatus: mock(() => {}),
+      };
+      return {
+        cwd: "/tmp",
+        hasUI: true,
+        ui,
+        sessionManager: {
+          getEntries: () => sessionEntries,
+        },
+        ...overrides,
+      };
+    },
+  };
 }
 
 describe("review-loop extension", () => {
@@ -26,7 +55,7 @@ describe("review-loop extension", () => {
     const h = createMockExtensionApiHarness();
     reviewLoopExtension(h.pi);
 
-    const names = h.commands.map((c) => c.name);
+    const names = h.commands.map((command) => command.name);
     expect(names).toContain("review");
     expect(names).toContain("review-exit");
     expect(names).toContain("review-max");
@@ -37,7 +66,7 @@ describe("review-loop extension", () => {
     const h = createMockExtensionApiHarness();
     reviewLoopExtension(h.pi);
 
-    const events = h.listeners.map((l) => l.event);
+    const events = h.listeners.map((listener) => listener.event);
     expect(events).toContain("input");
     expect(events).toContain("before_agent_start");
     expect(events).toContain("context");
@@ -47,10 +76,60 @@ describe("review-loop extension", () => {
 
   it("does not register any tools (review loop is commands only)", () => {
     const h = createMockExtensionApiHarness();
-    // Track tool registrations
     const tools: unknown[] = [];
-    (h.pi as any).registerTool = (t: unknown) => tools.push(t);
+    (h.pi as any).registerTool = (tool: unknown) => tools.push(tool);
     reviewLoopExtension(h.pi);
     expect(tools).toHaveLength(0);
+  });
+
+  it("restores persisted Reviewing state on session start", () => {
+    const h = createMockExtensionApiHarness();
+    h.setSessionEntries([
+      {
+        type: "custom",
+        customType: "review-loop",
+        data: {
+          mode: "Reviewing",
+          maxIterations: 6,
+          iteration: 2,
+          userPrompt: "check correctness",
+          scope: "diff",
+          diffStat: " 2 files changed",
+          targetPaths: ["src/app.ts", "src/lib.ts"],
+        },
+      },
+    ]);
+    reviewLoopExtension(h.pi);
+
+    const ctx = h.createContext();
+    const sessionStart = h.getListener("session_start");
+    expect(sessionStart).toBeDefined();
+
+    sessionStart!.handler({}, ctx);
+
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("review-loop", "🔄 review 3/6");
+  });
+
+  it("restores persisted Inactive maxIterations on session start", () => {
+    const h = createMockExtensionApiHarness();
+    h.setSessionEntries([
+      {
+        type: "custom",
+        customType: "review-loop",
+        data: {
+          mode: "Inactive",
+          maxIterations: 9,
+        },
+      },
+    ]);
+    reviewLoopExtension(h.pi);
+
+    const ctx = h.createContext();
+    const sessionStart = h.getListener("session_start");
+    expect(sessionStart).toBeDefined();
+
+    sessionStart!.handler({}, ctx);
+
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("review-loop", undefined);
   });
 });

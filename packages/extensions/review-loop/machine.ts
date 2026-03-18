@@ -4,7 +4,7 @@
  * Zero pi imports. Tested by calling the reducer directly.
  */
 
-import type { Reducer, TransitionResult } from "@cvr/pi-state-machine";
+import type { BuiltinEffect, Reducer, TransitionResult } from "@cvr/pi-state-machine";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -46,44 +46,115 @@ export function hasIssuesFixed(text: string): boolean {
 // State
 // ---------------------------------------------------------------------------
 
+export type ReviewScopeMode = "diff" | "paths";
+
 export type ReviewState =
   | { _tag: "Inactive"; maxIterations: number }
-  | { _tag: "Reviewing"; maxIterations: number; iteration: number; userPrompt: string };
+  | {
+      _tag: "Reviewing";
+      maxIterations: number;
+      iteration: number;
+      userPrompt: string;
+      scope: ReviewScopeMode;
+      diffStat: string;
+      targetPaths: string[];
+    };
 
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
 
 export type ReviewEvent =
-  | { _tag: "Start"; prompt: string }
+  | {
+      _tag: "Start";
+      prompt: string;
+      scope: ReviewScopeMode;
+      diffStat: string;
+      targetPaths: string[];
+    }
   | { _tag: "AgentEnd"; text: string }
   | { _tag: "UserInterrupt" }
   | { _tag: "Exit" }
   | { _tag: "SetMax"; max: number }
+  | {
+      _tag: "Hydrate";
+      mode?: ReviewState["_tag"];
+      maxIterations?: number;
+      iteration?: number;
+      userPrompt?: string;
+      scope?: ReviewScopeMode;
+      diffStat?: string;
+      targetPaths?: string[];
+    }
   | { _tag: "Reset" };
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-type Result = TransitionResult<ReviewState>;
+export type ReviewEffect = BuiltinEffect | { type: "persistState"; state: PersistPayload };
 
-function buildFullPrompt(userPrompt: string): string {
+export interface PersistPayload {
+  mode: ReviewState["_tag"];
+  maxIterations: number;
+  iteration?: number;
+  userPrompt?: string;
+  scope?: ReviewScopeMode;
+  diffStat?: string;
+  targetPaths?: string[];
+}
+
+type Result = TransitionResult<ReviewState, ReviewEffect>;
+
+function buildFullPrompt(state: Extract<ReviewState, { _tag: "Reviewing" }>): string {
   const parts: string[] = [];
-  if (userPrompt) parts.push(userPrompt);
+  if (state.userPrompt) parts.push(state.userPrompt);
+  parts.push(buildScopePrompt(state));
   parts.push(DEFAULT_REVIEW_PROMPT);
   return parts.join("\n\n");
 }
 
-function statusText(iteration: number, max: number): string {
-  return `🔄 review ${iteration + 1}/${max}`;
+function buildScopePrompt(state: Extract<ReviewState, { _tag: "Reviewing" }>): string {
+  const paths = state.targetPaths.join(", ");
+  return state.scope === "diff"
+    ? `Review the current branch diff.\n\n${state.diffStat}\nChanged files: ${paths}`
+    : `Review these explicit paths: ${paths}`;
+}
+
+export function getReviewStatusText(state: ReviewState): string | undefined {
+  return state._tag === "Reviewing" ? `🔄 review ${state.iteration + 1}/${state.maxIterations}` : undefined;
+}
+
+function persist(state: ReviewState): ReviewEffect {
+  if (state._tag === "Reviewing") {
+    return {
+      type: "persistState",
+      state: {
+        mode: "Reviewing",
+        maxIterations: state.maxIterations,
+        iteration: state.iteration,
+        userPrompt: state.userPrompt,
+        scope: state.scope,
+        diffStat: state.diffStat,
+        targetPaths: state.targetPaths,
+      },
+    };
+  }
+
+  return {
+    type: "persistState",
+    state: {
+      mode: "Inactive",
+      maxIterations: state.maxIterations,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Reducer
 // ---------------------------------------------------------------------------
 
-export const reviewReducer: Reducer<ReviewState, ReviewEvent> = (state, event): Result => {
+export const reviewReducer: Reducer<ReviewState, ReviewEvent, ReviewEffect> = (state, event): Result => {
   switch (event._tag) {
     // ----- Start -----
     case "Start": {
@@ -94,17 +165,21 @@ export const reviewReducer: Reducer<ReviewState, ReviewEvent> = (state, event): 
         maxIterations: state.maxIterations,
         iteration: 0,
         userPrompt: event.prompt,
+        scope: event.scope,
+        diffStat: event.diffStat,
+        targetPaths: event.targetPaths,
       };
       return {
         state: next,
         effects: [
           { type: "notify", message: "Review mode activated", level: "info" },
-          { type: "setStatus", key: "review-loop", text: statusText(0, state.maxIterations) },
+          { type: "setStatus", key: "review-loop", text: getReviewStatusText(next) },
           {
             type: "sendUserMessage",
-            content: event.prompt || buildFullPrompt(event.prompt),
+            content: buildFullPrompt(next),
             deliverAs: "followUp",
           },
+          persist(next),
         ],
       };
     }
@@ -115,11 +190,13 @@ export const reviewReducer: Reducer<ReviewState, ReviewEvent> = (state, event): 
 
       // Empty/aborted
       if (!event.text.trim()) {
+        const next: ReviewState = { _tag: "Inactive", maxIterations: state.maxIterations };
         return {
-          state: { _tag: "Inactive", maxIterations: state.maxIterations },
+          state: next,
           effects: [
             { type: "notify", message: "Review mode ended: aborted", level: "info" },
             { type: "setStatus", key: "review-loop" },
+            persist(next),
           ],
         };
       }
@@ -129,11 +206,13 @@ export const reviewReducer: Reducer<ReviewState, ReviewEvent> = (state, event): 
 
       // Clean exit: "no issues" without "fixed"
       if (exit && !fixed) {
+        const next: ReviewState = { _tag: "Inactive", maxIterations: state.maxIterations };
         return {
-          state: { _tag: "Inactive", maxIterations: state.maxIterations },
+          state: next,
           effects: [
             { type: "notify", message: "Review mode ended: no issues found", level: "info" },
             { type: "setStatus", key: "review-loop" },
+            persist(next),
           ],
         };
       }
@@ -141,8 +220,9 @@ export const reviewReducer: Reducer<ReviewState, ReviewEvent> = (state, event): 
       // Continue loop
       const nextIteration = state.iteration + 1;
       if (nextIteration >= state.maxIterations) {
+        const next: ReviewState = { _tag: "Inactive", maxIterations: state.maxIterations };
         return {
-          state: { _tag: "Inactive", maxIterations: state.maxIterations },
+          state: next,
           effects: [
             {
               type: "notify",
@@ -150,6 +230,7 @@ export const reviewReducer: Reducer<ReviewState, ReviewEvent> = (state, event): 
               level: "info",
             },
             { type: "setStatus", key: "review-loop" },
+            persist(next),
           ],
         };
       }
@@ -161,13 +242,14 @@ export const reviewReducer: Reducer<ReviewState, ReviewEvent> = (state, event): 
           {
             type: "setStatus",
             key: "review-loop",
-            text: statusText(nextIteration, state.maxIterations),
+            text: getReviewStatusText(next),
           },
           {
             type: "sendUserMessage",
-            content: buildFullPrompt(state.userPrompt),
+            content: buildFullPrompt(next),
             deliverAs: "followUp",
           },
+          persist(next),
         ],
       };
     }
@@ -175,11 +257,13 @@ export const reviewReducer: Reducer<ReviewState, ReviewEvent> = (state, event): 
     // ----- UserInterrupt -----
     case "UserInterrupt": {
       if (state._tag !== "Reviewing") return { state };
+      const next: ReviewState = { _tag: "Inactive", maxIterations: state.maxIterations };
       return {
-        state: { _tag: "Inactive", maxIterations: state.maxIterations },
+        state: next,
         effects: [
           { type: "notify", message: "Review mode ended: user interrupted", level: "info" },
           { type: "setStatus", key: "review-loop" },
+          persist(next),
         ],
       };
     }
@@ -187,22 +271,51 @@ export const reviewReducer: Reducer<ReviewState, ReviewEvent> = (state, event): 
     // ----- Exit -----
     case "Exit": {
       if (state._tag !== "Reviewing") return { state };
+      const next: ReviewState = { _tag: "Inactive", maxIterations: state.maxIterations };
       return {
-        state: { _tag: "Inactive", maxIterations: state.maxIterations },
+        state: next,
         effects: [
           { type: "notify", message: "Review mode ended: manual exit", level: "info" },
           { type: "setStatus", key: "review-loop" },
+          persist(next),
         ],
       };
     }
 
     // ----- SetMax -----
     case "SetMax": {
+      const next: ReviewState = { ...state, maxIterations: event.max };
       return {
-        state: { ...state, maxIterations: event.max },
+        state: next,
         effects: [
           { type: "notify", message: `Max review iterations set to ${event.max}`, level: "info" },
+          persist(next),
         ],
+      };
+    }
+
+    // ----- Hydrate -----
+    case "Hydrate": {
+      const maxIterations = event.maxIterations ?? state.maxIterations;
+      if (event.mode === "Reviewing" && event.scope) {
+        const next: ReviewState = {
+          _tag: "Reviewing",
+          maxIterations,
+          iteration: typeof event.iteration === "number" && event.iteration >= 0 ? event.iteration : 0,
+          userPrompt: event.userPrompt ?? "",
+          scope: event.scope,
+          diffStat: event.diffStat ?? "",
+          targetPaths: event.targetPaths ?? [],
+        };
+        return {
+          state: next,
+          effects: [{ type: "setStatus", key: "review-loop", text: getReviewStatusText(next) }],
+        };
+      }
+
+      return {
+        state: { _tag: "Inactive", maxIterations },
+        effects: [{ type: "setStatus", key: "review-loop" }],
       };
     }
 
