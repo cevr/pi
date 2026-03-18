@@ -1,4 +1,3 @@
-/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * permission evaluation for tool calls.
  *
@@ -10,8 +9,10 @@
  * `evaluatePermission` pure function for direct use.
  */
 
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as fs from "node:fs";
 import * as os from "node:os";
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as nodePath from "node:path";
 import { Effect, Layer, Schema, ServiceMap } from "effect";
 
@@ -95,7 +96,7 @@ export function decodePermissionsFile(filePath: string): PermissionRule[] {
     return FAIL_CLOSED_RULES;
   }
   try {
-    return decodeRulesSync(raw);
+    return [...decodeRulesSync(raw)];
   } catch {
     console.error(
       `[@cvr/pi-permissions] malformed ${filePath} — rejecting all tool calls until fixed`,

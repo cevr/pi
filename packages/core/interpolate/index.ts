@@ -1,4 +1,3 @@
-/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * template variable interpolation for subagent system prompts.
  *
@@ -10,10 +9,13 @@
  * so {varA} can appear inside another variable's expression.
  */
 
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import { execSync } from "node:child_process";
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as path from "node:path";
 import * as vm from "node:vm";
 import { Effect, Layer, Schema, ServiceMap } from "effect";
@@ -337,7 +339,7 @@ export function interpolatePromptVars(
 ): string {
   // merge variable definitions
   const configVars =
-    variables === undefined ? (getGlobalConfig<PromptVariables>("promptVariables") ?? {}) : {};
+    variables === undefined ? ((getGlobalConfig("promptVariables") as PromptVariables | undefined) ?? {}) : {};
   const merged: PromptVariables = {
     ...DEFAULT_PROMPT_VARIABLES,
     ...configVars,

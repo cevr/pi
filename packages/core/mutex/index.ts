@@ -1,4 +1,3 @@
-/** @effect-diagnostics effect/nodeBuiltinImport:skip-file */
 /**
  * per-path async mutex for file operations.
  *
@@ -7,6 +6,7 @@
  * two relative paths pointing to the same file share one lock.
  */
 
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as nodePath from "node:path";
 import { Effect, Ref, Schema, ServiceMap, Layer, Semaphore } from "effect";
 
