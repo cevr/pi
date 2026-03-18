@@ -24,14 +24,17 @@ import { register } from "@cvr/pi-state-machine";
 import type { Command, StateObserver } from "@cvr/pi-state-machine";
 import { Layer, ManagedRuntime } from "effect";
 import {
+  AUTO_SIGNAL_TOOLS,
   EXECUTION_SIGNAL_TOOLS,
-  PLAN_SIGNAL_TOOLS,
-  PLAN_TOOLS,
+  SPEC_SIGNAL_TOOLS,
+  SPEC_TOOLS,
+  TASK_LIST_SIGNAL_TOOLS,
   modesReducer,
   type ModesEffect,
   type ModesEvent,
   type ModesState,
   type PersistPayload,
+  type SpecDraft,
 } from "./machine";
 import { cleanStepText, isSafeCommand } from "./utils";
 
@@ -40,21 +43,43 @@ import { cleanStepText, isSafeCommand } from "./utils";
 // ---------------------------------------------------------------------------
 
 const PLANS_DIR = path.join(os.homedir(), ".pi", "plans");
+const SPECS_DIR = path.join(os.homedir(), ".pi", "specs");
 
-type EditorMode = "auto" | "plan";
+type EditorMode = "auto" | "spec";
 
-function ensurePlansDir(): void {
-  fs.mkdirSync(PLANS_DIR, { recursive: true });
+function ensureDir(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true });
 }
 
-function generatePlanPath(firstStep: string): string {
-  const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const slug = firstStep
+function buildSlug(seed: string, fallback: string): string {
+  const slug = seed
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 40);
-  return path.join(PLANS_DIR, `${timestamp}-${slug || "plan"}.md`);
+  return slug || fallback;
+}
+
+function generateArtifactPath(dir: string, seed: string, fallback: string): string {
+  const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  return path.join(dir, `${timestamp}-${buildSlug(seed, fallback)}.md`);
+}
+
+function getFirstContentLine(text: string, fallback: string): string {
+  return (
+    text
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^#{1,6}\s*/, "").trim())
+      .find((line) => line.length > 0) ?? fallback
+  );
+}
+
+function generatePlanPath(firstStep: string): string {
+  return generateArtifactPath(PLANS_DIR, firstStep, "task-list");
+}
+
+function generateSpecPath(specText: string): string {
+  return generateArtifactPath(SPECS_DIR, getFirstContentLine(specText, "spec"), "spec");
 }
 
 function getChecklistMarker(status: TaskListStatus): string {
@@ -62,15 +87,20 @@ function getChecklistMarker(status: TaskListStatus): string {
 }
 
 function writePlanFileToDisk(planPath: string, fullText: string, items: TaskListItem[]): void {
-  ensurePlansDir();
+  ensureDir(PLANS_DIR);
   const checklist = items
     .map((task) => `- [${getChecklistMarker(task.status)}] ${task.order}. ${task.subject}`)
     .join("\n");
   fs.writeFileSync(
     planPath,
-    `# Plan\n\n${checklist}\n\n---\n\n## Full Plan\n\n${fullText}\n`,
+    `# Task List\n\n${checklist}\n\n---\n\n## Full Task List\n\n${fullText}\n`,
     "utf-8",
   );
+}
+
+function writeSpecFileToDisk(specPath: string, specText: string): void {
+  ensureDir(SPECS_DIR);
+  fs.writeFileSync(specPath, `${specText.trimEnd()}\n`, "utf-8");
 }
 
 function updatePlanFileToDisk(planPath: string, items: TaskListItem[]): void {
@@ -83,13 +113,13 @@ function updatePlanFileToDisk(planPath: string, items: TaskListItem[]): void {
 
   fs.writeFileSync(
     planPath,
-    content.replace(/# Plan\n\n[\s\S]*?\n\n---/, `# Plan\n\n${checklist}\n\n---`),
+    content.replace(/# Task List\n\n[\s\S]*?\n\n---/, `# Task List\n\n${checklist}\n\n---`),
     "utf-8",
   );
 }
 
 // ---------------------------------------------------------------------------
-// Plan helpers
+// Task/spec helpers
 // ---------------------------------------------------------------------------
 
 function buildTaskListFromSteps(steps: readonly string[]): TaskListItem[] {
@@ -145,8 +175,23 @@ function normalizeHydratedTaskList(items: readonly Record<string, unknown>[]): T
   });
 }
 
+function normalizeHydratedSpec(value: unknown): SpecDraft | undefined {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).specText === "string"
+  ) {
+    const spec = value as Record<string, unknown>;
+    return {
+      specText: spec.specText as string,
+      specFilePath: typeof spec.specFilePath === "string" ? spec.specFilePath : null,
+    };
+  }
+  return undefined;
+}
+
 function getEditorMode(state: ModesState): EditorMode {
-  return state._tag === "Auto" ? "auto" : "plan";
+  return state._tag === "Spec" ? "spec" : "auto";
 }
 
 // ---------------------------------------------------------------------------
@@ -167,9 +212,12 @@ function formatUI(state: ModesState, pi: ExtensionAPI, ctx: ExtensionContext): v
       ctx.ui.setWidget("modes-todos", widget.lines);
       break;
     }
-    case "Planning":
+    case "Spec":
+      ctx.ui.setStatus("modes", ctx.ui.theme.fg("warning", "⏸ spec"));
+      ctx.ui.setWidget("modes-todos", undefined);
+      break;
     case "AwaitingChoice":
-      ctx.ui.setStatus("modes", ctx.ui.theme.fg("warning", "⏸ plan"));
+      ctx.ui.setStatus("modes", ctx.ui.theme.fg("warning", "⏸ task list"));
       ctx.ui.setWidget("modes-todos", undefined);
       break;
     case "Auto":
@@ -195,6 +243,18 @@ function buildDiffContextBlock(diffContext: DiffContext): string {
   return `\n\n## Branch Changes (vs ${diffContext.baseBranch})\n${diffContext.diffStat}\n\n${files}${skills}`;
 }
 
+async function tryGatherDiffContext(
+  cwd: string,
+  gitRuntime: ManagedRuntime.ManagedRuntime<GitClient, never>,
+): Promise<DiffContext | undefined> {
+  try {
+    const diffContext = await gatherDiffContext(cwd, gitRuntime);
+    return diffContext.changedFiles.length === 0 ? undefined : diffContext;
+  } catch {
+    return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Extension factory
 // ---------------------------------------------------------------------------
@@ -218,6 +278,9 @@ export default function modesExtension(pi: ExtensionAPI): void {
       case "writePlanFile":
         writePlanFileToDisk(effect.planFilePath, effect.planText, effect.todoItems);
         break;
+      case "writeSpecFile":
+        writeSpecFileToDisk(effect.specFilePath, effect.specText);
+        break;
       case "updatePlanFile":
         updatePlanFileToDisk(effect.planFilePath, effect.todoItems);
         break;
@@ -235,10 +298,10 @@ export default function modesExtension(pi: ExtensionAPI): void {
     {
       mode: "query",
       name: "todos",
-      description: "Show current plan todo list",
+      description: "Show current executable task list",
       handler: (state, _args, ctx): void => {
         const todoItems =
-          state._tag === "Planning"
+          state._tag === "Auto" || state._tag === "Spec"
             ? state.pending?.todoItems
             : state._tag === "AwaitingChoice"
               ? state.pending.todoItems
@@ -246,7 +309,7 @@ export default function modesExtension(pi: ExtensionAPI): void {
                 ? state.todoItems
                 : undefined;
         if (!todoItems || todoItems.length === 0) {
-          ctx.ui.notify("No todos. Create a plan first with /plan", "info");
+          ctx.ui.notify("No task list. Create one in AUTO mode.", "info");
           return;
         }
         const list = todoItems
@@ -257,42 +320,132 @@ export default function modesExtension(pi: ExtensionAPI): void {
           })
           .join("\n");
         const planFilePath =
-          state._tag === "Planning"
-            ? state.pending?.planFilePath
+          state._tag === "Executing"
+            ? state.planFilePath
             : state._tag === "AwaitingChoice"
               ? state.pending.planFilePath
-              : state._tag === "Executing"
-                ? state.planFilePath
-                : null;
-        const pathInfo = planFilePath ? `\nPlan file: ${planFilePath}` : "";
-        ctx.ui.notify(`Plan Progress:\n${list}${pathInfo}`, "info");
+              : state.pending?.planFilePath ?? null;
+        const pathInfo = planFilePath ? `\nTask list file: ${planFilePath}` : "";
+        ctx.ui.notify(`Task List:\n${list}${pathInfo}`, "info");
       },
     },
   ];
 
   // ----- Signal tools -----
   pi.registerTool({
-    name: PLAN_SIGNAL_TOOLS[0],
-    label: "Plan Ready",
-    description: "Signal that planning is complete and the user must choose what happens next.",
-    promptSnippet: "Signal when the plan is ready for user review and choice.",
+    name: AUTO_SIGNAL_TOOLS[0],
+    label: "Enter Spec Mode",
+    description:
+      "Signal that the current work needs deeper specification before execution and switch into SPEC mode.",
+    promptSnippet: "Signal when AUTO mode should switch into SPEC mode for deeper planning.",
     promptGuidelines: [
-      "In PLAN mode, call this tool exactly once when your plan is ready instead of relying on plain-text plan parsing.",
+      "In AUTO mode, call this tool when the request still needs design, scoping, discovery, or a PRD before it can become an executable task list.",
     ],
     parameters: Type.Object({
-      planText: Type.String({ description: "The full plan markdown/text." }),
+      prompt: Type.String({
+        minLength: 1,
+        description: "A focused prompt telling SPEC mode what to clarify, design, or write up.",
+      }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const state = machine.getState();
+      if (state._tag !== "Auto") {
+        return {
+          content: [{ type: "text" as const, text: "AUTO mode is not currently active." }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      const prompt = params.prompt.trim();
+      if (!prompt) {
+        return {
+          content: [{ type: "text" as const, text: "A spec prompt is required." }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      machine.send({
+        _tag: "SpecWithPrompt",
+        prompt,
+        currentTools: pi.getActiveTools(),
+        diffContext: await tryGatherDiffContext(ctx.cwd, gitRuntime),
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Switched to SPEC mode. Draft the spec, then call modes_spec_ready when it is ready.",
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: SPEC_SIGNAL_TOOLS[0],
+    label: "Spec Ready",
+    description: "Signal that spec drafting is complete and the spec should be persisted.",
+    promptSnippet: "Signal when the spec is ready to save.",
+    promptGuidelines: [
+      "In SPEC mode, call this tool when your spec/PRD is ready instead of generating task lists.",
+    ],
+    parameters: Type.Object({
+      specText: Type.String({ description: "The full spec or PRD markdown/text." }),
+    }),
+    async execute(_toolCallId, params) {
+      const state = machine.getState();
+      if (state._tag !== "Spec") {
+        return {
+          content: [{ type: "text" as const, text: "SPEC mode is not currently active." }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      machine.send({
+        _tag: "SpecReady",
+        spec: {
+          specText: params.specText,
+          specFilePath: generateSpecPath(params.specText),
+        },
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Spec captured. Return to AUTO mode to generate or refresh the executable task list.",
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: TASK_LIST_SIGNAL_TOOLS[0],
+    label: "Task List Ready",
+    description: "Signal that an executable task list is ready and the user must choose what happens next.",
+    promptSnippet: "Signal when the executable task list is ready for user review and choice.",
+    promptGuidelines: [
+      "In AUTO mode, call this tool when you have produced an executable task list.",
+    ],
+    parameters: Type.Object({
+      planText: Type.String({ description: "The full task list markdown/text." }),
       steps: Type.Array(Type.String({ minLength: 1 }), {
         minItems: 1,
-        description: "Ordered plan steps for the todo list shown to the user.",
+        description: "Ordered implementation steps for the executable task list.",
       }),
     }),
     async execute(_toolCallId, params) {
       const state = machine.getState();
-      if (state._tag !== "Planning") {
+      if (state._tag !== "Auto") {
         return {
-          content: [
-            { type: "text" as const, text: "Plan mode is not currently waiting for a plan." },
-          ],
+          content: [{ type: "text" as const, text: "AUTO mode is not currently waiting for a task list." }],
           details: {},
           isError: true,
         };
@@ -301,24 +454,27 @@ export default function modesExtension(pi: ExtensionAPI): void {
       const todoItems = buildTaskListFromSteps(params.steps);
       if (todoItems.length === 0) {
         return {
-          content: [{ type: "text" as const, text: "At least one valid plan step is required." }],
+          content: [{ type: "text" as const, text: "At least one valid task-list step is required." }],
           details: {},
           isError: true,
         };
       }
 
       machine.send({
-        _tag: "PlanReady",
-        todoItems,
-        planText: params.planText,
-        planFilePath: generatePlanPath(todoItems[0]!.subject),
+        _tag: "TaskListReady",
+        currentTools: pi.getActiveTools(),
+        pending: {
+          todoItems,
+          planText: params.planText,
+          planFilePath: generatePlanPath(todoItems[0]!.subject),
+        },
       });
 
       return {
         content: [
           {
             type: "text" as const,
-            text: "Plan captured. The system is now waiting for the user's choice. Do not continue until that choice is resolved.",
+            text: "Task list captured. The system is now waiting for the user's choice. Do not continue until that choice is resolved.",
           },
         ],
         details: {},
@@ -468,16 +624,16 @@ export default function modesExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      const choice = await ctx.ui.select("PLAN mode — what next?", [
-        "Execute the plan",
-        "Stay in PLAN mode",
-        "Refine the plan",
+      const choice = await ctx.ui.select("AUTO mode — what next?", [
+        "Execute the task list",
+        "Stay in AUTO mode",
+        "Refine the task list",
       ]);
 
       if (choice?.startsWith("Execute")) {
         sendIfCurrent({ _tag: "ChooseExecute" });
-      } else if (choice === "Refine the plan") {
-        const refinement = await ctx.ui.editor("Refine the plan:", "");
+      } else if (choice === "Refine the task list") {
+        const refinement = await ctx.ui.editor("Refine the task list:", "");
         if (refinement?.trim()) {
           sendIfCurrent({ _tag: "ChooseRefine", refinement: refinement.trim() });
         } else {
@@ -505,16 +661,16 @@ export default function modesExtension(pi: ExtensionAPI): void {
               return {
                 block: true,
                 reason:
-                  "PLAN mode is waiting for the user's choice. Do not continue with more tools until the choice is resolved.",
+                  "AUTO mode is waiting for the user's task-list choice. Do not continue with more tools until the choice is resolved.",
               };
             }
-            if (state._tag !== "Planning") return;
+            if (state._tag !== "Spec") return;
             if (event.toolName !== "bash") return;
             const command = event.input.command as string;
             if (!isSafeCommand(command)) {
               return {
                 block: true,
-                reason: `PLAN mode: command blocked (not allowlisted). Use Shift+Tab or /plan to return to AUTO mode first.\nCommand: ${command}`,
+                reason: `SPEC mode: command blocked (not allowlisted). Use Shift+Tab or /spec to return to AUTO mode first.\nCommand: ${command}`,
               };
             }
           },
@@ -525,6 +681,7 @@ export default function modesExtension(pi: ExtensionAPI): void {
           handle: (state, event) => ({
             messages: event.messages.filter((message: any) => {
               if (message.customType === "modes-context") return false;
+              if (message.customType === "modes-auto-context") return false;
               if (message.customType === "modes-execution-context") return false;
               if (
                 typeof message.customType === "string" &&
@@ -541,11 +698,11 @@ export default function modesExtension(pi: ExtensionAPI): void {
               if (message.role !== "user") return true;
               if (state._tag === "Auto") {
                 const content = message.content;
-                if (typeof content === "string") return !content.includes("[PLAN MODE ACTIVE]");
+                if (typeof content === "string") return !content.includes("[SPEC MODE ACTIVE]");
                 if (Array.isArray(content)) {
                   return !content.some(
                     (block: any) =>
-                      block.type === "text" && block.text?.includes("[PLAN MODE ACTIVE]"),
+                      block.type === "text" && block.text?.includes("[SPEC MODE ACTIVE]"),
                   );
                 }
               }
@@ -557,31 +714,44 @@ export default function modesExtension(pi: ExtensionAPI): void {
         before_agent_start: {
           mode: "reply",
           handle: (state) => {
-            if (state._tag === "Planning" || state._tag === "AwaitingChoice") {
+            if (state._tag === "Auto") {
+              return {
+                message: {
+                  customType: "modes-auto-context",
+                  content: `[AUTO MODE ACTIVE]
+You are in auto mode - normal working mode.
+
+If the request is ready for execution, produce an executable task list and call ${TASK_LIST_SIGNAL_TOOLS[0]}.
+If the request still needs design, scoping, discovery, or a spec before it can become executable, call ${AUTO_SIGNAL_TOOLS[0]} with:
+- prompt: what SPEC mode should clarify or produce
+
+Do not stay in AUTO mode and write a long speculative PRD when the work clearly needs SPEC mode first. Escalate with ${AUTO_SIGNAL_TOOLS[0]}.`,
+                  display: false,
+                },
+              };
+            }
+
+            if (state._tag === "Spec") {
               const principles = readPrinciples();
               const principlesBlock = principles ? `\n\n${principles}` : "";
-              const diffBlock =
-                state._tag === "Planning" && state.diffContext
-                  ? buildDiffContextBlock(state.diffContext)
-                  : "";
+              const diffBlock = state.diffContext ? buildDiffContextBlock(state.diffContext) : "";
               return {
                 message: {
                   customType: "modes-context",
-                  content: `[PLAN MODE ACTIVE]
-You are in plan mode - a read-only exploration mode for safe code analysis.
+                  content: `[SPEC MODE ACTIVE]
+You are in spec mode - a read-only exploration mode for safe analysis, PRDs, and specs.
 
 Restrictions:
-- You can only use: ${PLAN_TOOLS.join(", ")}
+- You can only use: ${SPEC_TOOLS.join(", ")}
 - You CANNOT use: edit, write (file modifications are disabled)
 - Bash is restricted to an allowlist of read-only commands
 - Use the interview tool to ask the user clarifying questions about scope
 
-When your plan is ready, call ${PLAN_SIGNAL_TOOLS[0]} with:
-- planText: the full plan markdown/text
-- steps: the ordered checklist items for the user-facing todo list
+When your spec is ready, call ${SPEC_SIGNAL_TOOLS[0]} with:
+- specText: the full spec/PRD markdown/text
 
-Do NOT rely on plain-text "Plan:" parsing anymore.
-Do NOT attempt to make changes - just describe what you would do, then call ${PLAN_SIGNAL_TOOLS[0]}.${diffBlock}${principlesBlock}`,
+Do NOT generate executable task lists in SPEC mode.
+Do NOT attempt to make changes - just describe the spec, then call ${SPEC_SIGNAL_TOOLS[0]}.${diffBlock}${principlesBlock}`,
                   display: false,
                 },
               };
@@ -598,12 +768,12 @@ Do NOT attempt to make changes - just describe what you would do, then call ${PL
                 })
                 .join("\n");
               const planRef = state.planFilePath
-                ? `\n\nThe full plan is saved at: ${state.planFilePath}\nRead it if you need the full context.`
+                ? `\n\nThe full task list is saved at: ${state.planFilePath}\nRead it if you need the full context.`
                 : "";
               return {
                 message: {
                   customType: "modes-execution-context",
-                  content: `[EXECUTING PLAN - Full tool access enabled]
+                  content: `[EXECUTING TASK LIST - Full tool access enabled]
 
 Remaining steps:
 ${todoList}${planRef}
@@ -657,6 +827,8 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
               data?.phase === "running" || data?.phase === "gating" || data?.phase === "counseling"
                 ? data.phase
                 : undefined;
+            const spec = normalizeHydratedSpec(data?.spec);
+            const flagSpec = pi.getFlag("spec") === true;
             const flagPlan = pi.getFlag("plan") === true;
 
             return {
@@ -666,6 +838,8 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
               planFilePath,
               savedTools,
               pending,
+              spec,
+              flagSpec,
               flagPlan,
               currentStep,
               phase,
@@ -680,7 +854,7 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
       shortcuts: [
         {
           key: Key.shift("tab"),
-          description: "Toggle AUTO/PLAN mode",
+          description: "Toggle AUTO/SPEC mode",
           toEvent: (): ModesEvent => ({ _tag: "Toggle", currentTools: pi.getActiveTools() }),
         },
       ],
@@ -689,8 +863,8 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
 
       flags: [
         {
-          name: "plan",
-          description: "Start in PLAN mode (read-only exploration)",
+          name: "spec",
+          description: "Start in SPEC mode (read-only exploration)",
           type: "boolean",
           default: false,
         },
@@ -699,33 +873,24 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
     interpretEffect,
   );
 
-  // ----- /plan command (imperative — async diff context gathering) -----
-  pi.registerCommand("plan", {
+  // ----- /spec command (imperative — async diff context gathering) -----
+  pi.registerCommand("spec", {
     description:
-      "Toggle PLAN mode. Shift+Tab also toggles it. /plan <prompt> enters PLAN mode and sends the prompt.",
+      "Toggle SPEC mode. Shift+Tab also toggles it. /spec <prompt> enters SPEC mode and sends the prompt.",
     handler: async (args, ctx) => {
       const prompt = args.trim();
       const currentTools = pi.getActiveTools();
       const state = machine.getState();
 
-      if (
-        !prompt &&
-        (state._tag === "Planning" || state._tag === "AwaitingChoice" || state._tag === "Executing")
-      ) {
+      if (!prompt && (state._tag === "Spec" || state._tag === "AwaitingChoice" || state._tag === "Executing")) {
         machine.send({ _tag: "Toggle", currentTools });
         return;
       }
 
-      let diffContext: DiffContext | undefined;
-      try {
-        diffContext = await gatherDiffContext(ctx.cwd, gitRuntime);
-        if (diffContext.changedFiles.length === 0) diffContext = undefined;
-      } catch {
-        /* no diff context available */
-      }
+      const diffContext = await tryGatherDiffContext(ctx.cwd, gitRuntime);
 
       if (prompt) {
-        machine.send({ _tag: "PlanWithPrompt", prompt, currentTools, diffContext });
+        machine.send({ _tag: "SpecWithPrompt", prompt, currentTools, diffContext });
       } else {
         machine.send({ _tag: "Toggle", currentTools, diffContext });
       }

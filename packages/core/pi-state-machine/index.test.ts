@@ -16,6 +16,7 @@ function createMockPi() {
   const appendedEntries: Array<{ customType: string; data: unknown }> = [];
   const notified: string[] = [];
   let activeTools: string[] = ["read", "bash"];
+  let thinkingLevel = "off";
 
   const ctx: ExtensionContext = {
     hasUI: true,
@@ -58,6 +59,12 @@ function createMockPi() {
     },
     setActiveTools(names: string[]) {
       activeTools = names;
+    },
+    getThinkingLevel() {
+      return thinkingLevel;
+    },
+    setThinkingLevel(level: string) {
+      thinkingLevel = level;
     },
     getFlag() {
       return false;
@@ -126,6 +133,32 @@ describe("pi-state-machine register()", () => {
 
     expect(machine.getState()._tag).toBe("On");
     expect(m.notified).toContain("on");
+  });
+
+  it("executes built-in thinking level effects", () => {
+    const m = createMockPi();
+    const reducer: Reducer<State, Event> = (state, event): TransitionResult<State> => {
+      if (event._tag !== "TurnOn") return { state };
+      return {
+        state: { _tag: "On", count: 0 },
+        effects: [{ type: "setThinkingLevel", level: "xhigh" }],
+      };
+    };
+
+    register(m.pi, {
+      id: "test",
+      initial: { _tag: "Off" } as State,
+      reducer,
+      events: {
+        session_start: {
+          mode: "fire",
+          toEvent: (): Event => ({ _tag: "TurnOn" }),
+        },
+      },
+    });
+
+    m.getHandler("session_start")!({}, m.ctx);
+    expect((m.pi as any).getThinkingLevel()).toBe("xhigh");
   });
 
   it("wires reply mappings without mutating state", () => {

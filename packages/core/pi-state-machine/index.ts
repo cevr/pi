@@ -19,6 +19,7 @@ import type { KeyId } from "@mariozechner/pi-tui";
 /** Built-in side effects — common pi API calls. */
 export type BuiltinEffect =
   | { type: "setActiveTools"; tools: readonly string[] }
+  | { type: "setThinkingLevel"; level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" }
   | { type: "sendUserMessage"; content: string; deliverAs?: "steer" | "followUp" }
   | {
       type: "sendMessage";
@@ -168,6 +169,9 @@ export function register<S, E, Ext = never>(
     switch (e.type) {
       case "setActiveTools":
         pi.setActiveTools(e.tools as string[]);
+        break;
+      case "setThinkingLevel":
+        pi.setThinkingLevel(e.level);
         break;
       case "sendUserMessage":
         pi.sendUserMessage(e.content, e.deliverAs ? { deliverAs: e.deliverAs } : undefined);

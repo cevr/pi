@@ -46,7 +46,7 @@ interface RemoveLabelPayload {
   key: string;
 }
 
-type EditorMode = "auto" | "plan";
+type EditorMode = "auto" | "spec";
 
 interface SetModePayload {
   mode: EditorMode;
@@ -77,14 +77,14 @@ class LabeledEditor extends CustomEditor {
   }
 
   private chrome(str: string): string {
-    return this.appTheme.fg(this.mode === "plan" ? "warning" : "muted", str);
+    return this.appTheme.fg(this.mode === "spec" ? "warning" : "muted", str);
   }
 
   setMode(mode: EditorMode): void {
     this.mode = mode;
     this.setLabel(
       "mode",
-      this.appTheme.fg(mode === "plan" ? "warning" : "muted", mode.toUpperCase()),
+      this.appTheme.fg(mode === "spec" ? "warning" : "muted", mode.toUpperCase()),
       "bottom",
       "left",
     );
@@ -683,7 +683,7 @@ function editorExtension(pi: ExtensionAPI): void {
 
   pi.events.on("editor:set-mode", (data: unknown) => {
     const payload = data as SetModePayload;
-    if (payload.mode !== "auto" && payload.mode !== "plan") return;
+    if (payload.mode !== "auto" && payload.mode !== "spec") return;
     editor?.setMode(payload.mode);
   });
 

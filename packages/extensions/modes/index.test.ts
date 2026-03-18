@@ -10,11 +10,11 @@ function createMockExtensionApiHarness() {
   const flags: Array<{ name: string; options: unknown }> = [];
   const listeners: Array<{ event: string; handler: Function }> = [];
   const sentMessages: Array<{ message: any; options?: unknown }> = [];
-  const sentUserMessages: Array<{ message: string; options?: unknown }> = [];
-  const appendedEntries: Array<{ customType: string; data: unknown }> = [];
+  const sentUserMessages: Array<{ content: string; options?: unknown }> = [];
   const sessionEntries: unknown[] = [];
   const flagValues = new Map<string, unknown>();
   let activeTools: string[] = ["read", "bash", "edit", "write", "grep", "find", "ls", "skill"];
+  let thinkingLevel = "off";
 
   const pi = {
     registerTool(tool: any) {
@@ -35,17 +35,21 @@ function createMockExtensionApiHarness() {
     sendMessage(message: any, options?: unknown) {
       sentMessages.push({ message, options });
     },
-    sendUserMessage(message: string, options?: unknown) {
-      sentUserMessages.push({ message, options });
+    sendUserMessage(content: string, options?: unknown) {
+      sentUserMessages.push({ content, options });
     },
-    appendEntry(customType: string, data: unknown) {
-      appendedEntries.push({ customType, data });
-    },
+    appendEntry() {},
     getActiveTools() {
       return [...activeTools];
     },
     setActiveTools(names: string[]) {
       activeTools = [...names];
+    },
+    getThinkingLevel() {
+      return thinkingLevel;
+    },
+    setThinkingLevel(level: string) {
+      thinkingLevel = level;
     },
     getFlag(name: string) {
       return flagValues.get(name) ?? false;
@@ -64,10 +68,9 @@ function createMockExtensionApiHarness() {
     listeners,
     sentMessages,
     sentUserMessages,
-    appendedEntries,
     getActiveTools: () => activeTools,
+    getThinkingLevel: () => thinkingLevel,
     getTool: (name: string) => tools.find((tool) => tool.name === name)?.tool,
-    getCommand: (name: string) => commands.find((command) => command.name === name),
     getListener: (event: string) => listeners.find((listener) => listener.event === event),
     setFlag: (name: string, value: unknown) => {
       flagValues.set(name, value);
@@ -102,129 +105,143 @@ function createMockExtensionApiHarness() {
 }
 
 describe("modes extension", () => {
-  it("registers /plan and /todos commands", () => {
+  it("registers /spec and /todos commands", () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
-
-    const names = harness.commands.map((command) => command.name);
-    expect(names).toContain("plan");
-    expect(names).toContain("todos");
+    expect(harness.commands.map((command) => command.name)).toEqual(["todos", "spec"]);
   });
 
-  it("registers signal tools", () => {
+  it("registers auto, spec, task-list, and execution signal tools", () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
-
     expect(harness.tools.map((tool) => tool.name)).toEqual([
-      "modes_plan_ready",
+      "modes_enter_spec",
+      "modes_spec_ready",
+      "modes_task_list_ready",
       "modes_step_done",
       "modes_gate_result",
       "modes_counsel_result",
     ]);
   });
 
-  it("registers shift+tab shortcut", () => {
+  it("registers shift+tab and --spec", () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
-
-    expect(harness.shortcuts).toHaveLength(1);
     expect(harness.shortcuts[0]!.key).toBe(Key.shift("tab"));
+    expect(harness.flags[0]).toMatchObject({ name: "spec" });
   });
 
-  it("emits PLAN editor mode when shortcut enables planning", async () => {
+  it("emits SPEC editor mode and xhigh thinking when shortcut enables spec mode", async () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
+    await harness.shortcuts[0]!.options.handler(harness.createContext());
+    expect(harness.pi.events.emit).toHaveBeenCalledWith("editor:set-mode", { mode: "spec" });
+    expect(harness.getThinkingLevel()).toBe("xhigh");
+  });
 
+  it("captures a spec when SPEC mode is active", async () => {
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
     await harness.shortcuts[0]!.options.handler(harness.createContext());
 
-    expect(harness.pi.events.emit).toHaveBeenCalledWith("editor:set-mode", { mode: "plan" });
+    const specReady = harness.getTool("modes_spec_ready");
+    const result = await specReady.execute("tc-1", { specText: "# Spec\n\nGoals" });
+
+    expect(result.isError).toBeUndefined();
+    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-spec")).toBe(true);
   });
 
-  it("registers --plan flag", () => {
+  it("lets AUTO mode escalate into SPEC mode via tool and switches to xhigh thinking", async () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
 
-    expect(harness.flags).toHaveLength(1);
-    expect(harness.flags[0]!.name).toBe("plan");
+    const ctx = harness.createContext();
+    harness.getListener("session_start")!.handler({}, ctx);
+
+    const enterSpec = harness.getTool("modes_enter_spec");
+    const result = await enterSpec.execute("tc-1", { prompt: "Write a PRD for the architecture." }, undefined, undefined, ctx);
+
+    expect(result.isError).toBeUndefined();
+    expect(harness.getThinkingLevel()).toBe("xhigh");
+    expect(harness.getActiveTools()).toEqual(["read", "bash", "grep", "find", "ls", "interview", "modes_spec_ready"]);
+    expect(harness.sentUserMessages).toContainEqual({
+      content: "Write a PRD for the architecture.",
+      options: { deliverAs: "followUp" },
+    });
   });
 
-  it("registers event handlers for tool_call, context, before_agent_start, session_start", () => {
+  it("hydrates AUTO mode with medium thinking and captures a task list", async () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
 
-    const events = harness.listeners.map((listener) => listener.event);
-    expect(events).toContain("tool_call");
-    expect(events).toContain("context");
-    expect(events).toContain("before_agent_start");
-    expect(events).toContain("session_start");
-    expect(events).not.toContain("agent_end");
-    expect(events).not.toContain("turn_end");
-  });
+    const ctx = harness.createContext();
+    harness.getListener("session_start")!.handler({}, ctx);
 
-  it("plan signal captures the plan and auto-executes with no UI", async () => {
-    const harness = createMockExtensionApiHarness();
-    modesExtension(harness.pi);
+    expect(harness.getThinkingLevel()).toBe("medium");
 
-    const ctx = harness.createContext({ hasUI: false });
-    await harness.shortcuts[0]!.options.handler(ctx);
-
-    const planReady = harness.getTool("modes_plan_ready");
-    expect(planReady).toBeDefined();
-
-    const result = await planReady.execute("tc-1", {
-      planText: "## Plan\n1. Audit the flow\n2. Add tests",
-      steps: ["Audit the flow", "Add tests"],
+    const taskListReady = harness.getTool("modes_task_list_ready");
+    const result = await taskListReady.execute("tc-1", {
+      planText: "# Task List\n1. Audit\n2. Add tests",
+      steps: ["Audit", "Add tests"],
     });
 
     expect(result.isError).toBeUndefined();
-    expect(
-      harness.sentMessages.some((entry) => entry.message.customType === "modes-todo-list"),
-    ).toBe(true);
-    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(
-      true,
-    );
+    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-todo-list")).toBe(true);
   });
 
-  it("blocks further tool calls while awaiting choice", async () => {
+  it("blocks further tool calls while awaiting a task-list choice", async () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
 
     const ctx = harness.createContext();
     ctx.ui.select = mock(async () => new Promise<undefined>(() => {}));
-    await harness.shortcuts[0]!.options.handler(ctx);
+    harness.getListener("session_start")!.handler({}, ctx);
 
-    const planReady = harness.getTool("modes_plan_ready");
-    await planReady.execute("tc-1", {
-      planText: "## Plan\n1. Audit the flow",
-      steps: ["Audit the flow"],
-    });
+    const taskListReady = harness.getTool("modes_task_list_ready");
+    await taskListReady.execute("tc-1", { planText: "# Task List\n1. Audit", steps: ["Audit"] });
 
     const toolCall = harness.getListener("tool_call");
     const reply = toolCall!.handler({ toolName: "read", input: { path: "/tmp/foo" } }, ctx);
     expect(reply).toMatchObject({ block: true });
   });
 
-  it("rejects marking a non-active step done", async () => {
+  it("rejects marking a non-active step done after execution starts", async () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
 
-    const ctx = harness.createContext({ hasUI: false });
-    await harness.shortcuts[0]!.options.handler(ctx);
-
-    const planReady = harness.getTool("modes_plan_ready");
-    await planReady.execute("tc-1", {
-      planText: "## Plan\n1. First\n2. Second",
+    const taskListReady = harness.getTool("modes_task_list_ready");
+    await taskListReady.execute("tc-1", {
+      planText: "# Task List\n1. First\n2. Second",
       steps: ["First", "Second"],
     });
 
+    harness.getListener("session_switch")!.handler({}, harness.createContext());
+    harness.setSessionEntries([
+      {
+        type: "custom",
+        customType: "modes",
+        data: {
+          mode: "Executing",
+          todoItems: [
+            { id: "1", order: 1, subject: "First", status: "in_progress", blockedBy: [] },
+            { id: "2", order: 2, subject: "Second", status: "pending", blockedBy: [] },
+          ],
+          planFilePath: "/tmp/task-list.md",
+          savedTools: ["read", "bash", "edit"],
+          currentStep: 1,
+          phase: "running",
+        },
+      },
+    ]);
+    harness.getListener("session_start")!.handler({}, harness.createContext({ hasUI: false }));
+
     const stepDone = harness.getTool("modes_step_done");
     const result = await stepDone.execute("tc-2", { step: 2 });
-
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("Step 1 is currently active");
   });
 
-  it("restores an awaiting choice session and re-prompts on session start", () => {
+  it("restores awaiting choice on session start and auto-executes with no UI", () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
       {
@@ -233,12 +250,12 @@ describe("modes extension", () => {
         data: {
           mode: "AwaitingChoice",
           todoItems: [{ step: 1, text: "Audit the flow", completed: false }],
-          planFilePath: "/tmp/plan.md",
+          planFilePath: "/tmp/task-list.md",
           savedTools: ["read", "bash", "edit"],
           pending: {
             todoItems: [{ step: 1, text: "Audit the flow", completed: false }],
-            planFilePath: "/tmp/plan.md",
-            planText: "Plan:\n1. Audit the flow",
+            planFilePath: "/tmp/task-list.md",
+            planText: "# Task List\n1. Audit the flow",
           },
         },
       },
@@ -246,17 +263,13 @@ describe("modes extension", () => {
     modesExtension(harness.pi);
 
     const sessionStart = harness.getListener("session_start");
-    expect(sessionStart).toBeDefined();
-
     sessionStart!.handler({}, harness.createContext({ hasUI: false }));
 
-    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(
-      true,
-    );
+    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(true);
     expect(harness.getActiveTools()).toContain("modes_step_done");
   });
 
-  it("renders the extracted task widget when restoring execution", () => {
+  it("renders the task widget when restoring execution", () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
       {
@@ -269,7 +282,7 @@ describe("modes extension", () => {
             { id: "2", order: 2, subject: "Second", status: "in_progress", blockedBy: [] },
             { id: "3", order: 3, subject: "Third", status: "pending", blockedBy: ["2"] },
           ],
-          planFilePath: "/tmp/plan.md",
+          planFilePath: "/tmp/task-list.md",
           savedTools: ["read", "bash", "edit"],
         },
       },
@@ -277,53 +290,9 @@ describe("modes extension", () => {
     modesExtension(harness.pi);
 
     const ctx = harness.createContext();
-    const sessionStart = harness.getListener("session_start");
-    expect(sessionStart).toBeDefined();
+    harness.getListener("session_start")!.handler({}, ctx);
 
-    sessionStart!.handler({}, ctx);
-
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith(
-      "modes",
-      "📋 3 tasks (1 done, 1 in progress, 1 open)",
-    );
-    expect(ctx.ui.setWidget).toHaveBeenCalledWith("modes-todos", [
-      "✔ First",
-      "◼ Second",
-      "◻ Third › blocked by #2",
-    ]);
-  });
-
-  it("restores the persisted gate phase on session start", () => {
-    const harness = createMockExtensionApiHarness();
-    harness.setSessionEntries([
-      {
-        type: "custom",
-        customType: "modes",
-        data: {
-          mode: "Executing",
-          todoItems: [
-            { id: "1", order: 1, subject: "First", status: "completed", blockedBy: [] },
-            { id: "2", order: 2, subject: "Second", status: "in_progress", blockedBy: [] },
-          ],
-          planFilePath: "/tmp/plan.md",
-          savedTools: ["read", "bash", "edit"],
-          currentStep: 2,
-          phase: "gating",
-        },
-      },
-    ]);
-    modesExtension(harness.pi);
-
-    const ctx = harness.createContext();
-    const sessionStart = harness.getListener("session_start");
-    expect(sessionStart).toBeDefined();
-
-    sessionStart!.handler({}, ctx);
-
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith(
-      "modes",
-      "📋 2 tasks (1 done, 1 in progress) ⚙ gate",
-    );
-    expect(ctx.ui.setWidget).toHaveBeenCalledWith("modes-todos", ["✔ First", "◼ Second (gate)"]);
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("modes", "📋 3 tasks (1 done, 1 in progress, 1 open)");
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith("modes-todos", ["✔ First", "◼ Second", "◻ Third › blocked by #2"]);
   });
 });

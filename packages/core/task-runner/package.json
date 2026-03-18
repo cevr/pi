@@ -1,0 +1,17 @@
+{
+  "name": "@cvr/pi-task-runner",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@cvr/pi-spawn": "workspace:*",
+    "@mariozechner/pi-coding-agent": "file:../../../../../pi-mono/packages/coding-agent"
+  },
+  "devDependencies": {
+    "@cvr/pi-state-machine": "workspace:*"
+  }
+}
