@@ -6,7 +6,11 @@ import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 import type { Message } from "@mariozechner/pi-ai";
 import { createTaskRunner, type TaskRunnerConfig } from "./index";
 
-function makeTextMessage(role: Message["role"], text: string, extra: Record<string, unknown> = {}): Message {
+function makeTextMessage(
+  role: Message["role"],
+  text: string,
+  extra: Record<string, unknown> = {},
+): Message {
   return {
     role,
     content: [{ type: "text", text }],
@@ -213,7 +217,12 @@ describe("createTaskRunner", () => {
         },
       } as AgentSessionEvent);
       session.emit({ type: "message_end", message: assistant } as AgentSessionEvent);
-      session.emit({ type: "turn_end", turnIndex: 0, message: assistant, toolResults: [] } as AgentSessionEvent);
+      session.emit({
+        type: "turn_end",
+        turnIndex: 0,
+        message: assistant,
+        toolResults: [],
+      } as AgentSessionEvent);
       session.emit({ type: "agent_end", messages: session.messages } as AgentSessionEvent);
     };
 

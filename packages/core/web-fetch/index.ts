@@ -212,27 +212,27 @@ function isResponseTooLargeError(error: unknown): error is WebFetchResponseTooLa
   );
 }
 
-const validateUrl = Effect.fn("@cvr/pi-web-fetch-core/index/WebFetchService.validateUrl")(function* (
-  rawUrl: string,
-) {
-  const parsed = yield* Effect.try({
-    try: () => new URL(rawUrl),
-    catch: () =>
-      new WebFetchInvalidUrlError({
-        url: rawUrl,
-        message: "invalid url",
-      }),
-  });
-
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return yield* new WebFetchInvalidUrlError({
-      url: rawUrl,
-      message: "url must use http:// or https://",
+const validateUrl = Effect.fn("@cvr/pi-web-fetch-core/index/WebFetchService.validateUrl")(
+  function* (rawUrl: string) {
+    const parsed = yield* Effect.try({
+      try: () => new URL(rawUrl),
+      catch: () =>
+        new WebFetchInvalidUrlError({
+          url: rawUrl,
+          message: "invalid url",
+        }),
     });
-  }
 
-  return parsed.toString();
-});
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return yield* new WebFetchInvalidUrlError({
+        url: rawUrl,
+        message: "url must use http:// or https://",
+      });
+    }
+
+    return parsed.toString();
+  },
+);
 
 const requestWithUserAgent = Effect.fn(
   "@cvr/pi-web-fetch-core/index/WebFetchService.requestWithUserAgent",
@@ -270,16 +270,16 @@ const requestWithUserAgent = Effect.fn(
   );
 });
 
-const ensureSuccessStatus = Effect.fn("@cvr/pi-web-fetch-core/index/WebFetchService.ensureSuccessStatus")(
-  function* (url: string, response: HttpClientResponse.HttpClientResponse) {
-    if (response.status >= 200 && response.status < 300) return response;
-    return yield* new WebFetchStatusError({
-      url,
-      status: response.status,
-      message: `request failed with status code ${response.status}`,
-    });
-  },
-);
+const ensureSuccessStatus = Effect.fn(
+  "@cvr/pi-web-fetch-core/index/WebFetchService.ensureSuccessStatus",
+)(function* (url: string, response: HttpClientResponse.HttpClientResponse) {
+  if (response.status >= 200 && response.status < 300) return response;
+  return yield* new WebFetchStatusError({
+    url,
+    status: response.status,
+    message: `request failed with status code ${response.status}`,
+  });
+});
 
 const ensureContentLengthWithinLimit = Effect.fn(
   "@cvr/pi-web-fetch-core/index/WebFetchService.ensureContentLengthWithinLimit",
@@ -294,50 +294,56 @@ const ensureContentLengthWithinLimit = Effect.fn(
   }
 });
 
-const readResponseBytes = Effect.fn("@cvr/pi-web-fetch-core/index/WebFetchService.readResponseBytes")(
-  function* (url: string, response: HttpClientResponse.HttpClientResponse, maxResponseBytes: number) {
-    const contentLength = parseContentLength(response.headers);
-    if (Option.isSome(contentLength) && contentLength.value === 0) {
-      return new Uint8Array(0);
-    }
+const readResponseBytes = Effect.fn(
+  "@cvr/pi-web-fetch-core/index/WebFetchService.readResponseBytes",
+)(function* (
+  url: string,
+  response: HttpClientResponse.HttpClientResponse,
+  maxResponseBytes: number,
+) {
+  const contentLength = parseContentLength(response.headers);
+  if (Option.isSome(contentLength) && contentLength.value === 0) {
+    return new Uint8Array(0);
+  }
 
-    const body = yield* response.stream.pipe(
-      Stream.runFoldEffect(
-        () => ({ chunks: [] as Array<Uint8Array>, totalBytes: 0 }),
-        (state, chunk) => {
-          const totalBytes = state.totalBytes + chunk.byteLength;
-          if (totalBytes > maxResponseBytes) {
-            return Effect.fail(
-              new WebFetchResponseTooLargeError({
-                url,
-                limitBytes: maxResponseBytes,
-                message: `response exceeds byte limit of ${maxResponseBytes} bytes`,
-              }),
-            );
-          }
+  const body = yield* response.stream.pipe(
+    Stream.runFoldEffect(
+      () => ({ chunks: [] as Array<Uint8Array>, totalBytes: 0 }),
+      (state, chunk) => {
+        const totalBytes = state.totalBytes + chunk.byteLength;
+        if (totalBytes > maxResponseBytes) {
+          return Effect.fail(
+            new WebFetchResponseTooLargeError({
+              url,
+              limitBytes: maxResponseBytes,
+              message: `response exceeds byte limit of ${maxResponseBytes} bytes`,
+            }),
+          );
+        }
 
-          return Effect.succeed({
-            chunks: [...state.chunks, chunk],
-            totalBytes,
-          });
-        },
-      ),
-      Effect.map((state) => concatChunks(state.chunks, state.totalBytes)),
-      Effect.mapError((error: WebFetchResponseTooLargeError | HttpClientError.HttpClientError) => {
-        if (isResponseTooLargeError(error)) return error;
-        return new WebFetchRequestError({
-          url,
-          message: error.message,
+        return Effect.succeed({
+          chunks: [...state.chunks, chunk],
+          totalBytes,
         });
-      }),
-    );
+      },
+    ),
+    Effect.map((state) => concatChunks(state.chunks, state.totalBytes)),
+    Effect.mapError((error: WebFetchResponseTooLargeError | HttpClientError.HttpClientError) => {
+      if (isResponseTooLargeError(error)) return error;
+      return new WebFetchRequestError({
+        url,
+        message: error.message,
+      });
+    }),
+  );
 
-    return body;
-  },
-);
+  return body;
+});
 
 const fetchResource = (config: WebFetchCoreConfig) =>
-  Effect.fn("@cvr/pi-web-fetch-core/index/WebFetchService.fetch")(function* (request: WebFetchRequest) {
+  Effect.fn("@cvr/pi-web-fetch-core/index/WebFetchService.fetch")(function* (
+    request: WebFetchRequest,
+  ) {
     const url = yield* validateUrl(request.url);
     const initialResponse = yield* requestWithUserAgent(
       url,
@@ -349,7 +355,12 @@ const fetchResource = (config: WebFetchCoreConfig) =>
     const mitigated = Headers.get(initialResponse.headers, "cf-mitigated");
     const response =
       initialResponse.status === 403 && Option.isSome(mitigated) && mitigated.value === "challenge"
-        ? yield* requestWithUserAgent(url, request.format, request.timeoutSecs, CLOUDFLARE_RETRY_USER_AGENT)
+        ? yield* requestWithUserAgent(
+            url,
+            request.format,
+            request.timeoutSecs,
+            CLOUDFLARE_RETRY_USER_AGENT,
+          )
         : initialResponse;
 
     const okResponse = yield* ensureSuccessStatus(url, response);

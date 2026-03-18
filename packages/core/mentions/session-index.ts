@@ -270,7 +270,9 @@ export function enumerateBranches(
       leaf.type === "model_change" ||
       leaf.type === "thinking_level_change"
     ) {
-      const hasMessages = getSessionChainToRoot(leaf.id, byId).some((entry) => entry.type === "message");
+      const hasMessages = getSessionChainToRoot(leaf.id, byId).some(
+        (entry) => entry.type === "message",
+      );
       if (!hasMessages) continue;
     }
 

@@ -94,9 +94,12 @@ function runFetchResult(
 describe("WebFetchService", () => {
   it("converts html to markdown by default", async () => {
     const { fetchImpl } = createSequentialFetch([
-      new Response("<!DOCTYPE html><html><body><main><h1>Docs</h1><p>Hello world.</p></main></body></html>", {
-        headers: { "content-type": "text/html; charset=utf-8" },
-      }),
+      new Response(
+        "<!DOCTYPE html><html><body><main><h1>Docs</h1><p>Hello world.</p></main></body></html>",
+        {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        },
+      ),
     ]);
 
     const result = await runFetch(createLayer(fetchImpl));
@@ -109,9 +112,12 @@ describe("WebFetchService", () => {
 
   it("converts html to text when requested", async () => {
     const { fetchImpl } = createSequentialFetch([
-      new Response("<!DOCTYPE html><html><body><main><h1>Docs</h1><p>Hello world.</p></main></body></html>", {
-        headers: { "content-type": "text/html" },
-      }),
+      new Response(
+        "<!DOCTYPE html><html><body><main><h1>Docs</h1><p>Hello world.</p></main></body></html>",
+        {
+          headers: { "content-type": "text/html" },
+        },
+      ),
     ]);
 
     const result = await runFetch(createLayer(fetchImpl), {
@@ -266,13 +272,10 @@ describe("WebFetchService", () => {
         }),
     );
 
-    const result = await runFetchResult(
-      createLayer(fetchImpl),
-      {
-        ...DEFAULT_REQUEST,
-        timeoutSecs: 1,
-      },
-    );
+    const result = await runFetchResult(createLayer(fetchImpl), {
+      ...DEFAULT_REQUEST,
+      timeoutSecs: 1,
+    });
 
     expect(result._tag).toBe("Failure");
     if (result._tag !== "Failure") throw new Error("expected failure result");

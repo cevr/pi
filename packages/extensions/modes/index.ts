@@ -123,9 +123,7 @@ function updatePlanFileToDisk(planPath: string, items: TaskListItem[]): void {
 // ---------------------------------------------------------------------------
 
 function buildTaskListFromSteps(steps: readonly string[]): TaskListItem[] {
-  return createTaskList(
-    steps.map((step) => cleanStepText(step)).filter((step) => step.length > 3),
-  );
+  return createTaskList(steps.map((step) => cleanStepText(step)).filter((step) => step.length > 3));
 }
 
 function normalizeHydratedTaskList(items: readonly Record<string, unknown>[]): TaskListItem[] {
@@ -324,7 +322,7 @@ export default function modesExtension(pi: ExtensionAPI): void {
             ? state.planFilePath
             : state._tag === "AwaitingChoice"
               ? state.pending.planFilePath
-              : state.pending?.planFilePath ?? null;
+              : (state.pending?.planFilePath ?? null);
         const pathInfo = planFilePath ? `\nTask list file: ${planFilePath}` : "";
         ctx.ui.notify(`Task List:\n${list}${pathInfo}`, "info");
       },
@@ -429,7 +427,8 @@ export default function modesExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: TASK_LIST_SIGNAL_TOOLS[0],
     label: "Task List Ready",
-    description: "Signal that an executable task list is ready and the user must choose what happens next.",
+    description:
+      "Signal that an executable task list is ready and the user must choose what happens next.",
     promptSnippet: "Signal when the executable task list is ready for user review and choice.",
     promptGuidelines: [
       "In AUTO mode, call this tool when you have produced an executable task list.",
@@ -445,7 +444,9 @@ export default function modesExtension(pi: ExtensionAPI): void {
       const state = machine.getState();
       if (state._tag !== "Auto") {
         return {
-          content: [{ type: "text" as const, text: "AUTO mode is not currently waiting for a task list." }],
+          content: [
+            { type: "text" as const, text: "AUTO mode is not currently waiting for a task list." },
+          ],
           details: {},
           isError: true,
         };
@@ -454,7 +455,9 @@ export default function modesExtension(pi: ExtensionAPI): void {
       const todoItems = buildTaskListFromSteps(params.steps);
       if (todoItems.length === 0) {
         return {
-          content: [{ type: "text" as const, text: "At least one valid task-list step is required." }],
+          content: [
+            { type: "text" as const, text: "At least one valid task-list step is required." },
+          ],
           details: {},
           isError: true,
         };
@@ -882,7 +885,10 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
       const currentTools = pi.getActiveTools();
       const state = machine.getState();
 
-      if (!prompt && (state._tag === "Spec" || state._tag === "AwaitingChoice" || state._tag === "Executing")) {
+      if (
+        !prompt &&
+        (state._tag === "Spec" || state._tag === "AwaitingChoice" || state._tag === "Executing")
+      ) {
         machine.send({ _tag: "Toggle", currentTools });
         return;
       }

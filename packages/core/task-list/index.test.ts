@@ -101,9 +101,7 @@ describe("validateTaskGraph", () => {
   });
 
   it("reports missing blockers and self-blocks", () => {
-    const tasks = [
-      { ...createTaskList(["First"])[0]!, blockedBy: ["1", "missing"] },
-    ];
+    const tasks = [{ ...createTaskList(["First"])[0]!, blockedBy: ["1", "missing"] }];
 
     expect(validateTaskGraph(tasks)).toEqual([
       { type: "self_block", taskId: "1", blockerId: "1" },
@@ -124,7 +122,11 @@ describe("validateTaskGraph", () => {
 
 describe("countTaskStatuses", () => {
   it("counts each status", () => {
-    const tasks = setTaskStatus(setTaskStatus(createTaskList(["First", "Second", "Third"]), 1, "completed"), 2, "in_progress");
+    const tasks = setTaskStatus(
+      setTaskStatus(createTaskList(["First", "Second", "Third"]), 1, "completed"),
+      2,
+      "in_progress",
+    );
     expect(countTaskStatuses(tasks)).toEqual({
       pending: 1,
       in_progress: 1,

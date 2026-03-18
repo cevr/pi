@@ -77,13 +77,7 @@ export interface TaskRunnerHandle {
   onCompletion(listener: (record: TaskRecord) => void): () => void;
 }
 
-export type TaskRunnerThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh";
+export type TaskRunnerThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface TaskRunnerConfig {
   cwd: string;
@@ -105,7 +99,15 @@ export interface TaskRunnerConfig {
 
 type TaskRunnerSession = Pick<
   AgentSession,
-  "abort" | "dispose" | "messages" | "prompt" | "sessionFile" | "sessionId" | "setActiveToolsByName" | "steer" | "subscribe"
+  | "abort"
+  | "dispose"
+  | "messages"
+  | "prompt"
+  | "sessionFile"
+  | "sessionId"
+  | "setActiveToolsByName"
+  | "steer"
+  | "subscribe"
 >;
 
 export interface TaskRunnerDeps {
@@ -188,7 +190,8 @@ function getFinalAssistantOutput(messages: readonly Message[]): string {
 }
 
 function describeToolActivity(toolName: string, args: unknown): string {
-  const argRecord = typeof args === "object" && args !== null ? (args as Record<string, unknown>) : undefined;
+  const argRecord =
+    typeof args === "object" && args !== null ? (args as Record<string, unknown>) : undefined;
   const hint =
     argRecord?.path ??
     argRecord?.pattern ??
@@ -198,7 +201,7 @@ function describeToolActivity(toolName: string, args: unknown): string {
     argRecord?.command;
   if (typeof hint !== "string") return toolName;
 
-  const trimmed = hint.includes("/") ? hint.split("/").at(-1) ?? hint : hint;
+  const trimmed = hint.includes("/") ? (hint.split("/").at(-1) ?? hint) : hint;
   const suffix = trimmed.length > 24 ? `${trimmed.slice(0, 24)}…` : trimmed;
   return `${toolName}(${suffix})`;
 }
@@ -267,7 +270,9 @@ function withProgress(record: TaskRecord, progress: Partial<TaskRunnerProgress>)
     progress: {
       ...record.progress,
       ...progress,
-      activeTools: progress.activeTools?.map((tool) => ({ ...tool })) ?? cloneProgress(record.progress).activeTools,
+      activeTools:
+        progress.activeTools?.map((tool) => ({ ...tool })) ??
+        cloneProgress(record.progress).activeTools,
     },
   };
 }
@@ -284,7 +289,11 @@ function withSessionRefs(
   };
 }
 
-function withCompletion(record: TaskRecord, status: Exclude<TaskRunnerStatus, "running">, completedAt: number): TaskRecord {
+function withCompletion(
+  record: TaskRecord,
+  status: Exclude<TaskRunnerStatus, "running">,
+  completedAt: number,
+): TaskRecord {
   const phase = status === "completed" ? "completed" : status === "error" ? "error" : "aborted";
   return {
     ...record,
@@ -569,9 +578,10 @@ const taskRunnerReducer: Reducer<
     case "PromptFailed":
       if (!isActiveState(state)) return { state };
       if (state._tag === "Aborting") {
-        const record = event.errorMessage && !state.record.errorMessage
-          ? { ...state.record, errorMessage: event.errorMessage }
-          : state.record;
+        const record =
+          event.errorMessage && !state.record.errorMessage
+            ? { ...state.record, errorMessage: event.errorMessage }
+            : state.record;
         return {
           state: {
             _tag: "Aborted",
@@ -693,13 +703,17 @@ export function createTaskRunner(
     if (!session) return;
     const record = getStateRecord(state);
     if (!record.outputFilePath) return;
-    writtenCount = appendTaskTranscriptEntries(record.outputFilePath, getCoreMessages(session.messages), {
-      writtenCount,
-      taskId: record.id,
-      description: record.description,
-      sessionId: session.sessionId,
-      cwd: config.cwd,
-    });
+    writtenCount = appendTaskTranscriptEntries(
+      record.outputFilePath,
+      getCoreMessages(session.messages),
+      {
+        writtenCount,
+        taskId: record.id,
+        description: record.description,
+        sessionId: session.sessionId,
+        cwd: config.cwd,
+      },
+    );
   };
 
   const runEffect = (effect: TaskRunnerMachineEffect) => {

@@ -7,7 +7,9 @@ const EMPTY_PROVIDER = ConfigProvider.fromEnv({ env: {} });
 function makeShellEnvProvider() {
   return ConfigProvider.fromEnv({
     env: Object.fromEntries(
-      Object.entries(process.env).flatMap(([key, value]) => (value === undefined ? [] : [[key, value]])),
+      Object.entries(process.env).flatMap(([key, value]) =>
+        value === undefined ? [] : [[key, value]],
+      ),
     ),
   });
 }
@@ -87,15 +89,13 @@ export const findRepoRoot = Effect.fn("@cvr/pi-repo-env/index/findRepoRoot")(fun
   }
 });
 
-export const makeRepoEnvProvider = Effect.fn("@cvr/pi-repo-env/index/makeRepoEnvProvider")(function* (
-  start: string | URL,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const repoRoot = yield* findRepoRoot(start);
+export const makeRepoEnvProvider = Effect.fn("@cvr/pi-repo-env/index/makeRepoEnvProvider")(
+  function* (start: string | URL) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const repoRoot = yield* findRepoRoot(start);
 
-  const repoEnvProvider =
-    Option.isNone(repoRoot)
+    const repoEnvProvider = Option.isNone(repoRoot)
       ? EMPTY_PROVIDER
       : yield* Effect.gen(function* () {
           const envPath = path.join(repoRoot.value, ENV_FILENAME);
@@ -106,7 +106,9 @@ export const makeRepoEnvProvider = Effect.fn("@cvr/pi-repo-env/index/makeRepoEnv
           return yield* ConfigProvider.fromDotEnv({ path: envPath });
         });
 
-  return ConfigProvider.orElse(makeShellEnvProvider(), repoEnvProvider);
-});
+    return ConfigProvider.orElse(makeShellEnvProvider(), repoEnvProvider);
+  },
+);
 
-export const layerRepoEnv = (start: string | URL) => ConfigProvider.layer(makeRepoEnvProvider(start));
+export const layerRepoEnv = (start: string | URL) =>
+  ConfigProvider.layer(makeRepoEnvProvider(start));

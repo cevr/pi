@@ -339,7 +339,9 @@ export function interpolatePromptVars(
 ): string {
   // merge variable definitions
   const configVars =
-    variables === undefined ? ((getGlobalConfig("promptVariables") as PromptVariables | undefined) ?? {}) : {};
+    variables === undefined
+      ? ((getGlobalConfig("promptVariables") as PromptVariables | undefined) ?? {})
+      : {};
   const merged: PromptVariables = {
     ...DEFAULT_PROMPT_VARIABLES,
     ...configVars,

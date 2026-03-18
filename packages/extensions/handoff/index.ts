@@ -389,10 +389,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
       }
 
       if (choice === "Edit handoff message") {
-        const edited = await ctx.ui.editor(
-          "handoff prompt — review/edit before switching",
-          prompt,
-        );
+        const edited = await ctx.ui.editor("handoff prompt — review/edit before switching", prompt);
         if (!edited) {
           ctx.ui.notify("handoff edit cancelled", "info");
           return "cancelled";
@@ -477,11 +474,12 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
             if (!usage || usage.percent === null) return null;
             if (usage.percent < cfg.threshold * 100) return null;
 
-            void runHandoffFlow(ctx, "continue the most specific pending task from the conversation").catch(
-              (err) => {
-                console.error("handoff generation failed:", err);
-              },
-            );
+            void runHandoffFlow(
+              ctx,
+              "continue the most specific pending task from the conversation",
+            ).catch((err) => {
+              console.error("handoff generation failed:", err);
+            });
             return null;
           },
         },

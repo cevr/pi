@@ -129,7 +129,11 @@ function cloneMessageArray(messages: readonly Message[]): Message[] {
   return messages.map((message) => ({ ...message }));
 }
 
-function summarizeExecution(description: string, messages: readonly Message[], finalOutput: string): string {
+function summarizeExecution(
+  description: string,
+  messages: readonly Message[],
+  finalOutput: string,
+): string {
   const items = getDisplayItems([...messages]);
 
   const reads = new Set<string>();
@@ -408,36 +412,37 @@ function createTaskTool(
     }),
     async execute(_toolCallId, params, _signal, onUpdate, ctx) {
       const p = params as TaskParams;
-      const handle = createTaskRunnerFn(
-        {
-          cwd: ctx.cwd,
-          prompt: p.prompt,
-          description: p.description,
-          model: p.model,
-          thinking: p.thinking,
-          builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
-          extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
-          outputFilePath: p.outputFilePath,
-          currentModel: ctx.model,
-          modelRegistry: ctx.modelRegistry,
-          onUpdate: (record) => {
-            if (!onUpdate) return;
-            onUpdate({
-              content: [
-                {
-                  type: "text",
-                  text: record.output || "(working...)",
-                },
-              ],
-              details: buildSingleResult(record),
-            } as any);
-          },
+      const handle = createTaskRunnerFn({
+        cwd: ctx.cwd,
+        prompt: p.prompt,
+        description: p.description,
+        model: p.model,
+        thinking: p.thinking,
+        builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
+        extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
+        outputFilePath: p.outputFilePath,
+        currentModel: ctx.model,
+        modelRegistry: ctx.modelRegistry,
+        onUpdate: (record) => {
+          if (!onUpdate) return;
+          onUpdate({
+            content: [
+              {
+                type: "text",
+                text: record.output || "(working...)",
+              },
+            ],
+            details: buildSingleResult(record),
+          } as any);
         },
-      );
+      });
 
       if (p.background) {
         backgroundState.tasks.set(handle.id, handle);
-        backgroundState.completionListeners.set(handle.id, registerBackgroundTaskCompletion(pi, handle));
+        backgroundState.completionListeners.set(
+          handle.id,
+          registerBackgroundTaskCompletion(pi, handle),
+        );
         const record = handle.getRecord();
         const references = buildReferenceBlock(record);
         const progress = formatProgressBlock(record);
@@ -613,9 +618,7 @@ function createSteerTaskTool(backgroundState: BackgroundState): ToolDefinition {
       const ok = await handle.steer(p.message);
       if (!ok) {
         return {
-          content: [
-            { type: "text" as const, text: `Task ${p.task_id} is no longer running.` },
-          ],
+          content: [{ type: "text" as const, text: `Task ${p.task_id} is no longer running.` }],
           details: {},
           isError: true,
         } as any;

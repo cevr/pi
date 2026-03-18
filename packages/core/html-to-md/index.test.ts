@@ -196,7 +196,7 @@ describe("htmlToMarkdown", () => {
         </ul>
       </body></html>`;
     const md = htmlToMarkdown(html);
- 
+
     expect(md).toContain("- **Bold item**");
     expect(md).toContain("- *Italic item*");
   });

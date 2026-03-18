@@ -24,7 +24,9 @@ describe("executeTurn", () => {
 
 describe("isExecutionEffect", () => {
   it("detects execution effects", () => {
-    expect(isExecutionEffect(executeTurn({ customType: "x", content: "y", display: false }))).toBe(true);
+    expect(isExecutionEffect(executeTurn({ customType: "x", content: "y", display: false }))).toBe(
+      true,
+    );
     expect(isExecutionEffect({ type: "notify", message: "nope" })).toBe(false);
   });
 });

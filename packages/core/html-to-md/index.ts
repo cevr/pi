@@ -248,7 +248,11 @@ function nodeToText($: any, node: any): string {
     return (el.attr("alt") || "").trim();
   }
 
-  if (["div", "section", "article", "main", "figure", "figcaption", "details", "summary"].includes(tag)) {
+  if (
+    ["div", "section", "article", "main", "figure", "figcaption", "details", "summary"].includes(
+      tag,
+    )
+  ) {
     const text = inner().trim();
     return text ? `\n\n${text}\n\n` : "";
   }

@@ -5,13 +5,13 @@
   "main": "./index.ts",
   "types": "./index.ts",
   "dependencies": {
-    "@effect/platform-node": "4.0.0-beta.34",
     "@cvr/pi-box-format": "workspace:*",
     "@cvr/pi-config": "workspace:*",
     "@cvr/pi-process-runner": "workspace:*",
     "@cvr/pi-prompt-patch": "workspace:*",
     "@cvr/pi-repo-env": "workspace:*",
     "@cvr/pi-tool-cost": "workspace:*",
+    "@effect/platform-node": "4.0.0-beta.34",
     "@sinclair/typebox": "^0.34.0"
   },
   "devDependencies": {

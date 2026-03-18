@@ -70,11 +70,17 @@ export function setTaskStatuses(
   );
 }
 
-export function claimTasks(tasks: readonly TaskListItem[], taskIds: readonly string[]): TaskListItem[] {
+export function claimTasks(
+  tasks: readonly TaskListItem[],
+  taskIds: readonly string[],
+): TaskListItem[] {
   return setTaskStatuses(tasks, taskIds, "in_progress");
 }
 
-export function completeTasks(tasks: readonly TaskListItem[], taskIds: readonly string[]): TaskListItem[] {
+export function completeTasks(
+  tasks: readonly TaskListItem[],
+  taskIds: readonly string[],
+): TaskListItem[] {
   return setTaskStatuses(tasks, taskIds, "completed");
 }
 

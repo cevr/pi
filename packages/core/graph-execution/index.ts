@@ -14,9 +14,21 @@ export interface GraphExecutionPolicy {
 }
 
 export type GraphExecutionCounselResult =
-  | { type: "retry"; phase: GraphExecutionPhase; frontierTaskIds: string[]; activeTaskIds: string[]; total: number }
+  | {
+      type: "retry";
+      phase: GraphExecutionPhase;
+      frontierTaskIds: string[];
+      activeTaskIds: string[];
+      total: number;
+    }
   | { type: "complete" }
-  | { type: "advance"; phase: GraphExecutionPhase; frontierTaskIds: string[]; activeTaskIds: string[]; total: number };
+  | {
+      type: "advance";
+      phase: GraphExecutionPhase;
+      frontierTaskIds: string[];
+      activeTaskIds: string[];
+      total: number;
+    };
 
 function getEffectiveParallelism(policy: GraphExecutionPolicy): number {
   return Number.isInteger(policy.maxParallel) && policy.maxParallel > 0 ? policy.maxParallel : 1;

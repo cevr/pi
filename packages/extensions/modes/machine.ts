@@ -12,11 +12,7 @@ import {
   resolveSequentialExecutionGate,
   type SequentialExecutionPhase,
 } from "@cvr/pi-sequential-execution";
-import {
-  findTaskByOrder,
-  setTaskStatus,
-  type TaskListItem,
-} from "@cvr/pi-task-list";
+import { findTaskByOrder, setTaskStatus, type TaskListItem } from "@cvr/pi-task-list";
 import type { BuiltinEffect, Reducer, TransitionResult } from "@cvr/pi-state-machine";
 
 // ---------------------------------------------------------------------------
@@ -195,7 +191,9 @@ function getSpecModeTools(): string[] {
   return mergeTools(SPEC_TOOLS, SPEC_SIGNAL_TOOLS);
 }
 
-function getModeThinkingLevel(state: ModesState): typeof AUTO_DEFAULT_THINKING | typeof SPEC_DEFAULT_THINKING {
+function getModeThinkingLevel(
+  state: ModesState,
+): typeof AUTO_DEFAULT_THINKING | typeof SPEC_DEFAULT_THINKING {
   return state._tag === "Spec" ? SPEC_DEFAULT_THINKING : AUTO_DEFAULT_THINKING;
 }
 
@@ -239,7 +237,10 @@ function continueWithNextTask(items: readonly TaskListItem[], step: number): Tas
   return nextTask ? setTaskStatus(completed, nextTask.order, "in_progress") : completed;
 }
 
-function ensureActiveTask(items: readonly TaskListItem[], currentStep: number | null): TaskListItem[] {
+function ensureActiveTask(
+  items: readonly TaskListItem[],
+  currentStep: number | null,
+): TaskListItem[] {
   if (items.some((task) => task.status === "in_progress")) {
     return items.map((task) => ({ ...task }));
   }
@@ -354,7 +355,8 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
             : event.currentTools;
       const pending = state._tag === "Executing" ? undefined : state.pending;
       const spec = state._tag === "Executing" ? state.spec : state.spec;
-      const diffContext = event.diffContext ?? (state._tag === "Spec" ? state.diffContext : undefined);
+      const diffContext =
+        event.diffContext ?? (state._tag === "Spec" ? state.diffContext : undefined);
       const next: ModesState = { _tag: "Spec", savedTools, spec, pending, diffContext };
 
       return {
@@ -412,7 +414,9 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       const todoListText = event.pending.todoItems
         .map((task) => `${task.order}. ◻ ${task.subject}`)
         .join("\n");
-      const pathInfo = event.pending.planFilePath ? `\n\nSaved to: ${event.pending.planFilePath}` : "";
+      const pathInfo = event.pending.planFilePath
+        ? `\n\nSaved to: ${event.pending.planFilePath}`
+        : "";
 
       const effects: Effect[] = [
         setModeThinking(next),
@@ -741,13 +745,19 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           pending: event.pending,
           spec: event.spec,
         };
-        effects.push({ type: "setActiveTools", tools: getAutoModeTools(savedTools) }, setModeThinking(next), UI);
+        effects.push(
+          { type: "setActiveTools", tools: getAutoModeTools(savedTools) },
+          setModeThinking(next),
+          UI,
+        );
         return { state: next, effects };
       }
 
       if (event.mode === "Executing" && event.todoItems.length > 0) {
         const currentStep =
-          event.currentStep ?? event.todoItems.find((task) => task.status !== "completed")?.order ?? null;
+          event.currentStep ??
+          event.todoItems.find((task) => task.status !== "completed")?.order ??
+          null;
         const todoItems = ensureActiveTask(event.todoItems, currentStep);
         const next: ModesState = {
           _tag: "Executing",
@@ -758,7 +768,11 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           currentStep,
           spec: event.spec,
         };
-        effects.push({ type: "setActiveTools", tools: getExecutionTools(savedTools) }, setModeThinking(next), UI);
+        effects.push(
+          { type: "setActiveTools", tools: getExecutionTools(savedTools) },
+          setModeThinking(next),
+          UI,
+        );
         if (event.planFilePath) {
           effects.push({
             type: "updatePlanFile",
@@ -769,14 +783,22 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
         return { state: next, effects };
       }
 
-      if (event.mode === "Spec" || event.flagSpec || (!event.pending && (event.mode === "Planning" || event.flagPlan))) {
+      if (
+        event.mode === "Spec" ||
+        event.flagSpec ||
+        (!event.pending && (event.mode === "Planning" || event.flagPlan))
+      ) {
         const next: ModesState = {
           _tag: "Spec",
           savedTools,
           spec: event.spec,
           diffContext: undefined,
         };
-        effects.push({ type: "setActiveTools", tools: getSpecModeTools() }, setModeThinking(next), UI);
+        effects.push(
+          { type: "setActiveTools", tools: getSpecModeTools() },
+          setModeThinking(next),
+          UI,
+        );
         return { state: next, effects };
       }
 
@@ -786,14 +808,22 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           spec: event.spec,
           pending: event.pending,
         };
-        effects.push({ type: "setActiveTools", tools: getAutoModeTools(savedTools) }, setModeThinking(next), UI);
+        effects.push(
+          { type: "setActiveTools", tools: getAutoModeTools(savedTools) },
+          setModeThinking(next),
+          UI,
+        );
         return { state: next, effects };
       }
 
       const next: ModesState = { _tag: "Auto", spec: event.spec };
       return {
         state: next,
-        effects: [{ type: "setActiveTools", tools: getAutoModeTools(savedTools) }, setModeThinking(next), UI],
+        effects: [
+          { type: "setActiveTools", tools: getAutoModeTools(savedTools) },
+          setModeThinking(next),
+          UI,
+        ],
       };
     }
   }

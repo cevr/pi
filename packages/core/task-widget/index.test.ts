@@ -9,7 +9,11 @@ const theme = {
 
 describe("renderTaskWidget", () => {
   it("renders status text and task lines for mixed progress", () => {
-    const tasks = setTaskStatus(setTaskStatus(createTaskList(["First", "Second", "Third"]), 1, "completed"), 2, "in_progress");
+    const tasks = setTaskStatus(
+      setTaskStatus(createTaskList(["First", "Second", "Third"]), 1, "completed"),
+      2,
+      "in_progress",
+    );
 
     expect(renderTaskWidget(tasks, { phase: "gating", theme })).toEqual({
       statusText: "📋 3 tasks (1 done, 1 in progress, 1 open) ⚙ gate",
@@ -18,16 +22,20 @@ describe("renderTaskWidget", () => {
   });
 
   it("uses activeForm for the in-progress task", () => {
-    const [task] = setTaskStatus([
-      {
-        id: "1",
-        order: 1,
-        subject: "Run the step",
-        activeForm: "Running the step",
-        status: "in_progress",
-        blockedBy: [],
-      },
-    ], 1, "in_progress");
+    const [task] = setTaskStatus(
+      [
+        {
+          id: "1",
+          order: 1,
+          subject: "Run the step",
+          activeForm: "Running the step",
+          status: "in_progress",
+          blockedBy: [],
+        },
+      ],
+      1,
+      "in_progress",
+    );
 
     expect(renderTaskWidget([task!], { theme })).toEqual({
       statusText: "📋 1 tasks (1 in progress)",

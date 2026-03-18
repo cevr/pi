@@ -441,8 +441,7 @@ function formatElapsed(ms: number): string {
 }
 
 export function formatBackgroundTaskSegmentText(payload: TaskBackgroundCompletedPayload): string {
-  const icon =
-    payload.status === "completed" ? "✓" : payload.status === "error" ? "✕" : "⊘";
+  const icon = payload.status === "completed" ? "✓" : payload.status === "error" ? "✕" : "⊘";
   const verb =
     payload.status === "completed" ? "done" : payload.status === "error" ? "failed" : "aborted";
   return `${icon} bg: ${payload.description} (${verb})`;
@@ -729,18 +728,23 @@ function editorExtension(pi: ExtensionAPI): void {
     editor?.setMode(payload.mode);
   });
 
-  const removeBackgroundTaskListener = pi.events.on("task:background-completed", (data: unknown) => {
-    if (typeof data !== "object" || data === null) return;
-    const payload = data as Partial<TaskBackgroundCompletedPayload>;
-    if (
-      typeof payload.taskId !== "string" ||
-      typeof payload.description !== "string" ||
-      (payload.status !== "completed" && payload.status !== "error" && payload.status !== "aborted")
-    ) {
-      return;
-    }
-    showBackgroundTaskSegment(payload as TaskBackgroundCompletedPayload);
-  });
+  const removeBackgroundTaskListener = pi.events.on(
+    "task:background-completed",
+    (data: unknown) => {
+      if (typeof data !== "object" || data === null) return;
+      const payload = data as Partial<TaskBackgroundCompletedPayload>;
+      if (
+        typeof payload.taskId !== "string" ||
+        typeof payload.description !== "string" ||
+        (payload.status !== "completed" &&
+          payload.status !== "error" &&
+          payload.status !== "aborted")
+      ) {
+        return;
+      }
+      showBackgroundTaskSegment(payload as TaskBackgroundCompletedPayload);
+    },
+  );
 
   pi.on("model_select", async (_event, ctx) => {
     // update model display when user changes model via /model or Ctrl+P

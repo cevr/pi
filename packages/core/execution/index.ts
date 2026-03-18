@@ -24,7 +24,11 @@ export function executeTurn(request: ExecutionRequest): ExecutionEffect {
 }
 
 export function isExecutionEffect(effect: unknown): effect is ExecutionEffect {
-  return typeof effect === "object" && effect !== null && (effect as { type?: string }).type === "executeTurn";
+  return (
+    typeof effect === "object" &&
+    effect !== null &&
+    (effect as { type?: string }).type === "executeTurn"
+  );
 }
 
 export function createInlineExecutionExecutor(

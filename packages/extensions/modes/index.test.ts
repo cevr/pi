@@ -148,7 +148,9 @@ describe("modes extension", () => {
     const result = await specReady.execute("tc-1", { specText: "# Spec\n\nGoals" });
 
     expect(result.isError).toBeUndefined();
-    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-spec")).toBe(true);
+    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-spec")).toBe(
+      true,
+    );
   });
 
   it("lets AUTO mode escalate into SPEC mode via tool and switches to xhigh thinking", async () => {
@@ -159,11 +161,25 @@ describe("modes extension", () => {
     harness.getListener("session_start")!.handler({}, ctx);
 
     const enterSpec = harness.getTool("modes_enter_spec");
-    const result = await enterSpec.execute("tc-1", { prompt: "Write a PRD for the architecture." }, undefined, undefined, ctx);
+    const result = await enterSpec.execute(
+      "tc-1",
+      { prompt: "Write a PRD for the architecture." },
+      undefined,
+      undefined,
+      ctx,
+    );
 
     expect(result.isError).toBeUndefined();
     expect(harness.getThinkingLevel()).toBe("xhigh");
-    expect(harness.getActiveTools()).toEqual(["read", "bash", "grep", "find", "ls", "interview", "modes_spec_ready"]);
+    expect(harness.getActiveTools()).toEqual([
+      "read",
+      "bash",
+      "grep",
+      "find",
+      "ls",
+      "interview",
+      "modes_spec_ready",
+    ]);
     expect(harness.sentUserMessages).toContainEqual({
       content: "Write a PRD for the architecture.",
       options: { deliverAs: "followUp" },
@@ -186,7 +202,9 @@ describe("modes extension", () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-todo-list")).toBe(true);
+    expect(
+      harness.sentMessages.some((entry) => entry.message.customType === "modes-todo-list"),
+    ).toBe(true);
   });
 
   it("blocks further tool calls while awaiting a task-list choice", async () => {
@@ -265,7 +283,9 @@ describe("modes extension", () => {
     const sessionStart = harness.getListener("session_start");
     sessionStart!.handler({}, harness.createContext({ hasUI: false }));
 
-    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(true);
+    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(
+      true,
+    );
     expect(harness.getActiveTools()).toContain("modes_step_done");
   });
 
@@ -292,7 +312,14 @@ describe("modes extension", () => {
     const ctx = harness.createContext();
     harness.getListener("session_start")!.handler({}, ctx);
 
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith("modes", "📋 3 tasks (1 done, 1 in progress, 1 open)");
-    expect(ctx.ui.setWidget).toHaveBeenCalledWith("modes-todos", ["✔ First", "◼ Second", "◻ Third › blocked by #2"]);
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+      "modes",
+      "📋 3 tasks (1 done, 1 in progress, 1 open)",
+    );
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith("modes-todos", [
+      "✔ First",
+      "◼ Second",
+      "◻ Third › blocked by #2",
+    ]);
   });
 });

@@ -62,7 +62,10 @@ function executing(
 
 type AnyEffect = BuiltinEffect | ExecutionEffect | ModesEffect;
 
-function getEffect<T extends AnyEffect>(effects: readonly AnyEffect[] | undefined, type: string): T | undefined {
+function getEffect<T extends AnyEffect>(
+  effects: readonly AnyEffect[] | undefined,
+  type: string,
+): T | undefined {
   return effects?.find((effect) => effect.type === type) as T | undefined;
 }
 
@@ -84,10 +87,13 @@ describe("modesReducer", () => {
   });
 
   it("toggles Spec → Auto, restores tools, and requests a task list from the spec", () => {
-    const result = modesReducer(specMode(["read", "bash"], { specFilePath: "/tmp/spec.md", specText: "# Spec" }), {
-      _tag: "Toggle",
-      currentTools: [],
-    });
+    const result = modesReducer(
+      specMode(["read", "bash"], { specFilePath: "/tmp/spec.md", specText: "# Spec" }),
+      {
+        _tag: "Toggle",
+        currentTools: [],
+      },
+    );
     expect(result.state._tag).toBe("Auto");
     expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
       tools: ["read", "bash", ...AUTO_SIGNAL_TOOLS, ...TASK_LIST_SIGNAL_TOOLS],
