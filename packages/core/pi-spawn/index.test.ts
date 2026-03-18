@@ -200,7 +200,7 @@ describe("processNdjsonLine", () => {
     expect(rpc.endTurnCount).toBe(2);
   });
 
-  it("kills proc after first turn when using stdin RPC without followUp", () => {
+  it("kills proc after first turn by default", () => {
     let killed = false;
     const result = makeResult();
     const msg = { role: "assistant", content: "done", stopReason: "end_turn" };
@@ -208,7 +208,7 @@ describe("processNdjsonLine", () => {
     processNdjsonLine(
       JSON.stringify({ type: "message_end", message: msg }),
       result,
-      { promptViaStdin: true },
+      {},
       { endTurnCount: 0 },
       () => {
         killed = true;
@@ -216,6 +216,24 @@ describe("processNdjsonLine", () => {
     );
 
     expect(killed).toBe(true);
+  });
+
+  it("does not auto-kill when promptViaStdin is disabled", () => {
+    let killed = false;
+    const result = makeResult();
+    const msg = { role: "assistant", content: "done", stopReason: "end_turn" };
+
+    processNdjsonLine(
+      JSON.stringify({ type: "message_end", message: msg }),
+      result,
+      { promptViaStdin: false },
+      { endTurnCount: 0 },
+      () => {
+        killed = true;
+      },
+    );
+
+    expect(killed).toBe(false);
   });
 
   it("kills proc on error stopReason in RPC mode", () => {

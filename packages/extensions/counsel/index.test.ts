@@ -200,7 +200,7 @@ describe("detectModelFamily", () => {
 });
 
 describe("createCounselTool", () => {
-  it("uses json-mode spawning with a persisted session file", async () => {
+  it("uses pi-spawn transport defaults with a persisted session file", async () => {
     const calls: PiSpawnConfig[] = [];
     const runtime = createRuntime((config) => {
       calls.push(config);

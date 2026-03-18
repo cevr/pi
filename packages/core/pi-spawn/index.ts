@@ -57,8 +57,11 @@ export interface PiSpawnConfig {
   /**
    * send the initial prompt through RPC stdin instead of argv.
    *
-   * more robust for long prompts (large inlined file context) and avoids
-   * edge cases where positional prompt delivery gets dropped.
+   * default: true. argv prompt delivery is brittle for large / complex task
+   * strings and has been observed to occasionally drop the initial prompt,
+   * which then surfaces downstream as provider errors about missing input.
+   *
+   * set to false only when you explicitly need print/json mode behavior.
    */
   promptViaStdin?: boolean;
   /**
@@ -111,6 +114,18 @@ export function zeroUsage(): UsageStats {
     contextTokens: 0,
     turns: 0,
   };
+}
+
+function usesRpcTransport(config: Pick<PiSpawnConfig, "followUp" | "promptViaStdin">): boolean {
+  return config.followUp !== undefined || config.promptViaStdin !== false;
+}
+
+function normalizeTask(task: string): string {
+  const normalized = task.trim();
+  if (!normalized) {
+    throw new Error("PiSpawn task must be non-empty.");
+  }
+  return normalized;
 }
 
 /**
@@ -192,7 +207,7 @@ export function processNdjsonLine(
 
       const stopReason = msgRecord.stopReason as string | undefined;
       const isTurnEnd = stopReason === "end_turn" || stopReason === "stop";
-      const useRpc = !!config.followUp || config.promptViaStdin === true;
+      const useRpc = usesRpcTransport(config);
       const expectedTurns = config.followUp ? 2 : 1;
 
       if (useRpc && isTurnEnd) {
@@ -219,7 +234,8 @@ export function processNdjsonLine(
 // --- spawn ---
 
 export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
-  const useRpc = !!config.followUp || config.promptViaStdin === true;
+  const task = normalizeTask(config.task);
+  const useRpc = usesRpcTransport(config);
   const sessionArgs = config.sessionPath ? ["--session", config.sessionPath] : ["--no-session"];
   const args: string[] = useRpc
     ? ["--mode", "rpc", ...sessionArgs]
@@ -259,7 +275,7 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 
     // in print mode, task is a CLI arg. in RPC mode, sent via stdin prompt command.
     if (!useRpc) {
-      args.push(`Task: ${config.task}`);
+      args.push(`Task: ${task}`);
     }
 
     const spawnEnv: Record<string, string | undefined> = {
@@ -299,7 +315,7 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
       if (useRpc && proc.stdin) {
         const promptCmd = JSON.stringify({
           type: "prompt",
-          message: `Task: ${config.task}`,
+          message: `Task: ${task}`,
         });
         proc.stdin.write(promptCmd + "\n");
 

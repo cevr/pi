@@ -5,7 +5,7 @@
  * with a dedicated tool. the model calls
  * finder(query: "...") instead of routing through the dispatcher.
  *
- * spawns `pi --mode json` with a compact model, constrained to
+ * spawns a compact pi sub-agent, constrained to
  * search-oriented tools (read, grep, find, ls, bash). bash is for
  * read-only shell search like rg/eza/git grep, not mutation. the
  * finder agent maximizes parallelism (8+ tool calls per turn) and completes

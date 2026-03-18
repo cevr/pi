@@ -6,9 +6,10 @@
  * persists the full exchange to a pi session file for later inspection.
  * returns only the session path to keep parent-agent context lean.
  *
- * important: counsel is intentionally single-shot JSON mode, not RPC stdin.
- * it's a one-prompt reviewer, and returning the session path avoids hauling
- * the full review back into the parent context.
+ * counsel stays single-shot and returns only the session path, avoiding
+ * hauling the full review back into the parent context.
+ *
+ * transport details are delegated to @cvr/pi-spawn.
  *
  * follows the dedicated sub-agent pattern: PiSpawnService + ManagedRuntime + getEnabledExtensionConfig.
  */
