@@ -24,6 +24,13 @@ const RULES: PermissionRule[] = [
   },
   {
     tool: "Bash",
+    matches: { cmd: ["*git stash*"] },
+    action: "reject",
+    message:
+      "Do not stash. If there's a problem in current code - find a way to fix, assume it is your problem. Otherwise ask the user.",
+  },
+  {
+    tool: "Bash",
     matches: {
       cmd: ["*git push --force*", "*git push -f*", "*--force-with-lease*"],
     },
@@ -71,6 +78,14 @@ describe("evaluatePermission", () => {
   it("allows explicit git add", () => {
     const v = evaluatePermission("Bash", { cmd: "git add src/foo.ts" }, RULES);
     expect(v.action).toBe("allow");
+  });
+
+  it("rejects git stash with custom message", () => {
+    const v = evaluatePermission("Bash", { cmd: "git stash push -u" }, RULES);
+    expect(v.action).toBe("reject");
+    expect(v.message).toBe(
+      "Do not stash. If there's a problem in current code - find a way to fix, assume it is your problem. Otherwise ask the user.",
+    );
   });
 
   it("rejects force push variants", () => {
@@ -157,7 +172,7 @@ describe("Permissions service", () => {
       }),
     );
 
-    expect(result).toHaveLength(4);
+    expect(result).toHaveLength(5);
     expect(result[0]!.tool).toBe("Bash");
   });
 
