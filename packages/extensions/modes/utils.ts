@@ -3,6 +3,8 @@
  * Extracted for testability.
  */
 
+import { createTaskList, setTaskStatus, type TaskListItem } from "@cvr/pi-task-list";
+
 /** Destructive commands blocked in plan mode. */
 const DESTRUCTIVE_PATTERNS = [
   /\brm\b/i,
@@ -110,11 +112,7 @@ export function isSafeCommand(command: string): boolean {
   return !isDestructive && isSafe;
 }
 
-export interface TodoItem {
-  step: number;
-  text: string;
-  completed: boolean;
-}
+export type PlanTask = TaskListItem;
 
 /** Clean a plan step's text for display in the todo widget. */
 export function cleanStepText(text: string): string {
@@ -139,7 +137,7 @@ export function cleanStepText(text: string): string {
   return cleaned;
 }
 
-function appendTodoItem(items: TodoItem[], rawText: string): void {
+function appendTaskSubject(subjects: string[], rawText: string): void {
   const text = rawText.trim();
   if (text.length <= 5 || text.startsWith("`") || text.startsWith("/") || text.startsWith("-")) {
     return;
@@ -147,7 +145,7 @@ function appendTodoItem(items: TodoItem[], rawText: string): void {
 
   const cleaned = cleanStepText(text);
   if (cleaned.length > 3) {
-    items.push({ step: items.length + 1, text: cleaned, completed: false });
+    subjects.push(cleaned);
   }
 }
 
@@ -179,18 +177,18 @@ function parsePlanListLine(line: string): { indent: number; text: string } | nul
   };
 }
 
-export function extractTodoItems(message: string): TodoItem[] {
+export function extractTodoItems(message: string): PlanTask[] {
   const lines = message.split(/\r?\n/);
   const headerIndex = lines.findIndex(isPlanHeader);
   if (headerIndex === -1) return [];
 
-  const items: TodoItem[] = [];
+  const subjects: string[] = [];
   let currentLines: string[] = [];
   let listIndent: number | null = null;
 
   const flushCurrentItem = () => {
     if (currentLines.length === 0) return;
-    appendTodoItem(items, currentLines.join(" "));
+    appendTaskSubject(subjects, currentLines.join(" "));
     currentLines = [];
   };
 
@@ -199,7 +197,7 @@ export function extractTodoItems(message: string): TodoItem[] {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    if ((items.length > 0 || currentLines.length > 0) && /^\s*#{1,6}\s+/.test(line)) {
+    if ((subjects.length > 0 || currentLines.length > 0) && /^\s*#{1,6}\s+/.test(line)) {
       flushCurrentItem();
       break;
     }
@@ -232,7 +230,7 @@ export function extractTodoItems(message: string): TodoItem[] {
   }
 
   flushCurrentItem();
-  return items;
+  return createTaskList(subjects);
 }
 
 /** Extract [DONE:n] step numbers from text. */
@@ -245,12 +243,14 @@ export function extractDoneSteps(message: string): number[] {
   return steps;
 }
 
-/** Mark todo items as completed based on [DONE:n] markers in text. Returns count marked. */
-export function markCompletedSteps(text: string, items: TodoItem[]): number {
+/** Mark task-list items as completed based on [DONE:n] markers in text. Returns count marked. */
+export function markCompletedSteps(text: string, items: PlanTask[]): number {
   const doneSteps = extractDoneSteps(text);
+  let nextItems = items;
   for (const step of doneSteps) {
-    const item = items.find((t) => t.step === step);
-    if (item) item.completed = true;
+    nextItems = setTaskStatus(nextItems, step, "completed");
   }
+
+  items.splice(0, items.length, ...nextItems);
   return doneSteps.length;
 }

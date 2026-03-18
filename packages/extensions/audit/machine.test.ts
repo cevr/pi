@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { ExecutionEffect } from "@cvr/pi-execution";
 import {
   MAX_CONCERNS,
   auditReducer,
@@ -15,7 +16,7 @@ import type { BuiltinEffect } from "@cvr/pi-state-machine";
 // Helpers
 // ---------------------------------------------------------------------------
 
-type Effect = BuiltinEffect | AuditEffect;
+type Effect = BuiltinEffect | ExecutionEffect | AuditEffect;
 
 const CATALOG: SkillCatalogEntry[] = [
   { name: "react", description: "React patterns" },
@@ -38,22 +39,24 @@ function idle(): AuditState {
   return { _tag: "Idle" };
 }
 
-function detecting(userPrompt = ""): AuditState {
+function detecting(userPrompt = "", scope: "diff" | "paths" = "diff"): AuditState {
   return {
     _tag: "Detecting",
-    diffStat: " 3 files changed",
-    changedFiles: ["src/app.tsx", "src/lib.ts"],
+    scope,
+    diffStat: scope === "diff" ? " 3 files changed" : "",
+    targetPaths: ["src/app.tsx", "src/lib.ts"],
     skillCatalog: CATALOG,
     userPrompt,
   };
 }
 
-function auditing(concerns = CONCERNS): AuditState {
+function auditing(concerns = CONCERNS, scope: "diff" | "paths" = "diff"): AuditState {
   return {
     _tag: "Auditing",
+    scope,
     concerns,
-    diffStat: " 3 files changed",
-    changedFiles: ["src/app.tsx", "src/lib.ts"],
+    diffStat: scope === "diff" ? " 3 files changed" : "",
+    targetPaths: ["src/app.tsx", "src/lib.ts"],
     userPrompt: "",
   };
 }
@@ -91,18 +94,20 @@ describe("auditReducer — Start", () => {
   it("Idle → Detecting with trigger + status + UI", () => {
     const r = auditReducer(idle(), {
       _tag: "Start",
+      scope: "diff",
       diffStat: " 2 files changed",
-      changedFiles: ["a.ts", "b.tsx"],
+      targetPaths: ["a.ts", "b.tsx"],
       skillCatalog: CATALOG,
       userPrompt: "check react",
     });
     expect(r.state._tag).toBe("Detecting");
     if (r.state._tag === "Detecting") {
-      expect(r.state.changedFiles).toEqual(["a.ts", "b.tsx"]);
+      expect(r.state.scope).toBe("diff");
+      expect(r.state.targetPaths).toEqual(["a.ts", "b.tsx"]);
       expect(r.state.userPrompt).toBe("check react");
     }
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
-    expect(hasEffect(r.effects, "sendMessage")).toBe(true);
+    expect(hasEffect(r.effects, "executeTurn")).toBe(true);
     expect(hasEffect(r.effects, "updateUI")).toBe(true);
   });
 
@@ -110,8 +115,9 @@ describe("auditReducer — Start", () => {
     const state = detecting();
     const r = auditReducer(state, {
       _tag: "Start",
+      scope: "diff",
       diffStat: "",
-      changedFiles: [],
+      targetPaths: [],
       skillCatalog: [],
       userPrompt: "",
     });
@@ -130,7 +136,7 @@ describe("auditReducer — ConcernsDetected", () => {
     if (r.state._tag === "Auditing") {
       expect(r.state.concerns).toEqual(CONCERNS);
     }
-    expect(hasEffect(r.effects, "sendMessage")).toBe(true);
+    expect(hasEffect(r.effects, "executeTurn")).toBe(true);
     expect(hasEffect(r.effects, "updateUI")).toBe(true);
   });
 
@@ -190,7 +196,7 @@ describe("auditReducer — AuditingComplete", () => {
     if (r.state._tag === "Synthesizing") {
       expect(r.state.concerns).toEqual(CONCERNS);
     }
-    expect(hasEffect(r.effects, "sendMessage")).toBe(true);
+    expect(hasEffect(r.effects, "executeTurn")).toBe(true);
   });
 
   it("non-Auditing + AuditingComplete is no-op", () => {
@@ -213,7 +219,7 @@ describe("auditReducer — SynthesisComplete", () => {
       expect(r.state.phase).toBe("running");
       expect(r.state.findings).toEqual(FINDINGS);
     }
-    expect(hasEffect(r.effects, "sendMessage")).toBe(true);
+    expect(hasEffect(r.effects, "executeTurn")).toBe(true);
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
   });
 
@@ -242,7 +248,7 @@ describe("auditReducer — FindingFixed", () => {
     if (r.state._tag === "Fixing") {
       expect(r.state.phase).toBe("gating");
     }
-    expect(hasEffect(r.effects, "sendMessage")).toBe(true);
+    expect(hasEffect(r.effects, "executeTurn")).toBe(true);
   });
 
   it("wrong phase → no-op", () => {
@@ -260,11 +266,18 @@ describe("auditReducer — FixSkip", () => {
       expect(r.state.currentFinding).toBe(1);
       expect(r.state.phase).toBe("running");
     }
+    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
+    expect(send).toMatchObject({ request: { customType: "audit-fix" } });
+    expect(send?.request.content).toContain("Commit the fix for src/app.tsx, then proceed.");
+    expect(send?.request.content).toContain("Fix finding 2/3: [warning] src/lib.ts");
   });
 
   it("skipping last finding → Idle", () => {
     const r = auditReducer(fixing(FINDINGS, 2), { _tag: "FixSkip" });
     expect(r.state._tag).toBe("Idle");
+    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
+    expect(send).toMatchObject({ request: { customType: "audit-commit" } });
+    expect(send?.request.content).toContain("Commit the fix for src/utils.ts, then say \"AUDIT_LOOP_DONE\".");
   });
 });
 
@@ -303,12 +316,19 @@ describe("auditReducer — FixCounselPass", () => {
       expect(r.state.currentFinding).toBe(1);
       expect(r.state.phase).toBe("running");
     }
+    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
+    expect(send).toMatchObject({ request: { customType: "audit-fix" } });
+    expect(send?.request.content).toContain("Commit the fix for src/app.tsx, then proceed.");
+    expect(send?.request.content).toContain("Fix finding 2/3: [warning] src/lib.ts");
   });
 
   it("counseling last finding → Idle", () => {
     const r = auditReducer(fixing(FINDINGS, 2, "counseling"), { _tag: "FixCounselPass" });
     expect(r.state._tag).toBe("Idle");
     expect(hasEffect(r.effects, "notify")).toBe(true);
+    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
+    expect(send).toMatchObject({ request: { customType: "audit-commit" } });
+    expect(send?.request.content).toContain("Commit the fix for src/utils.ts, then say \"AUDIT_LOOP_DONE\".");
   });
 
   it("wrong phase → no-op", () => {

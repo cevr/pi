@@ -9,6 +9,8 @@ import {
   resolveToAbsolute,
   resolveWithVariants,
   resolveWithVariantsUsing,
+  parseScopedPathArgs,
+  toWorkspaceDisplayPath,
   isSecretFile,
   listDirectory,
   walkDirSync,
@@ -87,6 +89,57 @@ describe("resolveWithVariants", () => {
     expect(resolveWithVariantsUsing(requested, "/cwd", (candidate) => candidate === variant)).toBe(
       variant,
     );
+  });
+});
+
+describe("parseScopedPathArgs", () => {
+  it("keeps plain text as prompt when no paths are present", () => {
+    const result = parseScopedPathArgs("check react and effect", process.cwd());
+    expect(result).toEqual({
+      targetPaths: [],
+      userPrompt: "check react and effect",
+      invalidPaths: [],
+    });
+  });
+
+  it("extracts existing paths and preserves the remaining prompt", () => {
+    const dir = makeTmpDir();
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 1\n");
+
+    const result = parseScopedPathArgs("src/a.ts check correctness", dir);
+    expect(result.targetPaths).toEqual([join(dir, "src", "a.ts")]);
+    expect(result.userPrompt).toBe("check correctness");
+    expect(result.invalidPaths).toEqual([]);
+  });
+
+  it("supports quoted paths with spaces", () => {
+    const dir = makeTmpDir();
+    mkdirSync(join(dir, "docs"), { recursive: true });
+    writeFileSync(join(dir, "docs", "notes file.md"), "# Notes\n");
+
+    const result = parseScopedPathArgs('"docs/notes file.md" tighten wording', dir);
+    expect(result.targetPaths).toEqual([join(dir, "docs", "notes file.md")]);
+    expect(result.userPrompt).toBe("tighten wording");
+  });
+
+  it("collects invalid explicit @path tokens", () => {
+    const dir = makeTmpDir();
+    const result = parseScopedPathArgs("@missing.ts check types", dir);
+
+    expect(result.invalidPaths).toEqual(["@missing.ts"]);
+    expect(result.targetPaths).toEqual([]);
+    expect(result.userPrompt).toBe("check types");
+  });
+});
+
+describe("toWorkspaceDisplayPath", () => {
+  it("renders workspace-relative paths when possible", () => {
+    expect(toWorkspaceDisplayPath("/repo/src/a.ts", "/repo")).toBe("src/a.ts");
+  });
+
+  it("keeps absolute paths outside the workspace", () => {
+    expect(toWorkspaceDisplayPath("/elsewhere/a.ts", "/repo")).toBe("/elsewhere/a.ts");
   });
 });
 

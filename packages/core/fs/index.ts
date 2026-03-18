@@ -52,6 +52,55 @@ export function resolveWithVariants(filePath: string, cwd: string): string {
   return resolveWithVariantsUsing(filePath, cwd, (candidate) => fs.existsSync(candidate));
 }
 
+export interface ParsedScopedPathArgs {
+  targetPaths: string[];
+  userPrompt: string;
+  invalidPaths: string[];
+}
+
+export function parseScopedPathArgs(rawArgs: string, cwd: string): ParsedScopedPathArgs {
+  const promptTokens: string[] = [];
+  const invalidPaths: string[] = [];
+  const targetPaths = new Set<string>();
+
+  for (const token of tokenizeArgs(rawArgs)) {
+    const explicitPath = token.startsWith("@");
+    const value = explicitPath ? token.slice(1) : token;
+
+    if (!value) {
+      if (explicitPath) invalidPaths.push(token);
+      continue;
+    }
+
+    const resolved = resolveWithVariants(value, cwd);
+    if (fs.existsSync(resolved)) {
+      targetPaths.add(path.normalize(resolved));
+      continue;
+    }
+
+    if (explicitPath) {
+      invalidPaths.push(token);
+      continue;
+    }
+
+    promptTokens.push(token);
+  }
+
+  return {
+    targetPaths: Array.from(targetPaths),
+    userPrompt: promptTokens.join(" ").trim(),
+    invalidPaths,
+  };
+}
+
+export function toWorkspaceDisplayPath(filePath: string, cwd: string): string {
+  const relative = path.relative(cwd, filePath);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return filePath;
+  }
+  return relative;
+}
+
 export function isSecretFile(filePath: string): boolean {
   const basename = path.basename(filePath);
   if (SECRET_EXCEPTIONS.has(basename)) return false;
@@ -87,6 +136,21 @@ export function listDirectory(dirPath: string, maxEntries: number): string {
     .sort((a, b) => a.localeCompare(b));
 
   return headTailList(names, maxEntries).join("\n");
+}
+
+function tokenizeArgs(rawArgs: string): string[] {
+  const matches = rawArgs.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+/g) ?? [];
+  return matches.map(unquoteToken).filter((token) => token.length > 0);
+}
+
+function unquoteToken(token: string): string {
+  if (
+    (token.startsWith('"') && token.endsWith('"')) ||
+    (token.startsWith("'") && token.endsWith("'"))
+  ) {
+    return token.slice(1, -1).replace(/\\([\\'" ])/g, "$1");
+  }
+  return token.replace(/\\([\\'" ])/g, "$1");
 }
 
 export interface WalkDirOptions {

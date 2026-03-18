@@ -204,6 +204,26 @@ describe("modes extension", () => {
     expect(reply).toMatchObject({ block: true });
   });
 
+  it("rejects marking a non-active step done", async () => {
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
+
+    const ctx = harness.createContext({ hasUI: false });
+    await harness.shortcuts[0]!.options.handler(ctx);
+
+    const planReady = harness.getTool("modes_plan_ready");
+    await planReady.execute("tc-1", {
+      planText: "## Plan\n1. First\n2. Second",
+      steps: ["First", "Second"],
+    });
+
+    const stepDone = harness.getTool("modes_step_done");
+    const result = await stepDone.execute("tc-2", { step: 2 });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("Step 1 is currently active");
+  });
+
   it("restores an awaiting choice session and re-prompts on session start", () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
@@ -234,5 +254,76 @@ describe("modes extension", () => {
       true,
     );
     expect(harness.getActiveTools()).toContain("modes_step_done");
+  });
+
+  it("renders the extracted task widget when restoring execution", () => {
+    const harness = createMockExtensionApiHarness();
+    harness.setSessionEntries([
+      {
+        type: "custom",
+        customType: "modes",
+        data: {
+          mode: "Executing",
+          todoItems: [
+            { id: "1", order: 1, subject: "First", status: "completed", blockedBy: [] },
+            { id: "2", order: 2, subject: "Second", status: "in_progress", blockedBy: [] },
+            { id: "3", order: 3, subject: "Third", status: "pending", blockedBy: ["2"] },
+          ],
+          planFilePath: "/tmp/plan.md",
+          savedTools: ["read", "bash", "edit"],
+        },
+      },
+    ]);
+    modesExtension(harness.pi);
+
+    const ctx = harness.createContext();
+    const sessionStart = harness.getListener("session_start");
+    expect(sessionStart).toBeDefined();
+
+    sessionStart!.handler({}, ctx);
+
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+      "modes",
+      "📋 3 tasks (1 done, 1 in progress, 1 open)",
+    );
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith("modes-todos", [
+      "✔ First",
+      "◼ Second",
+      "◻ Third › blocked by #2",
+    ]);
+  });
+
+  it("restores the persisted gate phase on session start", () => {
+    const harness = createMockExtensionApiHarness();
+    harness.setSessionEntries([
+      {
+        type: "custom",
+        customType: "modes",
+        data: {
+          mode: "Executing",
+          todoItems: [
+            { id: "1", order: 1, subject: "First", status: "completed", blockedBy: [] },
+            { id: "2", order: 2, subject: "Second", status: "in_progress", blockedBy: [] },
+          ],
+          planFilePath: "/tmp/plan.md",
+          savedTools: ["read", "bash", "edit"],
+          currentStep: 2,
+          phase: "gating",
+        },
+      },
+    ]);
+    modesExtension(harness.pi);
+
+    const ctx = harness.createContext();
+    const sessionStart = harness.getListener("session_start");
+    expect(sessionStart).toBeDefined();
+
+    sessionStart!.handler({}, ctx);
+
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+      "modes",
+      "📋 2 tasks (1 done, 1 in progress) ⚙ gate",
+    );
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith("modes-todos", ["✔ First", "◼ Second (gate)"]);
   });
 });

@@ -5,13 +5,16 @@
  * finding with gate + counsel between fixes.
  *
  * Usage:
- *   /audit                          — auto-detect concerns from diff
- *   /audit check react and effect   — with explicit focus
+ *   /audit                                — auto-detect concerns from diff
+ *   /audit check react and effect         — with explicit focus
+ *   /audit packages/extensions/audit      — audit an explicit path
+ *   /audit @packages/core/fs "check ts"  — force path parsing + focus
  */
 
 import type { AssistantMessage, Message as PiMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readPrinciples } from "@cvr/pi-brain-principles";
+import { createInlineExecutionExecutor, isExecutionEffect } from "@cvr/pi-execution";
 import { GitClient } from "@cvr/pi-git-client";
 import { ProcessRunner } from "@cvr/pi-process-runner";
 import { register, type MachineConfig } from "@cvr/pi-state-machine";
@@ -24,6 +27,7 @@ import {
   buildSkillCatalog,
 } from "@cvr/pi-diff-context";
 import { auditReducer, type AuditEffect, type AuditEvent, type AuditState } from "./machine";
+import { parseAuditScopeArgs, toAuditDisplayPath } from "./scope";
 import { parseConcernsJson, parseFindingsJson, PHASE_MARKERS } from "./utils";
 
 // ---------------------------------------------------------------------------
@@ -84,6 +88,7 @@ function formatUI(state: AuditState, ctx: ExtensionContext): void {
 
 export default function auditExtension(pi: ExtensionAPI): void {
   const gitRuntime = ManagedRuntime.make(GitClient.layer.pipe(Layer.provide(ProcessRunner.layer)));
+  const executor = createInlineExecutionExecutor(pi);
 
   pi.on("session_shutdown" as any, async () => {
     await gitRuntime.dispose();
@@ -279,6 +284,10 @@ export default function auditExtension(pi: ExtensionAPI): void {
     pi,
     machineConfig,
     (effect, _pi, ctx) => {
+      if (isExecutionEffect(effect)) {
+        executor.execute(effect.request, ctx);
+        return;
+      }
       if (effect.type === "updateUI") {
         formatUI(machine.getState(), ctx);
       }
@@ -287,30 +296,57 @@ export default function auditExtension(pi: ExtensionAPI): void {
 
   // ----- /audit command (imperative — async git work) -----
   pi.registerCommand("audit", {
-    description: "Audit branch changes with skill-aware parallel subagents",
+    description: "Audit branch changes or explicit paths with skill-aware parallel subagents",
     handler: async (_args, ctx) => {
       if (machine.getState()._tag !== "Idle") {
         ctx.ui.notify("Audit already in progress. /audit-cancel to stop.", "info");
         return;
       }
 
-      const userPrompt = _args.trim();
+      const parsedArgs = parseAuditScopeArgs(_args, ctx.cwd);
+      if (parsedArgs.invalidPaths.length > 0) {
+        ctx.ui.notify(
+          `Invalid audit path${parsedArgs.invalidPaths.length > 1 ? "s" : ""}: ${parsedArgs.invalidPaths.join(", ")}`,
+          "error",
+        );
+        return;
+      }
 
+      const skillCatalog = buildSkillCatalog(ctx.cwd);
+      const targetPaths = parsedArgs.targetPaths.map((filePath) =>
+        toAuditDisplayPath(filePath, ctx.cwd),
+      );
+
+      if (targetPaths.length > 0) {
+        machine.send({
+          _tag: "Start",
+          scope: "paths",
+          diffStat: "",
+          targetPaths,
+          skillCatalog,
+          userPrompt: parsedArgs.userPrompt,
+        });
+        return;
+      }
+
+      const userPrompt = parsedArgs.userPrompt;
       const baseBranch = await resolveBaseBranch(ctx.cwd, gitRuntime);
       const diffStat = await getDiffStat(ctx.cwd, baseBranch, gitRuntime);
       const changedFiles = await getChangedFiles(ctx.cwd, baseBranch, gitRuntime);
 
       if (changedFiles.length === 0) {
-        ctx.ui.notify("No changes to audit.", "info");
+        ctx.ui.notify(
+          "No changes to audit. Pass a path to audit a file or directory explicitly.",
+          "info",
+        );
         return;
       }
 
-      const skillCatalog = buildSkillCatalog(ctx.cwd);
-
       machine.send({
         _tag: "Start",
+        scope: "diff",
         diffStat,
-        changedFiles,
+        targetPaths: changedFiles,
         skillCatalog,
         userPrompt,
       });

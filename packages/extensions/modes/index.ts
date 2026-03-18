@@ -15,6 +15,9 @@ import { Key } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { readPrinciples } from "@cvr/pi-brain-principles";
 import { gatherDiffContext, type DiffContext } from "@cvr/pi-diff-context";
+import { createInlineExecutionExecutor, isExecutionEffect } from "@cvr/pi-execution";
+import { createTaskList, type TaskListItem, type TaskListStatus } from "@cvr/pi-task-list";
+import { renderTaskWidget } from "@cvr/pi-task-widget";
 import { GitClient } from "@cvr/pi-git-client";
 import { ProcessRunner } from "@cvr/pi-process-runner";
 import { register } from "@cvr/pi-state-machine";
@@ -30,7 +33,7 @@ import {
   type ModesState,
   type PersistPayload,
 } from "./machine";
-import { cleanStepText, isSafeCommand, type TodoItem } from "./utils";
+import { cleanStepText, isSafeCommand } from "./utils";
 
 // ---------------------------------------------------------------------------
 // File I/O
@@ -54,10 +57,14 @@ function generatePlanPath(firstStep: string): string {
   return path.join(PLANS_DIR, `${timestamp}-${slug || "plan"}.md`);
 }
 
-function writePlanFileToDisk(planPath: string, fullText: string, items: TodoItem[]): void {
+function getChecklistMarker(status: TaskListStatus): string {
+  return status === "completed" ? "x" : " ";
+}
+
+function writePlanFileToDisk(planPath: string, fullText: string, items: TaskListItem[]): void {
   ensurePlansDir();
   const checklist = items
-    .map((todo) => `- [${todo.completed ? "x" : " "}] ${todo.step}. ${todo.text}`)
+    .map((task) => `- [${getChecklistMarker(task.status)}] ${task.order}. ${task.subject}`)
     .join("\n");
   fs.writeFileSync(
     planPath,
@@ -66,12 +73,12 @@ function writePlanFileToDisk(planPath: string, fullText: string, items: TodoItem
   );
 }
 
-function updatePlanFileToDisk(planPath: string, items: TodoItem[]): void {
+function updatePlanFileToDisk(planPath: string, items: TaskListItem[]): void {
   if (!fs.existsSync(planPath)) return;
 
   const content = fs.readFileSync(planPath, "utf-8");
   const checklist = items
-    .map((todo) => `- [${todo.completed ? "x" : " "}] ${todo.step}. ${todo.text}`)
+    .map((task) => `- [${getChecklistMarker(task.status)}] ${task.order}. ${task.subject}`)
     .join("\n");
 
   fs.writeFileSync(
@@ -85,15 +92,57 @@ function updatePlanFileToDisk(planPath: string, items: TodoItem[]): void {
 // Plan helpers
 // ---------------------------------------------------------------------------
 
-function buildTodoItemsFromSteps(steps: readonly string[]): TodoItem[] {
-  return steps
-    .map((step) => cleanStepText(step))
-    .filter((step) => step.length > 3)
-    .map((text, index) => ({
-      step: index + 1,
-      text,
-      completed: false,
-    }));
+function buildTaskListFromSteps(steps: readonly string[]): TaskListItem[] {
+  return createTaskList(
+    steps.map((step) => cleanStepText(step)).filter((step) => step.length > 3),
+  );
+}
+
+function normalizeHydratedTaskList(items: readonly Record<string, unknown>[]): TaskListItem[] {
+  return items.flatMap((item) => {
+    if (
+      typeof item.id === "string" &&
+      typeof item.order === "number" &&
+      typeof item.subject === "string" &&
+      (item.status === "pending" || item.status === "in_progress" || item.status === "completed")
+    ) {
+      return [
+        {
+          id: item.id,
+          order: item.order,
+          subject: item.subject,
+          status: item.status,
+          blockedBy: Array.isArray(item.blockedBy)
+            ? item.blockedBy.filter((value): value is string => typeof value === "string")
+            : [],
+          activeForm: typeof item.activeForm === "string" ? item.activeForm : undefined,
+          owner: typeof item.owner === "string" ? item.owner : undefined,
+          metadata:
+            typeof item.metadata === "object" && item.metadata !== null
+              ? (item.metadata as Record<string, unknown>)
+              : undefined,
+        },
+      ];
+    }
+
+    if (
+      typeof item.step === "number" &&
+      typeof item.text === "string" &&
+      typeof item.completed === "boolean"
+    ) {
+      return [
+        {
+          id: String(item.step),
+          order: item.step,
+          subject: item.text,
+          status: item.completed ? "completed" : "pending",
+          blockedBy: [],
+        },
+      ];
+    }
+
+    return [];
+  });
 }
 
 function getEditorMode(state: ModesState): EditorMode {
@@ -110,22 +159,12 @@ function formatUI(state: ModesState, pi: ExtensionAPI, ctx: ExtensionContext): v
 
   switch (state._tag) {
     case "Executing": {
-      const completed = state.todoItems.filter((todo) => todo.completed).length;
-      const phaseSuffix =
-        state.phase !== "running" ? ` ${state.phase === "gating" ? "⚙ gate" : "🔍 counsel"}` : "";
-      ctx.ui.setStatus(
-        "modes",
-        ctx.ui.theme.fg("accent", `📋 ${completed}/${state.todoItems.length}${phaseSuffix}`),
-      );
-      ctx.ui.setWidget(
-        "modes-todos",
-        state.todoItems.map((todo) =>
-          todo.completed
-            ? ctx.ui.theme.fg("success", "☑ ") +
-              ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(todo.text))
-            : `${ctx.ui.theme.fg("muted", "☐ ")}${todo.text}`,
-        ),
-      );
+      const widget = renderTaskWidget(state.todoItems, {
+        phase: state.phase,
+        theme: ctx.ui.theme,
+      });
+      ctx.ui.setStatus("modes", widget.statusText);
+      ctx.ui.setWidget("modes-todos", widget.lines);
       break;
     }
     case "Planning":
@@ -162,6 +201,7 @@ function buildDiffContextBlock(diffContext: DiffContext): string {
 
 export default function modesExtension(pi: ExtensionAPI): void {
   const gitRuntime = ManagedRuntime.make(GitClient.layer.pipe(Layer.provide(ProcessRunner.layer)));
+  const executor = createInlineExecutionExecutor(pi);
 
   pi.on("session_shutdown" as any, async () => {
     await gitRuntime.dispose();
@@ -169,6 +209,11 @@ export default function modesExtension(pi: ExtensionAPI): void {
 
   // ----- Effect interpreter -----
   function interpretEffect(effect: ModesEffect, pi: ExtensionAPI, ctx: ExtensionContext): void {
+    if (isExecutionEffect(effect)) {
+      executor.execute(effect.request, ctx);
+      return;
+    }
+
     switch (effect.type) {
       case "writePlanFile":
         writePlanFileToDisk(effect.planFilePath, effect.planText, effect.todoItems);
@@ -205,7 +250,11 @@ export default function modesExtension(pi: ExtensionAPI): void {
           return;
         }
         const list = todoItems
-          .map((item, index) => `${index + 1}. ${item.completed ? "✓" : "○"} ${item.text}`)
+          .map((item) => {
+            const marker =
+              item.status === "completed" ? "✓" : item.status === "in_progress" ? "◼" : "○";
+            return `${item.order}. ${marker} ${item.subject}`;
+          })
           .join("\n");
         const planFilePath =
           state._tag === "Planning"
@@ -249,7 +298,7 @@ export default function modesExtension(pi: ExtensionAPI): void {
         };
       }
 
-      const todoItems = buildTodoItemsFromSteps(params.steps);
+      const todoItems = buildTaskListFromSteps(params.steps);
       if (todoItems.length === 0) {
         return {
           content: [{ type: "text" as const, text: "At least one valid plan step is required." }],
@@ -262,7 +311,7 @@ export default function modesExtension(pi: ExtensionAPI): void {
         _tag: "PlanReady",
         todoItems,
         planText: params.planText,
-        planFilePath: generatePlanPath(todoItems[0]!.text),
+        planFilePath: generatePlanPath(todoItems[0]!.subject),
       });
 
       return {
@@ -301,9 +350,21 @@ export default function modesExtension(pi: ExtensionAPI): void {
         };
       }
 
-      if (!state.todoItems.some((todo) => todo.step === params.step)) {
+      if (!state.todoItems.some((task) => task.order === params.step)) {
         return {
           content: [{ type: "text" as const, text: `Unknown plan step: ${params.step}.` }],
+          details: {},
+          isError: true,
+        };
+      }
+      if (state.currentStep !== null && state.currentStep !== params.step) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Step ${state.currentStep} is currently active. Finish that step before marking step ${params.step} done.`,
+            },
+          ],
           details: {},
           isError: true,
         };
@@ -314,7 +375,7 @@ export default function modesExtension(pi: ExtensionAPI): void {
         content: [
           {
             type: "text" as const,
-            text: `Recorded step ${params.step} as complete. Run the gate next.`,
+            text: `Recorded step ${params.step} as ready for validation. Run the gate next.`,
           },
         ],
         details: {},
@@ -529,8 +590,13 @@ Do NOT attempt to make changes - just describe what you would do, then call ${PL
             if (state._tag === "Executing" && state.todoItems.length > 0) {
               const principles = readPrinciples();
               const principlesBlock = principles ? `\n\n${principles}` : "";
-              const remaining = state.todoItems.filter((todo) => !todo.completed);
-              const todoList = remaining.map((todo) => `${todo.step}. ${todo.text}`).join("\n");
+              const remaining = state.todoItems.filter((task) => task.status !== "completed");
+              const todoList = remaining
+                .map((task) => {
+                  const prefix = task.status === "in_progress" ? "◼" : "◻";
+                  return `${task.order}. ${prefix} ${task.subject}`;
+                })
+                .join("\n");
               const planRef = state.planFilePath
                 ? `\n\nThe full plan is saved at: ${state.planFilePath}\nRead it if you need the full context.`
                 : "";
@@ -572,12 +638,25 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
 
             const data = modesEntry?.data;
             const mode = data?.mode;
-            const pending = data?.pending;
-            const todoItems = (pending?.todoItems ?? data?.todoItems ?? []).map((todo) => ({
-              ...todo,
-            }));
+            const pendingData = data?.pending;
+            const todoItems = normalizeHydratedTaskList(
+              Array.isArray(pendingData?.todoItems ?? data?.todoItems)
+                ? ((pendingData?.todoItems ?? data?.todoItems) as Record<string, unknown>[])
+                : [],
+            );
+            const pending = pendingData
+              ? {
+                  ...pendingData,
+                  todoItems,
+                }
+              : undefined;
             const planFilePath = pending?.planFilePath ?? data?.planFilePath ?? null;
             const savedTools = data?.savedTools ?? null;
+            const currentStep = typeof data?.currentStep === "number" ? data.currentStep : null;
+            const phase =
+              data?.phase === "running" || data?.phase === "gating" || data?.phase === "counseling"
+                ? data.phase
+                : undefined;
             const flagPlan = pi.getFlag("plan") === true;
 
             return {
@@ -588,7 +667,8 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
               savedTools,
               pending,
               flagPlan,
-              currentStep: null,
+              currentStep,
+              phase,
               currentTools: pi.getActiveTools(),
             };
           },

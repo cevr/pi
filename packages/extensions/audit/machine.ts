@@ -5,8 +5,15 @@
  * Zero pi imports beyond the state machine framework.
  */
 
-import type { BuiltinEffect, Reducer, TransitionResult } from "@cvr/pi-state-machine";
 import type { SkillCatalogEntry } from "@cvr/pi-diff-context";
+import { executeTurn, type ExecutionEffect } from "@cvr/pi-execution";
+import {
+  enterSequentialExecutionGate,
+  resolveSequentialExecutionCounsel,
+  resolveSequentialExecutionGate,
+  type SequentialExecutionPhase,
+} from "@cvr/pi-sequential-execution";
+import type { BuiltinEffect, Reducer, TransitionResult } from "@cvr/pi-state-machine";
 
 export type { SkillCatalogEntry, DiffContext } from "@cvr/pi-diff-context";
 
@@ -32,26 +39,30 @@ export interface AuditFinding {
   severity: "critical" | "warning" | "suggestion";
 }
 
-export type FixPhase = "running" | "gating" | "counseling";
+export type FixPhase = SequentialExecutionPhase;
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
+export type AuditScopeMode = "diff" | "paths";
+
 export type AuditState =
   | { _tag: "Idle" }
   | {
       _tag: "Detecting";
+      scope: AuditScopeMode;
       diffStat: string;
-      changedFiles: string[];
+      targetPaths: string[];
       skillCatalog: SkillCatalogEntry[];
       userPrompt: string;
     }
   | {
       _tag: "Auditing";
+      scope: AuditScopeMode;
       concerns: AuditConcern[];
       diffStat: string;
-      changedFiles: string[];
+      targetPaths: string[];
       userPrompt: string;
     }
   | {
@@ -74,8 +85,9 @@ export type AuditState =
 export type AuditEvent =
   | {
       _tag: "Start";
+      scope: AuditScopeMode;
       diffStat: string;
-      changedFiles: string[];
+      targetPaths: string[];
       skillCatalog: SkillCatalogEntry[];
       userPrompt: string;
     }
@@ -96,30 +108,31 @@ export type AuditEvent =
 // Extension effects
 // ---------------------------------------------------------------------------
 
-export type AuditEffect = { type: "updateUI" };
+export type AuditEffect = ExecutionEffect | { type: "updateUI" };
 
 // ---------------------------------------------------------------------------
 // Prompt builders (pure — used by both reducer effects and wiring)
 // ---------------------------------------------------------------------------
 
 export function buildDetectionPrompt(state: Extract<AuditState, { _tag: "Detecting" }>): string {
-  const filesList = state.changedFiles.map((f) => `- ${f}`).join("\n");
+  const pathsList = state.targetPaths.map((filePath) => `- ${filePath}`).join("\n");
   const skillsList = state.skillCatalog.map((s) => `- ${s.name}: ${s.description}`).join("\n");
   const userBlock = state.userPrompt ? `\n${state.userPrompt}\n` : "";
+  const scopeBlock =
+    state.scope === "diff"
+      ? `## Changed Files\n${state.diffStat}\n\n${pathsList}`
+      : `## Audit Paths\n${pathsList}\n\nThese are explicit audit targets. They may be files or directories. Inspect them directly before choosing concerns.`;
 
-  return `Analyze the changed files and determine which audit concerns apply.${userBlock}
+  return `Analyze the audit scope and determine which audit concerns apply.${userBlock}
 
-## Changed Files
-${state.diffStat}
-
-${filesList}
+${scopeBlock}
 
 ## Available Skills
 ${skillsList}
 
 A concern is a review category (e.g., "correctness", "frontend-patterns", "type-safety", "effect-domain"). Each concern maps to 0+ skills. Maximum ${MAX_CONCERNS} concerns — merge overlapping domains.
 
-Consider: file extensions, import patterns, and the instructions above for explicit skill mentions.
+Consider: file extensions, import patterns, directory structure, and the instructions above for explicit skill mentions.
 
 Output a JSON block:
 \`\`\`json
@@ -136,7 +149,15 @@ export function buildAuditingPrompt(state: Extract<AuditState, { _tag: "Auditing
       return `- ${c.name} — ${c.description}${skills}`;
     })
     .join("\n");
-  const changedFilesList = state.changedFiles.join(", ");
+  const targetPathsList = state.targetPaths.join(", ");
+  const scopeBlock =
+    state.scope === "diff"
+      ? `${state.diffStat}\nChanged files: ${targetPathsList}`
+      : `Explicit audit targets: ${targetPathsList}`;
+  const scopeRule =
+    state.scope === "diff"
+      ? "Use diff stat only for scoping. Do NOT inject raw diff — each subagent reads files directly."
+      : "These paths were selected explicitly, not from a diff. Each subagent should inspect the files or directories directly.";
 
   return `Run parallel audits for ${state.concerns.length} concerns.
 
@@ -144,10 +165,9 @@ export function buildAuditingPrompt(state: Extract<AuditState, { _tag: "Auditing
 ${concernsList}
 
 ## Context
-${state.diffStat}
-Changed files: ${changedFilesList}
+${scopeBlock}
 
-Use the \`subagent\` tool in parallel mode. One task per concern. Each subagent gets the concern description, changed file list, and skill parameter. Do NOT inject raw diff — each subagent reads files directly. Include brain principles (~/.brain/principles/) in each subagent's context.
+Use the \`subagent\` tool in parallel mode. One task per concern. Each subagent gets the concern description, target path list, and skill parameter. ${scopeRule} Include brain principles (~/.brain/principles/) in each subagent's context.
 
 When all subagent results are collected, say "AUDITING_COMPLETE".`;
 }
@@ -198,67 +218,76 @@ type Result = TransitionResult<AuditState, AuditEffect>;
 
 const UI: AuditEffect = { type: "updateUI" };
 
-function triggerMessage(content: string, customType = "audit-trigger"): BuiltinEffect {
-  return {
-    type: "sendMessage",
+function triggerMessage(content: string, customType = "audit-trigger"): ExecutionEffect {
+  return executeTurn({
     customType,
     content,
     display: false,
     triggerTurn: true,
-  };
+  });
 }
 
-function displayMessage(content: string, customType = "audit-trigger"): BuiltinEffect {
-  return {
-    type: "sendMessage",
+function displayMessage(content: string, customType = "audit-trigger"): ExecutionEffect {
+  return executeTurn({
     customType,
     content,
     display: true,
     triggerTurn: true,
-  };
+  });
 }
 
 function statusEffect(text?: string): BuiltinEffect {
   return { type: "setStatus", key: "audit", text };
 }
 
-/** Transition into Fixing the next finding, or to Idle if all done. */
-function advanceToNextFinding(state: Extract<AuditState, { _tag: "Fixing" }>): Result {
+function completeFindingSequence(state: Extract<AuditState, { _tag: "Fixing" }>): Result {
   const prevFile = state.findings[state.currentFinding]!.file;
-  const nextIdx = state.currentFinding + 1;
+  return {
+    state: { _tag: "Idle" },
+    effects: [
+      { type: "notify", message: "audit-loop complete — all findings addressed", level: "info" },
+      statusEffect(),
+      displayMessage(`Commit the fix for ${prevFile}, then say "AUDIT_LOOP_DONE".`, "audit-commit"),
+      UI,
+    ],
+  };
+}
 
-  if (nextIdx >= state.findings.length) {
-    return {
-      state: { _tag: "Idle" },
-      effects: [
-        { type: "notify", message: "audit-loop complete — all findings addressed", level: "info" },
-        statusEffect(),
-        displayMessage(
-          `Commit the fix for ${prevFile}, then say "AUDIT_LOOP_DONE".`,
-          "audit-commit",
-        ),
-        UI,
-      ],
-    };
+function continueWithFinding(
+  state: Extract<AuditState, { _tag: "Fixing" }>,
+  nextFindingIndex: number,
+): Result {
+  if (nextFindingIndex >= state.findings.length) {
+    return completeFindingSequence(state);
   }
 
+  const prevFile = state.findings[state.currentFinding]!.file;
+  const finding = state.findings[nextFindingIndex]!;
   const next: AuditState = {
     ...state,
-    currentFinding: nextIdx,
+    currentFinding: nextFindingIndex,
     phase: "running",
   };
-  const finding = state.findings[nextIdx]!;
   return {
     state: next,
     effects: [
-      statusEffect(`audit: fix ${nextIdx + 1}/${state.findings.length}`),
+      statusEffect(`audit: fix ${nextFindingIndex + 1}/${state.findings.length}`),
       displayMessage(
-        `Commit the fix for ${prevFile}, then proceed.\n\n${buildFixPrompt(finding, nextIdx, state.findings.length)}`,
+        `Commit the fix for ${prevFile}, then proceed.\n\n${buildFixPrompt(
+          finding,
+          nextFindingIndex,
+          state.findings.length,
+        )}`,
         "audit-fix",
       ),
       UI,
     ],
   };
+}
+
+/** Transition into Fixing the next finding, or to Idle if all done. */
+function advanceToNextFinding(state: Extract<AuditState, { _tag: "Fixing" }>): Result {
+  return continueWithFinding(state, state.currentFinding + 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -275,8 +304,9 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       if (state._tag !== "Idle") return { state };
       const next: AuditState = {
         _tag: "Detecting",
+        scope: event.scope,
         diffStat: event.diffStat,
-        changedFiles: event.changedFiles,
+        targetPaths: event.targetPaths,
         skillCatalog: event.skillCatalog,
         userPrompt: event.userPrompt,
       };
@@ -308,9 +338,10 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       const concerns = event.concerns.slice(0, MAX_CONCERNS);
       const next: AuditState = {
         _tag: "Auditing",
+        scope: state.scope,
         concerns,
         diffStat: state.diffStat,
-        changedFiles: state.changedFiles,
+        targetPaths: state.targetPaths,
         userPrompt: state.userPrompt,
       };
       return {
@@ -394,7 +425,17 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
     // ----- FindingFixed -----
     case "FindingFixed": {
       if (state._tag !== "Fixing" || state.phase !== "running") return { state };
-      const next: AuditState = { ...state, phase: "gating" };
+      const progress = enterSequentialExecutionGate(
+        {
+          phase: state.phase,
+          currentIndex: state.currentFinding,
+          total: state.findings.length,
+        },
+        state.currentFinding,
+      );
+      if (!progress) return { state };
+
+      const next: AuditState = { ...state, phase: progress.phase };
       return {
         state: next,
         effects: [
@@ -414,7 +455,17 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
     // ----- FixGatePass -----
     case "FixGatePass": {
       if (state._tag !== "Fixing" || state.phase !== "gating") return { state };
-      const next: AuditState = { ...state, phase: "counseling" };
+      const progress = resolveSequentialExecutionGate(
+        {
+          phase: state.phase,
+          currentIndex: state.currentFinding,
+          total: state.findings.length,
+        },
+        "pass",
+      );
+      if (!progress) return { state };
+
+      const next: AuditState = { ...state, phase: progress.phase };
       return {
         state: next,
         effects: [
@@ -428,7 +479,17 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
     // ----- FixGateFail -----
     case "FixGateFail": {
       if (state._tag !== "Fixing" || state.phase !== "gating") return { state };
-      const next: AuditState = { ...state, phase: "running" };
+      const progress = resolveSequentialExecutionGate(
+        {
+          phase: state.phase,
+          currentIndex: state.currentFinding,
+          total: state.findings.length,
+        },
+        "fail",
+      );
+      if (!progress) return { state };
+
+      const next: AuditState = { ...state, phase: progress.phase };
       return {
         state: next,
         effects: [
@@ -446,13 +507,34 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
     // ----- FixCounselPass -----
     case "FixCounselPass": {
       if (state._tag !== "Fixing" || state.phase !== "counseling") return { state };
-      return advanceToNextFinding(state);
+      const progress = resolveSequentialExecutionCounsel(
+        {
+          phase: state.phase,
+          currentIndex: state.currentFinding,
+          total: state.findings.length,
+        },
+        "pass",
+      );
+      if (!progress) return { state };
+      if (progress.type === "complete") return completeFindingSequence(state);
+      if (progress.type === "advance") return continueWithFinding(state, progress.currentIndex);
+      return { state };
     }
 
     // ----- FixCounselFail -----
     case "FixCounselFail": {
       if (state._tag !== "Fixing" || state.phase !== "counseling") return { state };
-      const next: AuditState = { ...state, phase: "running" };
+      const progress = resolveSequentialExecutionCounsel(
+        {
+          phase: state.phase,
+          currentIndex: state.currentFinding,
+          total: state.findings.length,
+        },
+        "fail",
+      );
+      if (!progress || progress.type !== "retry") return { state };
+
+      const next: AuditState = { ...state, phase: progress.phase };
       return {
         state: next,
         effects: [

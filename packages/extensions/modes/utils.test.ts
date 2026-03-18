@@ -5,7 +5,7 @@ import {
   extractTodoItems,
   extractDoneSteps,
   markCompletedSteps,
-  type TodoItem,
+  type PlanTask,
 } from "./utils";
 
 describe("isSafeCommand", () => {
@@ -134,10 +134,10 @@ Plan:
 `;
     const items = extractTodoItems(message);
     expect(items).toHaveLength(4);
-    expect(items[0]!.step).toBe(1);
-    expect(items[0]!.text).toBe("Set up the project structure");
-    expect(items[0]!.completed).toBe(false);
-    expect(items[3]!.step).toBe(4);
+    expect(items[0]!.order).toBe(1);
+    expect(items[0]!.subject).toBe("Set up the project structure");
+    expect(items[0]!.status).toBe("pending");
+    expect(items[3]!.order).toBe(4);
   });
 
   it("handles **Plan:** bold header", () => {
@@ -156,10 +156,10 @@ Plan:
 `;
     const items = extractTodoItems(message);
     expect(items).toHaveLength(2);
-    expect(items[0]!.step).toBe(1);
-    expect(items[0]!.text).toBe("Audit the current flow");
-    expect(items[1]!.step).toBe(2);
-    expect(items[1]!.text).toBe("Improve test coverage");
+    expect(items[0]!.order).toBe(1);
+    expect(items[0]!.subject).toBe("Audit the current flow");
+    expect(items[1]!.order).toBe(2);
+    expect(items[1]!.subject).toBe("Improve test coverage");
   });
 
   it("handles checklist bullets and ignores nested bullet details", () => {
@@ -170,8 +170,8 @@ Plan:
 `;
     const items = extractTodoItems(message);
     expect(items).toHaveLength(2);
-    expect(items[0]!.text).toBe("Audit the current flow");
-    expect(items[1]!.text).toBe("Improve test coverage");
+    expect(items[0]!.subject).toBe("Audit the current flow");
+    expect(items[1]!.subject).toBe("Improve test coverage");
   });
 
   it("handles markdown headings like ## Implementation Plan", () => {
@@ -181,8 +181,8 @@ Plan:
 `;
     const items = extractTodoItems(message);
     expect(items).toHaveLength(2);
-    expect(items[0]!.text).toBe("Audit the current flow");
-    expect(items[1]!.text).toBe("A resume-safe choice state");
+    expect(items[0]!.subject).toBe("Audit the current flow");
+    expect(items[1]!.subject).toBe("A resume-safe choice state");
   });
 
   it("handles bold item text", () => {
@@ -192,8 +192,8 @@ Plan:
 `;
     const items = extractTodoItems(message);
     expect(items).toHaveLength(2);
-    expect(items[0]!.text).toBe("First step here");
-    expect(items[1]!.text).toBe("Second step here");
+    expect(items[0]!.subject).toBe("First step here");
+    expect(items[1]!.subject).toBe("Second step here");
   });
 
   it("returns empty for no Plan: header", () => {
@@ -208,7 +208,7 @@ Plan:
 `;
     const items = extractTodoItems(message);
     expect(items).toHaveLength(1);
-    expect(items[0]!.text).toContain("real step");
+    expect(items[0]!.subject).toContain("real step");
   });
 
   it("skips items starting with backtick, slash, or dash", () => {
@@ -250,27 +250,27 @@ describe("extractDoneSteps", () => {
 
 describe("markCompletedSteps", () => {
   it("marks matching items as completed", () => {
-    const items: TodoItem[] = [
-      { step: 1, text: "First", completed: false },
-      { step: 2, text: "Second", completed: false },
-      { step: 3, text: "Third", completed: false },
+    const items: PlanTask[] = [
+      { id: "1", order: 1, subject: "First", status: "pending", blockedBy: [] },
+      { id: "2", order: 2, subject: "Second", status: "pending", blockedBy: [] },
+      { id: "3", order: 3, subject: "Third", status: "pending", blockedBy: [] },
     ];
     const count = markCompletedSteps("[DONE:1] [DONE:3]", items);
     expect(count).toBe(2);
-    expect(items[0]!.completed).toBe(true);
-    expect(items[1]!.completed).toBe(false);
-    expect(items[2]!.completed).toBe(true);
+    expect(items[0]!.status).toBe("completed");
+    expect(items[1]!.status).toBe("pending");
+    expect(items[2]!.status).toBe("completed");
   });
 
   it("ignores non-existent step numbers", () => {
-    const items: TodoItem[] = [{ step: 1, text: "First", completed: false }];
+    const items: PlanTask[] = [{ id: "1", order: 1, subject: "First", status: "pending", blockedBy: [] }];
     const count = markCompletedSteps("[DONE:99]", items);
     expect(count).toBe(1); // 1 marker found, even though no item matched
-    expect(items[0]!.completed).toBe(false);
+    expect(items[0]!.status).toBe("pending");
   });
 
   it("returns 0 for no markers", () => {
-    const items: TodoItem[] = [{ step: 1, text: "First", completed: false }];
+    const items: PlanTask[] = [{ id: "1", order: 1, subject: "First", status: "pending", blockedBy: [] }];
     expect(markCompletedSteps("no markers", items)).toBe(0);
   });
 });
