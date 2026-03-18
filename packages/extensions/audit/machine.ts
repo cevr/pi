@@ -13,6 +13,11 @@ import {
   resolveSequentialExecutionGate,
   type SequentialExecutionPhase,
 } from "@cvr/pi-sequential-execution";
+import {
+  findTaskByOrder,
+  setTaskStatus,
+  type TaskListItem,
+} from "@cvr/pi-task-list";
 import type { BuiltinEffect, Reducer, TransitionResult } from "@cvr/pi-state-machine";
 
 export type { SkillCatalogEntry, DiffContext } from "@cvr/pi-diff-context";
@@ -39,6 +44,15 @@ export interface AuditFinding {
   severity: "critical" | "warning" | "suggestion";
 }
 
+export interface AuditConcernTaskMetadata {
+  description: string;
+  skills: string[];
+}
+
+export interface AuditConcernTask extends TaskListItem {
+  metadata: AuditConcernTaskMetadata;
+}
+
 export type FixPhase = SequentialExecutionPhase;
 
 // ---------------------------------------------------------------------------
@@ -60,19 +74,20 @@ export type AuditState =
   | {
       _tag: "Auditing";
       scope: AuditScopeMode;
-      concerns: AuditConcern[];
+      concerns: AuditConcernTask[];
       diffStat: string;
       targetPaths: string[];
       userPrompt: string;
+      currentConcern: number;
     }
   | {
       _tag: "Synthesizing";
-      concerns: AuditConcern[];
+      concerns: AuditConcernTask[];
       userPrompt: string;
     }
   | {
       _tag: "Fixing";
-      concerns: AuditConcern[];
+      concerns: AuditConcernTask[];
       findings: AuditFinding[];
       currentFinding: number;
       phase: FixPhase;
@@ -93,7 +108,7 @@ export type AuditEvent =
     }
   | { _tag: "ConcernsDetected"; concerns: AuditConcern[] }
   | { _tag: "DetectionFailed" }
-  | { _tag: "AuditingComplete" }
+  | { _tag: "ConcernAudited" }
   | { _tag: "SynthesisComplete"; findings: AuditFinding[] }
   | { _tag: "FindingFixed" }
   | { _tag: "FixGatePass" }
@@ -142,13 +157,11 @@ Output a JSON block:
 Say "CONCERNS_DETECTED" when done.`;
 }
 
-export function buildAuditingPrompt(state: Extract<AuditState, { _tag: "Auditing" }>): string {
-  const concernsList = state.concerns
-    .map((c) => {
-      const skills = c.skills.length > 0 ? ` (skills: ${c.skills.join(", ")})` : "";
-      return `- ${c.name} — ${c.description}${skills}`;
-    })
-    .join("\n");
+export function buildConcernAuditPrompt(
+  state: Extract<AuditState, { _tag: "Auditing" }>,
+  concern: AuditConcernTask,
+): string {
+  const skills = concern.metadata.skills.length > 0 ? concern.metadata.skills.join(", ") : "none";
   const targetPathsList = state.targetPaths.join(", ");
   const scopeBlock =
     state.scope === "diff"
@@ -156,24 +169,29 @@ export function buildAuditingPrompt(state: Extract<AuditState, { _tag: "Auditing
       : `Explicit audit targets: ${targetPathsList}`;
   const scopeRule =
     state.scope === "diff"
-      ? "Use diff stat only for scoping. Do NOT inject raw diff — each subagent reads files directly."
-      : "These paths were selected explicitly, not from a diff. Each subagent should inspect the files or directories directly.";
+      ? "Use diff stat only for scoping. Do NOT inject raw diff — read files directly."
+      : "These paths were selected explicitly, not from a diff. Inspect the files or directories directly.";
+  const userBlock = state.userPrompt ? `\n## Focus\n${state.userPrompt}\n` : "";
 
-  return `Run parallel audits for ${state.concerns.length} concerns.
+  return `Audit concern ${concern.order}/${state.concerns.length}: ${concern.subject}
 
-## Concerns
-${concernsList}
+## Concern
+- Name: ${concern.subject}
+- Description: ${concern.metadata.description}
+- Skills: ${skills}${userBlock}
 
 ## Context
 ${scopeBlock}
 
-Use the \`subagent\` tool in parallel mode. One task per concern. Each subagent gets the concern description, target path list, and skill parameter. ${scopeRule} Include brain principles (~/.brain/principles/) in each subagent's context.
+${scopeRule}
 
-When all subagent results are collected, say "AUDITING_COMPLETE".`;
+Produce the concern-specific audit notes in plain text with concrete file references. When this concern audit is complete, say "CONCERN_AUDITED".`;
 }
 
 export function buildSynthesisPrompt(state: Extract<AuditState, { _tag: "Synthesizing" }>): string {
-  return `Synthesize audit findings from ${state.concerns.length} concern-specific audits.
+  const userBlock = state.userPrompt ? `\n## Focus\n${state.userPrompt}\n` : "";
+
+  return `Synthesize audit findings from ${state.concerns.length} concern-specific audits.${userBlock}
 
 1. Deduplicate across concerns
 2. Rank by severity (critical → warning → suggestion)
@@ -238,6 +256,42 @@ function displayMessage(content: string, customType = "audit-trigger"): Executio
 
 function statusEffect(text?: string): BuiltinEffect {
   return { type: "setStatus", key: "audit", text };
+}
+
+function createConcernTasks(concerns: readonly AuditConcern[]): AuditConcernTask[] {
+  return concerns.map((concern, index) => ({
+    id: String(index + 1),
+    order: index + 1,
+    subject: concern.name,
+    activeForm: `Auditing ${concern.name}`,
+    status: "pending",
+    blockedBy: [],
+    metadata: {
+      description: concern.description,
+      skills: concern.skills,
+    },
+  }));
+}
+
+function startConcernAudit(concerns: readonly AuditConcernTask[]): AuditConcernTask[] {
+  const firstConcern = concerns[0];
+  return firstConcern ? setTaskStatus(concerns, firstConcern.order, "in_progress") : [...concerns];
+}
+
+function completeConcernAudit(
+  concerns: readonly AuditConcernTask[],
+  currentConcern: number,
+): AuditConcernTask[] {
+  return setTaskStatus(concerns, currentConcern, "completed");
+}
+
+function advanceConcernAudit(
+  concerns: readonly AuditConcernTask[],
+  currentConcern: number,
+): AuditConcernTask[] {
+  const completed = completeConcernAudit(concerns, currentConcern);
+  const nextConcern = findTaskByOrder(completed, currentConcern + 1);
+  return nextConcern ? setTaskStatus(completed, nextConcern.order, "in_progress") : completed;
 }
 
 function completeFindingSequence(state: Extract<AuditState, { _tag: "Fixing" }>): Result {
@@ -335,7 +389,8 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         };
       }
 
-      const concerns = event.concerns.slice(0, MAX_CONCERNS);
+      const concerns = startConcernAudit(createConcernTasks(event.concerns.slice(0, MAX_CONCERNS)));
+      const firstConcern = concerns[0]!;
       const next: AuditState = {
         _tag: "Auditing",
         scope: state.scope,
@@ -343,12 +398,13 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         diffStat: state.diffStat,
         targetPaths: state.targetPaths,
         userPrompt: state.userPrompt,
+        currentConcern: firstConcern.order,
       };
       return {
         state: next,
         effects: [
-          statusEffect(`audit: ${concerns.length} concern${concerns.length > 1 ? "s" : ""}`),
-          triggerMessage(buildAuditingPrompt(next)),
+          statusEffect(`audit: concern ${firstConcern.order}/${concerns.length}`),
+          triggerMessage(buildConcernAuditPrompt(next, firstConcern)),
           UI,
         ],
       };
@@ -371,19 +427,40 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       };
     }
 
-    // ----- AuditingComplete -----
-    case "AuditingComplete": {
+    // ----- ConcernAudited -----
+    case "ConcernAudited": {
       if (state._tag !== "Auditing") return { state };
+
+      const currentConcern = state.currentConcern;
+      const concerns = advanceConcernAudit(state.concerns, currentConcern);
+      const nextConcern = findTaskByOrder(concerns, currentConcern + 1);
+
+      if (!nextConcern) {
+        const next: AuditState = {
+          _tag: "Synthesizing",
+          concerns,
+          userPrompt: state.userPrompt,
+        };
+        return {
+          state: next,
+          effects: [
+            statusEffect("audit: synthesizing..."),
+            triggerMessage(buildSynthesisPrompt(next)),
+            UI,
+          ],
+        };
+      }
+
       const next: AuditState = {
-        _tag: "Synthesizing",
-        concerns: state.concerns,
-        userPrompt: state.userPrompt,
+        ...state,
+        concerns,
+        currentConcern: nextConcern.order,
       };
       return {
         state: next,
         effects: [
-          statusEffect("audit: synthesizing..."),
-          triggerMessage(buildSynthesisPrompt(next)),
+          statusEffect(`audit: concern ${nextConcern.order}/${concerns.length}`),
+          triggerMessage(buildConcernAuditPrompt(next, nextConcern)),
           UI,
         ],
       };

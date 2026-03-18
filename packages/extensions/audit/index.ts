@@ -18,6 +18,7 @@ import { createInlineExecutionExecutor, isExecutionEffect } from "@cvr/pi-execut
 import { GitClient } from "@cvr/pi-git-client";
 import { ProcessRunner } from "@cvr/pi-process-runner";
 import { register, type MachineConfig } from "@cvr/pi-state-machine";
+import { renderTaskWidget } from "@cvr/pi-task-widget";
 import type { Command } from "@cvr/pi-state-machine";
 import { Layer, ManagedRuntime } from "effect";
 import {
@@ -65,10 +66,8 @@ const AUDIT_CUSTOM_TYPES = new Set([
 
 function formatUI(state: AuditState, ctx: ExtensionContext): void {
   if (state._tag === "Auditing") {
-    ctx.ui.setWidget(
-      "audit-progress",
-      state.concerns.map((c) => `  ○ ${c.name}`),
-    );
+    const widget = renderTaskWidget(state.concerns, { theme: ctx.ui.theme });
+    ctx.ui.setWidget("audit-progress", widget.lines);
   } else if (state._tag === "Fixing") {
     const lines = state.findings.map((f, i) => {
       const marker = i < state.currentFinding ? "✓" : i === state.currentFinding ? "▸" : "○";
@@ -173,9 +172,11 @@ export default function auditExtension(pi: ExtensionAPI): void {
             case "Detecting":
               content = `[AUDIT MODE — DETECTION]\n\nYou are detecting which audit concerns apply to this branch's changes.${principlesBlock}`;
               break;
-            case "Auditing":
-              content = `[AUDIT MODE — AUDITING ${state.concerns.length} concerns]${principlesBlock}`;
+            case "Auditing": {
+              const concern = state.concerns[state.currentConcern - 1]!;
+              content = `[AUDIT MODE — CONCERN ${concern.order}/${state.concerns.length}]\n\nCurrent concern: ${concern.subject} — ${concern.metadata.description}${principlesBlock}`;
               break;
+            }
             case "Synthesizing":
               content = `[AUDIT MODE — SYNTHESIS]\n\nSynthesize findings and output structured JSON.${principlesBlock}`;
               break;
@@ -225,7 +226,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
               return { _tag: "ConcernsDetected", concerns };
             }
             case "Auditing": {
-              if (PHASE_MARKERS.auditing.test(text)) return { _tag: "AuditingComplete" };
+              if (PHASE_MARKERS.auditing.test(text)) return { _tag: "ConcernAudited" };
               return null;
             }
             case "Synthesizing": {

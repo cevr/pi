@@ -107,7 +107,7 @@ function extractBareJson(text: string, prefix: string): string | null {
 /** Phase exit marker patterns. */
 export const PHASE_MARKERS = {
   detecting: /CONCERNS_DETECTED/i,
-  auditing: /AUDITING_COMPLETE/i,
+  auditing: /CONCERN_AUDITED/i,
   synthesizing: /AUDIT_COMPLETE/i,
   findingFixed: /FINDING_FIXED/i,
   findingSkip: /FINDING_SKIP/i,

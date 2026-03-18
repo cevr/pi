@@ -4,6 +4,7 @@ import {
   MAX_CONCERNS,
   auditReducer,
   type AuditConcern,
+  type AuditConcernTask,
   type AuditEffect,
   type AuditFinding,
   type AuditState,
@@ -50,7 +51,29 @@ function detecting(userPrompt = "", scope: "diff" | "paths" = "diff"): AuditStat
   };
 }
 
-function auditing(concerns = CONCERNS, scope: "diff" | "paths" = "diff"): AuditState {
+function createConcernTasks(
+  concerns = CONCERNS,
+  currentConcern = 1,
+): AuditConcernTask[] {
+  return concerns.map((concern, index) => ({
+    id: String(index + 1),
+    order: index + 1,
+    subject: concern.name,
+    activeForm: `Auditing ${concern.name}`,
+    status: index + 1 === currentConcern ? "in_progress" : "pending",
+    blockedBy: [],
+    metadata: {
+      description: concern.description,
+      skills: concern.skills,
+    },
+  }));
+}
+
+function auditing(
+  concerns = createConcernTasks(),
+  scope: "diff" | "paths" = "diff",
+  currentConcern = 1,
+): AuditState {
   return {
     _tag: "Auditing",
     scope,
@@ -58,17 +81,18 @@ function auditing(concerns = CONCERNS, scope: "diff" | "paths" = "diff"): AuditS
     diffStat: scope === "diff" ? " 3 files changed" : "",
     targetPaths: ["src/app.tsx", "src/lib.ts"],
     userPrompt: "",
+    currentConcern,
   };
 }
 
-function synthesizing(concerns = CONCERNS): AuditState {
+function synthesizing(concerns = createConcernTasks(CONCERNS, CONCERNS.length)): AuditState {
   return { _tag: "Synthesizing", concerns, userPrompt: "" };
 }
 
 function fixing(findings = FINDINGS, currentFinding = 0, phase: FixPhase = "running"): AuditState {
   return {
     _tag: "Fixing",
-    concerns: CONCERNS,
+    concerns: createConcernTasks(CONCERNS, CONCERNS.length),
     findings,
     currentFinding,
     phase,
@@ -134,9 +158,13 @@ describe("auditReducer — ConcernsDetected", () => {
     const r = auditReducer(detecting(), { _tag: "ConcernsDetected", concerns: CONCERNS });
     expect(r.state._tag).toBe("Auditing");
     if (r.state._tag === "Auditing") {
-      expect(r.state.concerns).toEqual(CONCERNS);
+      expect(r.state.concerns.map((concern) => concern.subject)).toEqual(["correctness", "frontend"]);
+      expect(r.state.concerns[0]!.status).toBe("in_progress");
+      expect(r.state.currentConcern).toBe(1);
     }
-    expect(hasEffect(r.effects, "executeTurn")).toBe(true);
+    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
+    expect(send?.request.content).toContain("Audit concern 1/2: correctness");
+    expect(send?.request.content).toContain("CONCERN_AUDITED");
     expect(hasEffect(r.effects, "updateUI")).toBe(true);
   });
 
@@ -186,22 +214,41 @@ describe("auditReducer — DetectionFailed", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AuditingComplete
+// ConcernAudited
 // ---------------------------------------------------------------------------
 
-describe("auditReducer — AuditingComplete", () => {
-  it("Auditing → Synthesizing", () => {
-    const r = auditReducer(auditing(), { _tag: "AuditingComplete" });
+describe("auditReducer — ConcernAudited", () => {
+  it("Auditing → advances to the next concern", () => {
+    const r = auditReducer(auditing(), { _tag: "ConcernAudited" });
+    expect(r.state._tag).toBe("Auditing");
+    if (r.state._tag === "Auditing") {
+      expect(r.state.currentConcern).toBe(2);
+      expect(r.state.concerns[0]!.status).toBe("completed");
+      expect(r.state.concerns[1]!.status).toBe("in_progress");
+    }
+    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
+    expect(send?.request.content).toContain("Audit concern 2/2: frontend");
+  });
+
+  it("last concern → Synthesizing", () => {
+    const concerns = createConcernTasks(CONCERNS, 2).map((concern, index) => ({
+      ...concern,
+      status: index === 0 ? "completed" : concern.status,
+    }));
+    const r = auditReducer(auditing(concerns, "diff", 2), {
+      _tag: "ConcernAudited",
+    });
     expect(r.state._tag).toBe("Synthesizing");
     if (r.state._tag === "Synthesizing") {
-      expect(r.state.concerns).toEqual(CONCERNS);
+      expect(r.state.concerns.map((concern) => concern.subject)).toEqual(["correctness", "frontend"]);
+      expect(r.state.concerns.every((concern) => concern.status === "completed")).toBe(true);
     }
     expect(hasEffect(r.effects, "executeTurn")).toBe(true);
   });
 
-  it("non-Auditing + AuditingComplete is no-op", () => {
+  it("non-Auditing + ConcernAudited is no-op", () => {
     const state = detecting();
-    const r = auditReducer(state, { _tag: "AuditingComplete" });
+    const r = auditReducer(state, { _tag: "ConcernAudited" });
     expect(r.state).toBe(state);
   });
 });

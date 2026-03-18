@@ -110,7 +110,7 @@ describe("PHASE_MARKERS", () => {
   it("detects phase markers case-insensitively", () => {
     expect(PHASE_MARKERS.detecting.test("CONCERNS_DETECTED")).toBe(true);
     expect(PHASE_MARKERS.detecting.test("concerns_detected")).toBe(true);
-    expect(PHASE_MARKERS.auditing.test("AUDITING_COMPLETE")).toBe(true);
+    expect(PHASE_MARKERS.auditing.test("CONCERN_AUDITED")).toBe(true);
     expect(PHASE_MARKERS.synthesizing.test("AUDIT_COMPLETE")).toBe(true);
     expect(PHASE_MARKERS.findingFixed.test("FINDING_FIXED")).toBe(true);
     expect(PHASE_MARKERS.findingSkip.test("FINDING_SKIP")).toBe(true);
