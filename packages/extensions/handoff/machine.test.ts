@@ -1,10 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { handoffReducer, type HandoffState, type HandoffEffect } from "./machine";
+import { handoffReducer, type HandoffEffect, type HandoffState } from "./machine";
 import type { BuiltinEffect } from "@cvr/pi-state-machine";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 type Effect = BuiltinEffect | HandoffEffect;
 
@@ -16,18 +12,8 @@ function generating(parentSessionFile = "/sessions/parent.jsonl"): HandoffState 
   return { _tag: "Generating", parentSessionFile };
 }
 
-function ready(
-  prompt = "continue the task",
-  parentSessionFile = "/sessions/parent.jsonl",
-): HandoffState {
-  return { _tag: "Ready", prompt, parentSessionFile };
-}
-
-function switching(
-  prompt = "continue the task",
-  parentSessionFile = "/sessions/parent.jsonl",
-): HandoffState {
-  return { _tag: "Switching", prompt, parentSessionFile };
+function switching(parentSessionFile = "/sessions/parent.jsonl"): HandoffState {
+  return { _tag: "Switching", parentSessionFile };
 }
 
 function hasEffect(effects: readonly Effect[] | undefined, type: string): boolean {
@@ -40,10 +26,6 @@ function getEffect<T extends Effect>(
 ): T | undefined {
   return effects?.find((e) => e.type === type) as T | undefined;
 }
-
-// ---------------------------------------------------------------------------
-// GenerateStart
-// ---------------------------------------------------------------------------
 
 describe("handoffReducer — GenerateStart", () => {
   it("Idle → Generating", () => {
@@ -64,36 +46,21 @@ describe("handoffReducer — GenerateStart", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// GenerateComplete
-// ---------------------------------------------------------------------------
-
 describe("handoffReducer — GenerateComplete", () => {
-  it("Generating → Ready with effects", () => {
+  it("Generating → Idle and clears status", () => {
     const r = handoffReducer(generating("/sessions/p.jsonl"), {
       _tag: "GenerateComplete",
-      prompt: "the handoff prompt",
     });
-    expect(r.state).toEqual({
-      _tag: "Ready",
-      prompt: "the handoff prompt",
-      parentSessionFile: "/sessions/p.jsonl",
-    });
-    expect(hasEffect(r.effects, "setEditorLabel")).toBe(true);
+    expect(r.state).toEqual({ _tag: "Idle" });
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
-    expect(hasEffect(r.effects, "notify")).toBe(true);
   });
 
   it("Idle + GenerateComplete is no-op", () => {
     const state = idle();
-    const r = handoffReducer(state, { _tag: "GenerateComplete", prompt: "x" });
+    const r = handoffReducer(state, { _tag: "GenerateComplete" });
     expect(r.state).toBe(state);
   });
 });
-
-// ---------------------------------------------------------------------------
-// GenerateFail
-// ---------------------------------------------------------------------------
 
 describe("handoffReducer — GenerateFail", () => {
   it("Generating → Idle with error notify", () => {
@@ -113,85 +80,28 @@ describe("handoffReducer — GenerateFail", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// ManualReady
-// ---------------------------------------------------------------------------
-
-describe("handoffReducer — ManualReady", () => {
-  it("Idle → Ready with effects", () => {
-    const r = handoffReducer(idle(), {
-      _tag: "ManualReady",
-      prompt: "manual prompt",
-      parentSessionFile: "/sessions/m.jsonl",
-    });
-    expect(r.state).toEqual({
-      _tag: "Ready",
-      prompt: "manual prompt",
-      parentSessionFile: "/sessions/m.jsonl",
-    });
-    expect(hasEffect(r.effects, "setEditorLabel")).toBe(true);
-    expect(hasEffect(r.effects, "setStatus")).toBe(true);
-  });
-
-  it("overwrites existing Ready state", () => {
-    const r = handoffReducer(ready("old", "/sessions/old.jsonl"), {
-      _tag: "ManualReady",
-      prompt: "new prompt",
-      parentSessionFile: "/sessions/new.jsonl",
-    });
-    expect(r.state).toEqual({
-      _tag: "Ready",
-      prompt: "new prompt",
-      parentSessionFile: "/sessions/new.jsonl",
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// SwitchStart
-// ---------------------------------------------------------------------------
-
-describe("handoffReducer — Dismiss", () => {
-  it("Ready → Idle, clears status + label", () => {
-    const r = handoffReducer(ready("p", "/sessions/x.jsonl"), { _tag: "Dismiss" });
-    expect(r.state).toEqual({ _tag: "Idle" });
-    expect(hasEffect(r.effects, "setStatus")).toBe(true);
-    expect(hasEffect(r.effects, "removeEditorLabel")).toBe(true);
-  });
-
-  it("Idle + Dismiss is no-op", () => {
-    const state = idle();
-    const r = handoffReducer(state, { _tag: "Dismiss" });
-    expect(r.state).toBe(state);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// SwitchStart
-// ---------------------------------------------------------------------------
-
 describe("handoffReducer — SwitchStart", () => {
-  it("Ready → Switching, clears status + label", () => {
-    const r = handoffReducer(ready("p", "/sessions/x.jsonl"), { _tag: "SwitchStart" });
+  it("Idle → Switching", () => {
+    const r = handoffReducer(idle(), {
+      _tag: "SwitchStart",
+      parentSessionFile: "/sessions/x.jsonl",
+    });
     expect(r.state).toEqual({
       _tag: "Switching",
-      prompt: "p",
       parentSessionFile: "/sessions/x.jsonl",
     });
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
-    expect(hasEffect(r.effects, "removeEditorLabel")).toBe(true);
   });
 
-  it("Idle + SwitchStart is no-op", () => {
-    const state = idle();
-    const r = handoffReducer(state, { _tag: "SwitchStart" });
+  it("Switching + SwitchStart is no-op", () => {
+    const state = switching();
+    const r = handoffReducer(state, {
+      _tag: "SwitchStart",
+      parentSessionFile: "/sessions/other.jsonl",
+    });
     expect(r.state).toBe(state);
   });
 });
-
-// ---------------------------------------------------------------------------
-// SwitchComplete
-// ---------------------------------------------------------------------------
 
 describe("handoffReducer — SwitchComplete", () => {
   it("Switching → Idle", () => {
@@ -199,52 +109,34 @@ describe("handoffReducer — SwitchComplete", () => {
     expect(r.state).toEqual({ _tag: "Idle" });
   });
 
-  it("Ready + SwitchComplete is no-op", () => {
-    const state = ready();
+  it("Idle + SwitchComplete is no-op", () => {
+    const state = idle();
     const r = handoffReducer(state, { _tag: "SwitchComplete" });
     expect(r.state).toBe(state);
   });
 });
 
-// ---------------------------------------------------------------------------
-// SwitchCancelled
-// ---------------------------------------------------------------------------
-
 describe("handoffReducer — SwitchCancelled", () => {
-  it("Switching → Ready, restores status + label", () => {
-    const r = handoffReducer(switching("p", "/sessions/x.jsonl"), { _tag: "SwitchCancelled" });
-    expect(r.state).toEqual({
-      _tag: "Ready",
-      prompt: "p",
-      parentSessionFile: "/sessions/x.jsonl",
-    });
+  it("Switching → Idle and clears status", () => {
+    const r = handoffReducer(switching("/sessions/x.jsonl"), { _tag: "SwitchCancelled" });
+    expect(r.state).toEqual({ _tag: "Idle" });
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
-    expect(hasEffect(r.effects, "setEditorLabel")).toBe(true);
   });
 
-  it("Ready + SwitchCancelled is no-op", () => {
-    const state = ready();
+  it("Idle + SwitchCancelled is no-op", () => {
+    const state = idle();
     const r = handoffReducer(state, { _tag: "SwitchCancelled" });
     expect(r.state).toBe(state);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Reset
-// ---------------------------------------------------------------------------
-
 describe("handoffReducer — Reset", () => {
   it("any state → Idle with cleanup effects", () => {
-    const r = handoffReducer(ready(), { _tag: "Reset" });
+    const r = handoffReducer(generating(), { _tag: "Reset" });
     expect(r.state).toEqual({ _tag: "Idle" });
     expect(hasEffect(r.effects, "removeEditorLabel")).toBe(true);
     expect(hasEffect(r.effects, "clearWidget")).toBe(true);
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
-  });
-
-  it("Generating → Idle on Reset", () => {
-    const r = handoffReducer(generating(), { _tag: "Reset" });
-    expect(r.state).toEqual({ _tag: "Idle" });
   });
 
   it("Switching → Idle on Reset", () => {

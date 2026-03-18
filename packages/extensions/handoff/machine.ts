@@ -13,8 +13,7 @@ import type { Reducer, TransitionResult } from "@cvr/pi-state-machine";
 export type HandoffState =
   | { _tag: "Idle" }
   | { _tag: "Generating"; parentSessionFile: string }
-  | { _tag: "Ready"; prompt: string; parentSessionFile: string }
-  | { _tag: "Switching"; prompt: string; parentSessionFile: string };
+  | { _tag: "Switching"; parentSessionFile: string };
 
 // ---------------------------------------------------------------------------
 // Events
@@ -22,11 +21,9 @@ export type HandoffState =
 
 export type HandoffEvent =
   | { _tag: "GenerateStart"; parentSessionFile: string }
-  | { _tag: "GenerateComplete"; prompt: string }
+  | { _tag: "GenerateComplete" }
   | { _tag: "GenerateFail"; error: string }
-  | { _tag: "ManualReady"; prompt: string; parentSessionFile: string }
-  | { _tag: "Dismiss" }
-  | { _tag: "SwitchStart" }
+  | { _tag: "SwitchStart"; parentSessionFile: string }
   | { _tag: "SwitchComplete" }
   | { _tag: "SwitchCancelled" }
   | { _tag: "Reset" };
@@ -66,28 +63,9 @@ export const handoffReducer: Reducer<HandoffState, HandoffEvent, HandoffEffect> 
     // ----- GenerateComplete -----
     case "GenerateComplete": {
       if (state._tag !== "Generating") return { state };
-      const next: HandoffState = {
-        _tag: "Ready",
-        prompt: event.prompt,
-        parentSessionFile: state.parentSessionFile,
-      };
       return {
-        state: next,
-        effects: [
-          {
-            type: "setEditorLabel",
-            key: "handoff",
-            text: "handoff ready",
-            position: "top",
-            align: "right",
-          },
-          { type: "setStatus", key: "handoff", text: "handoff ready" },
-          {
-            type: "notify",
-            message: "handoff prompt generated. choose whether to hand off now, skip, or edit.",
-            level: "warning",
-          },
-        ],
+        state: { _tag: "Idle" },
+        effects: [{ type: "setStatus", key: "handoff" }],
       };
     }
 
@@ -102,52 +80,15 @@ export const handoffReducer: Reducer<HandoffState, HandoffEvent, HandoffEffect> 
       };
     }
 
-    // ----- ManualReady (from tool execute or manual /handoff with goal) -----
-    case "ManualReady": {
-      return {
-        state: {
-          _tag: "Ready",
-          prompt: event.prompt,
-          parentSessionFile: event.parentSessionFile,
-        },
-        effects: [
-          {
-            type: "setEditorLabel",
-            key: "handoff",
-            text: "handoff ready",
-            position: "top",
-            align: "right",
-          },
-          { type: "setStatus", key: "handoff", text: "handoff ready" },
-        ],
-      };
-    }
-
-    // ----- Dismiss -----
-    case "Dismiss": {
-      if (state._tag !== "Ready") return { state };
-      return {
-        state: { _tag: "Idle" },
-        effects: [
-          { type: "setStatus", key: "handoff" },
-          { type: "removeEditorLabel", key: "handoff" },
-        ],
-      };
-    }
-
     // ----- SwitchStart -----
     case "SwitchStart": {
-      if (state._tag !== "Ready") return { state };
+      if (state._tag === "Switching") return { state };
       return {
         state: {
           _tag: "Switching",
-          prompt: state.prompt,
-          parentSessionFile: state.parentSessionFile,
+          parentSessionFile: event.parentSessionFile,
         },
-        effects: [
-          { type: "setStatus", key: "handoff" },
-          { type: "removeEditorLabel", key: "handoff" },
-        ],
+        effects: [{ type: "setStatus", key: "handoff" }],
       };
     }
 
@@ -161,21 +102,8 @@ export const handoffReducer: Reducer<HandoffState, HandoffEvent, HandoffEffect> 
     case "SwitchCancelled": {
       if (state._tag !== "Switching") return { state };
       return {
-        state: {
-          _tag: "Ready",
-          prompt: state.prompt,
-          parentSessionFile: state.parentSessionFile,
-        },
-        effects: [
-          { type: "setStatus", key: "handoff", text: "handoff ready" },
-          {
-            type: "setEditorLabel",
-            key: "handoff",
-            text: "handoff ready",
-            position: "top",
-            align: "right",
-          },
-        ],
+        state: { _tag: "Idle" },
+        effects: [{ type: "setStatus", key: "handoff" }],
       };
     }
 

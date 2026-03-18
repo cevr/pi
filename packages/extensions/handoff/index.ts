@@ -352,26 +352,30 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
       ctx: ExtensionContext,
       prompt: string,
       parentSessionFile: string,
-    ): Promise<void> {
-      machine.send({ _tag: "SwitchStart" });
+    ): Promise<"handed-off" | "cancelled"> {
+      machine.send({ _tag: "SwitchStart", parentSessionFile });
 
       const switchResult = await ctx.newSession({ parentSession: parentSessionFile });
       if (switchResult.cancelled) {
         machine.send({ _tag: "SwitchCancelled" });
         ctx.ui.notify("session switch cancelled", "info");
-        return;
+        return "cancelled";
       }
 
       machine.send({ _tag: "SwitchComplete" });
       if (ctx.hasUI) ctx.ui.setEditorText("");
       if (parentSessionFile) showProvenance(ctx, parentSessionFile);
       pi.sendUserMessage(prompt);
+      return "handed-off";
     }
 
-    async function resolveReadyHandoff(state: Extract<HandoffState, { _tag: "Ready" }>, ctx: ExtensionContext) {
+    async function chooseHandoffPrompt(
+      ctx: ExtensionContext,
+      prompt: string,
+      parentSessionFile: string,
+    ): Promise<"handed-off" | "dismissed" | "cancelled"> {
       if (!ctx.hasUI) {
-        await performHandoff(ctx, state.prompt, state.parentSessionFile);
-        return;
+        return performHandoff(ctx, prompt, parentSessionFile);
       }
 
       const choice = await ctx.ui.select("Handoff ready — what next?", [
@@ -381,33 +385,66 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
       ]);
 
       if (choice === "Handoff now") {
-        await performHandoff(ctx, state.prompt, state.parentSessionFile);
-        return;
+        return performHandoff(ctx, prompt, parentSessionFile);
       }
 
       if (choice === "Edit handoff message") {
         const edited = await ctx.ui.editor(
           "handoff prompt — review/edit before switching",
-          state.prompt,
+          prompt,
         );
         if (!edited) {
           ctx.ui.notify("handoff edit cancelled", "info");
-          return;
+          return "cancelled";
         }
-        await performHandoff(ctx, edited, state.parentSessionFile);
-        return;
+        return performHandoff(ctx, edited, parentSessionFile);
       }
 
-      machine.send({ _tag: "Dismiss" });
       ctx.ui.notify("handoff dismissed", "info");
+      return "dismissed";
     }
 
-    const readyObserver: StateObserver<HandoffState, HandoffEvent> = {
-      match: (state) => state._tag === "Ready",
-      handler: async (state, _sendIfCurrent, ctx) => {
-        await resolveReadyHandoff(state, ctx);
-      },
-    };
+    async function runHandoffFlow(
+      ctx: ExtensionContext,
+      goal: string,
+      signal?: AbortSignal,
+    ): Promise<"handed-off" | "dismissed" | "cancelled"> {
+      const handoffModel = getHandoffModel(ctx);
+      if (!handoffModel) {
+        throw new Error("no model available for handoff extraction");
+      }
+
+      const parentSessionFile = ctx.sessionManager.getSessionFile() ?? "";
+      machine.send({ _tag: "GenerateStart", parentSessionFile });
+
+      const prompt = ctx.hasUI
+        ? await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+            const loader = new BorderedLoader(
+              tui,
+              theme,
+              `generating handoff prompt (${handoffModel.name})...`,
+            );
+            loader.onAbort = () => done(null);
+
+            generateHandoffPrompt(ctx, handoffModel, goal, loader.signal)
+              .then(done)
+              .catch((err) => {
+                console.error("handoff generation failed:", err);
+                done(null);
+              });
+
+            return loader;
+          })
+        : await generateHandoffPrompt(ctx, handoffModel, goal, signal);
+
+      if (!prompt) {
+        machine.send({ _tag: "GenerateFail", error: "no extraction result" });
+        return "cancelled";
+      }
+
+      machine.send({ _tag: "GenerateComplete" });
+      return chooseHandoffPrompt(ctx, prompt, parentSessionFile);
+    }
 
     const machineConfig: MachineConfig<HandoffState, HandoffEvent, HandoffEffect> = {
       id: "handoff",
@@ -434,34 +471,18 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
         agent_end: {
           mode: "fire" as const,
           toEvent: (state, _piEvent, ctx): HandoffEvent | null => {
-            if (state._tag === "Ready" || state._tag === "Generating") return null;
+            if (state._tag === "Generating" || state._tag === "Switching") return null;
 
             const usage = ctx.getContextUsage();
             if (!usage || usage.percent === null) return null;
             if (usage.percent < cfg.threshold * 100) return null;
-            const handoffModel = getHandoffModel(ctx);
-            if (!handoffModel) return null;
 
-            const parentFile = ctx.sessionManager.getSessionFile() ?? "";
-
-            // async generation — fire GenerateStart, then async work feeds back
-            generateHandoffPrompt(
-              ctx,
-              handoffModel,
-              "continue the most specific pending task from the conversation",
-            )
-              .then((prompt) => {
-                if (!prompt) {
-                  machine.send({ _tag: "GenerateFail", error: "no extraction result" });
-                  return;
-                }
-                machine.send({ _tag: "GenerateComplete", prompt });
-              })
-              .catch((err) => {
-                machine.send({ _tag: "GenerateFail", error: String(err) });
-              });
-
-            return { _tag: "GenerateStart", parentSessionFile: parentFile };
+            void runHandoffFlow(ctx, "continue the most specific pending task from the conversation").catch(
+              (err) => {
+                console.error("handoff generation failed:", err);
+              },
+            );
+            return null;
           },
         },
 
@@ -471,7 +492,7 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
           toEvent: (): HandoffEvent => ({ _tag: "Reset" }),
         },
       },
-      observers: [readyObserver],
+      observers: [],
     };
 
     machine = register<HandoffState, HandoffEvent, HandoffEffect>(
@@ -505,51 +526,12 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
       description: "Transfer context to a new focused session (replaces compaction)",
       handler: async (args, ctx) => {
         const goal = args.trim();
-        let state = machine.getState();
-
-        // manual invocation with a goal — generate fresh handoff
-        if (goal && state._tag !== "Ready") {
-          const handoffModel = getHandoffModel(ctx);
-          if (!handoffModel) {
-            ctx.ui.notify("no model available for handoff", "error");
-            return;
-          }
-
-          const parentFile = ctx.sessionManager.getSessionFile() ?? "";
-
-          const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-            const loader = new BorderedLoader(
-              tui,
-              theme,
-              `generating handoff prompt (${handoffModel.name})...`,
-            );
-            loader.onAbort = () => done(null);
-
-            generateHandoffPrompt(ctx, handoffModel, goal, loader.signal)
-              .then(done)
-              .catch((err) => {
-                console.error("handoff generation failed:", err);
-                done(null);
-              });
-
-            return loader;
-          });
-
-          if (!result) {
-            ctx.ui.notify("cancelled", "info");
-            return;
-          }
-
-          machine.send({ _tag: "ManualReady", prompt: result, parentSessionFile: parentFile });
+        if (!goal) {
+          ctx.ui.notify("no handoff goal provided. usage: /handoff <goal>", "error");
           return;
         }
 
-        if (state._tag !== "Ready") {
-          ctx.ui.notify("no handoff prompt available. usage: /handoff <goal>", "error");
-          return;
-        }
-
-        await resolveReadyHandoff(state, ctx);
+        await runHandoffFlow(ctx, goal);
       },
     });
 
@@ -576,30 +558,20 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
 
       async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
         const p = params as { goal: string };
-        const handoffModel = getHandoffModel(_ctx);
-        if (!handoffModel) {
-          throw new Error("no model available for handoff extraction");
-        }
+        const outcome = await runHandoffFlow(_ctx, p.goal, _signal ?? undefined);
 
-        const parentFile = _ctx.sessionManager.getSessionFile() ?? "";
-
-        const prompt = await generateHandoffPrompt(
-          _ctx,
-          handoffModel,
-          p.goal,
-          _signal ?? undefined,
-        );
-        if (!prompt) {
-          throw new Error("handoff generation failed: could not extract context");
-        }
-
-        machine.send({ _tag: "ManualReady", prompt, parentSessionFile: parentFile });
+        const text =
+          outcome === "handed-off"
+            ? `handed off to a new session for: "${p.goal}".`
+            : outcome === "dismissed"
+              ? `handoff dismissed for: "${p.goal}".`
+              : `handoff cancelled for: "${p.goal}".`;
 
         return {
           content: [
             {
               type: "text",
-              text: `handoff prompt generated for: "${p.goal}". choose whether to hand off now, dismiss it, or edit the message before switching.`,
+              text,
             },
           ],
           details: undefined,
