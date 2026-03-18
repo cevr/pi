@@ -41,7 +41,65 @@ import { boxBottom, boxRow, boxTop } from "@cvr/pi-box-chrome";
 const CUSTOM_TYPE = "skill-mentions:context";
 const SKILL_TOKEN_RE =
   /(?<![\\$\w])\$([a-z][a-z0-9-]*)(?::(global|local|\.pi|\.claude|\.agents))?/g;
+const SKILL_PREFIX_RE = /(?:^|[\s([{"'])\$([a-z][a-z0-9-]*)?$/;
 const MAX_VISIBLE = 12;
+
+export interface SkillMentionPrefix {
+  raw: string;
+  start: number;
+  end: number;
+  query: string;
+}
+
+export function detectSkillMentionPrefix(
+  text: string,
+  cursor: number = text.length,
+): SkillMentionPrefix | null {
+  const head = text.slice(0, cursor);
+  const match = head.match(SKILL_PREFIX_RE);
+  if (!match) return null;
+
+  const start = head.lastIndexOf("$");
+  if (start < 0) return null;
+
+  return {
+    raw: head.slice(start, cursor),
+    start,
+    end: cursor,
+    query: match[1] ?? "",
+  };
+}
+
+function replaceTextRange(text: string, start: number, end: number, replacement: string): string {
+  return text.slice(0, start) + replacement + text.slice(end);
+}
+
+function syncPrefixText(
+  text: string,
+  prefix: SkillMentionPrefix,
+  replacement: string,
+): { text: string; prefix: SkillMentionPrefix } {
+  const nextText = replaceTextRange(text, prefix.start, prefix.end, replacement);
+  return {
+    text: nextText,
+    prefix: {
+      raw: replacement,
+      start: prefix.start,
+      end: prefix.start + replacement.length,
+      query: replacement.startsWith("$") ? replacement.slice(1) : replacement,
+    },
+  };
+}
+
+function shouldTrackEditorInput(data: string): boolean {
+  return matchesKey(data, Key.backspace) || (data.length >= 1 && !data.startsWith("\x1b"));
+}
+
+function shouldOpenPickerForInput(data: string, prefix: SkillMentionPrefix): boolean {
+  if (matchesKey(data, Key.backspace)) return prefix.raw.length > 1;
+  if (/^\s+$/.test(data)) return false;
+  return prefix.query.length > 0;
+}
 
 // ---------------------------------------------------------------------------
 // Skill catalog
@@ -113,8 +171,12 @@ class SkillPicker implements Component, Focusable {
     private theme: import("@mariozechner/pi-coding-agent").Theme,
     private onSelect: (item: PickerItem) => void,
     private onCancel: (deletePrefix?: boolean) => void,
+    private onSearchChange: (searchText: string) => void,
+    initialSearchText = "",
   ) {
+    this.searchText = initialSearchText;
     this.filtered = [...items];
+    this.applyFilter();
   }
 
   handleInput(data: string): void {
@@ -147,6 +209,7 @@ class SkillPicker implements Component, Focusable {
     if (matchesKey(data, Key.backspace)) {
       if (this.searchText.length > 0) {
         this.searchText = this.searchText.slice(0, -1);
+        this.onSearchChange(this.searchText);
         this.applyFilter();
         this.invalidate();
       } else {
@@ -157,6 +220,7 @@ class SkillPicker implements Component, Focusable {
 
     if (data.length >= 1 && !data.startsWith("\x1b") && data.charCodeAt(0) >= 32) {
       this.searchText += data;
+      this.onSearchChange(this.searchText);
       this.applyFilter();
       this.invalidate();
     }
@@ -266,153 +330,183 @@ class SkillPicker implements Component, Focusable {
 // Extension
 // ---------------------------------------------------------------------------
 
-export default function skillMentionsExtension(pi: ExtensionAPI): void {
-  let catalog: DiscoveredSkill[] = [];
-  let activeSkillContext = "";
-  let inputUnsub: (() => void) | null = null;
-  let pickerOpen = false;
-  let currentCwd = process.cwd();
-
-  function rebuildCatalog(cwd: string) {
-    currentCwd = cwd;
-    catalog = getSkillCatalog(cwd);
-  }
-
-  function clearActive() {
-    activeSkillContext = "";
-  }
-
-  async function openPicker(ctx: import("@mariozechner/pi-coding-agent").ExtensionContext) {
-    if (!ctx.hasUI || pickerOpen || catalog.length === 0) return;
-    pickerOpen = true;
-
-    const items: PickerItem[] = catalog.map((skill) => ({
-      name: skill.displayName,
-      description: skill.description,
-      insertText: skill.token,
-    }));
-
-    await ctx.ui.custom<void>(
-      (tui, theme, _kb, done) => {
-        const picker = new SkillPicker(
-          items,
-          theme,
-          (item) => {
-            ctx.ui.pasteToEditor(item.insertText + " ");
-            done();
-          },
-          (deletePrefix) => {
-            if (deletePrefix) {
-              const text = ctx.ui.getEditorText();
-              if (text.endsWith("$")) {
-                ctx.ui.setEditorText(text.slice(0, -1));
-              }
-            }
-            done();
-          },
-        );
-        return {
-          render: (w: number) => picker.render(w),
-          handleInput: (data: string) => {
-            picker.handleInput(data);
-            tui.requestRender();
-          },
-          invalidate: () => picker.invalidate(),
-          get focused() {
-            return picker.focused;
-          },
-          set focused(v: boolean) {
-            picker.focused = v;
-          },
-        };
-      },
-      {
-        overlay: true,
-        overlayOptions: {
-          anchor: "top-center",
-          width: 72,
-          minWidth: 40,
-          maxHeight: "60%",
-          offsetY: 2,
-        },
-      },
-    );
-
-    pickerOpen = false;
-  }
-
-  pi.on("session_start", async (_event, ctx) => {
-    rebuildCatalog(ctx.cwd);
-    clearActive();
-
-    if (!ctx.hasUI) return;
-
-    inputUnsub?.();
-    inputUnsub = ctx.ui.onTerminalInput((data) => {
-      if (data !== "$") return undefined;
-
-      const text = ctx.ui.getEditorText();
-      if (text.length === 0 || /\s$/.test(text)) {
-        void openPicker(ctx);
-      }
-      return undefined;
-    });
-  });
-
-  pi.on("session_switch", async (_event, ctx) => {
-    rebuildCatalog(ctx.cwd);
-    clearActive();
-  });
-
-  pi.on("input", async (event) => {
-    if (event.source === "extension") return { action: "continue" as const };
-
-    const tokens = parseSkillTokens(event.text);
-    if (tokens.length === 0) {
-      clearActive();
-      return { action: "continue" as const };
-    }
-
-    const seen = new Set<string>();
-    const loaded: string[] = [];
-    for (const token of tokens) {
-      const { skill } = resolveSkillReference(token.reference, currentCwd);
-      if (!skill) continue;
-      if (seen.has(skill.filePath)) continue;
-      seen.add(skill.filePath);
-      const content = loadSkillContent(skill);
-      if (content) loaded.push(content);
-    }
-
-    activeSkillContext = loaded.join("\n\n");
-    return { action: "continue" as const };
-  });
-
-  pi.on("context", async (event) => {
-    const messages = event.messages.filter((m: any) => m.customType !== CUSTOM_TYPE);
-
-    if (!activeSkillContext) return { messages };
-
-    return {
-      messages: [
-        ...messages,
-        {
-          role: "custom",
-          customType: CUSTOM_TYPE,
-          content: activeSkillContext,
-          display: false,
-          timestamp: Date.now(),
-        },
-      ],
-    };
-  });
-
-  pi.on("agent_end", async () => {
-    clearActive();
-  });
-
-  pi.on("session_shutdown", async () => {
-    inputUnsub?.();
-    inputUnsub = null;
-  });
+export interface SkillMentionsDeps {
+  getSkillCatalog: (cwd: string) => DiscoveredSkill[];
+  loadSkillContent: (skill: DiscoveredSkill) => string | null;
+  resolveSkillReference: typeof resolveSkillReference;
 }
+
+export const DEFAULT_DEPS: SkillMentionsDeps = {
+  getSkillCatalog,
+  loadSkillContent,
+  resolveSkillReference,
+};
+
+export function createSkillMentionsExtension(deps: SkillMentionsDeps = DEFAULT_DEPS) {
+  return function skillMentionsExtension(pi: ExtensionAPI): void {
+    let catalog: DiscoveredSkill[] = [];
+    let activeSkillContext = "";
+    let inputUnsub: (() => void) | null = null;
+    let pickerOpen = false;
+    let currentCwd = process.cwd();
+
+    function rebuildCatalog(cwd: string) {
+      currentCwd = cwd;
+      catalog = deps.getSkillCatalog(cwd);
+    }
+
+    function clearActive() {
+      activeSkillContext = "";
+    }
+
+    async function openPicker(
+      ctx: import("@mariozechner/pi-coding-agent").ExtensionContext,
+      initialPrefix: SkillMentionPrefix,
+    ) {
+      if (!ctx.hasUI || pickerOpen || catalog.length === 0) return;
+      pickerOpen = true;
+
+      const items: PickerItem[] = catalog.map((skill) => ({
+        name: skill.displayName,
+        description: skill.description,
+        insertText: skill.token,
+      }));
+      let livePrefix = initialPrefix;
+
+      await ctx.ui.custom<void>(
+        (tui, theme, _kb, done) => {
+          const picker = new SkillPicker(
+            items,
+            theme,
+            (item) => {
+              const text = ctx.ui.getEditorText();
+              const synced = syncPrefixText(text, livePrefix, `$${item.insertText} `);
+              livePrefix = synced.prefix;
+              ctx.ui.setEditorText(synced.text);
+              done();
+            },
+            (deletePrefix) => {
+              if (deletePrefix) {
+                const text = ctx.ui.getEditorText();
+                const synced = syncPrefixText(text, livePrefix, "");
+                livePrefix = synced.prefix;
+                ctx.ui.setEditorText(synced.text);
+              }
+              done();
+            },
+            (searchText) => {
+              const text = ctx.ui.getEditorText();
+              const synced = syncPrefixText(text, livePrefix, `$${searchText}`);
+              livePrefix = synced.prefix;
+              ctx.ui.setEditorText(synced.text);
+            },
+            initialPrefix.query,
+          );
+          return {
+            render: (w: number) => picker.render(w),
+            handleInput: (data: string) => {
+              picker.handleInput(data);
+              tui.requestRender();
+            },
+            invalidate: () => picker.invalidate(),
+            get focused() {
+              return picker.focused;
+            },
+            set focused(v: boolean) {
+              picker.focused = v;
+            },
+          };
+        },
+        {
+          overlay: true,
+          overlayOptions: {
+            anchor: "top-center",
+            width: 72,
+            minWidth: 40,
+            maxHeight: "60%",
+            offsetY: 2,
+          },
+        },
+      );
+
+      pickerOpen = false;
+    }
+
+    pi.on("session_start", async (_event, ctx) => {
+      rebuildCatalog(ctx.cwd);
+      clearActive();
+
+      if (!ctx.hasUI) return;
+
+      inputUnsub?.();
+      inputUnsub = ctx.ui.onTerminalInput((data) => {
+        if (!shouldTrackEditorInput(data)) return undefined;
+
+        const prefix = detectSkillMentionPrefix(ctx.ui.getEditorText());
+        if (!prefix || !shouldOpenPickerForInput(data, prefix)) return undefined;
+
+        void openPicker(ctx, prefix);
+        return undefined;
+      });
+    });
+
+    pi.on("session_switch", async (_event, ctx) => {
+      rebuildCatalog(ctx.cwd);
+      clearActive();
+    });
+
+    pi.on("input", async (event) => {
+      if (event.source === "extension") return { action: "continue" as const };
+
+      const tokens = parseSkillTokens(event.text);
+      if (tokens.length === 0) {
+        clearActive();
+        return { action: "continue" as const };
+      }
+
+      const seen = new Set<string>();
+      const loaded: string[] = [];
+      for (const token of tokens) {
+        const { skill } = deps.resolveSkillReference(token.reference, currentCwd);
+        if (!skill) continue;
+        if (seen.has(skill.filePath)) continue;
+        seen.add(skill.filePath);
+        const content = deps.loadSkillContent(skill);
+        if (content) loaded.push(content);
+      }
+
+      activeSkillContext = loaded.join("\n\n");
+      return { action: "continue" as const };
+    });
+
+    pi.on("context", async (event) => {
+      const messages = event.messages.filter((m: any) => m.customType !== CUSTOM_TYPE);
+
+      if (!activeSkillContext) return { messages };
+
+      return {
+        messages: [
+          ...messages,
+          {
+            role: "custom",
+            customType: CUSTOM_TYPE,
+            content: activeSkillContext,
+            display: false,
+            timestamp: Date.now(),
+          },
+        ],
+      };
+    });
+
+    pi.on("agent_end", async () => {
+      clearActive();
+    });
+
+    pi.on("session_shutdown", async () => {
+      inputUnsub?.();
+      inputUnsub = null;
+    });
+  };
+}
+
+export default createSkillMentionsExtension();
