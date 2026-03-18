@@ -252,6 +252,54 @@ describe("mention autocomplete", () => {
       prefix: "@commit/abc123",
     });
   });
+
+  it("adds a trailing space after applying a special mention completion", () => {
+    const unregisterSession = registerMentionSource(createTestSessionMentionSource("session"));
+
+    try {
+      const provider = new MentionAwareProvider({
+        baseProvider,
+        cwd: tmpdir(),
+      });
+
+      const suggestions = provider.getSuggestions(["check @ses"], 0, 10);
+      expect(suggestions).not.toBeNull();
+      const item = suggestions?.items[0];
+      expect(item?.value).toBe("@session/");
+
+      expect(provider.applyCompletion(["check @ses"], 0, 10, item!, "@ses")).toEqual({
+        lines: ["check @session/ "],
+        cursorLine: 0,
+        cursorCol: 16,
+      });
+    } finally {
+      unregisterSession();
+    }
+  });
+
+  it("does not add a duplicate space when one already follows the prefix", () => {
+    const unregisterSession = registerMentionSource(createTestSessionMentionSource("session"));
+
+    try {
+      const provider = new MentionAwareProvider({
+        baseProvider,
+        cwd: tmpdir(),
+      });
+
+      const suggestions = provider.getSuggestions(["check @ses next"], 0, 10);
+      expect(suggestions).not.toBeNull();
+      const item = suggestions?.items[0];
+      expect(item?.value).toBe("@session/");
+
+      expect(provider.applyCompletion(["check @ses next"], 0, 10, item!, "@ses")).toEqual({
+        lines: ["check @session/ next"],
+        cursorLine: 0,
+        cursorCol: 15,
+      });
+    } finally {
+      unregisterSession();
+    }
+  });
 });
 
 describe("resolveMentions", () => {

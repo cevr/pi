@@ -81,14 +81,17 @@ export class MentionAwareProvider implements AutocompleteProvider {
 
     const line = lines[cursorLine] ?? "";
     const start = Math.max(0, cursorCol - prefix.length);
-    const nextLine = line.slice(0, start) + item.value + line.slice(cursorCol);
+    const suffix = line.slice(cursorCol);
+    const trailingSpace = suffix.startsWith(" ") ? "" : " ";
+    const inserted = item.value + trailingSpace;
+    const nextLine = line.slice(0, start) + inserted + suffix;
     const nextLines = [...lines];
     nextLines[cursorLine] = nextLine;
 
     return {
       lines: nextLines,
       cursorLine,
-      cursorCol: start + item.value.length,
+      cursorCol: start + inserted.length,
     };
   }
 
