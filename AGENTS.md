@@ -155,6 +155,10 @@ Optional metadata repair in `~/.bun/install/global/package.json`:
 
 ### Gotchas
 - `bun link @mariozechner/pi-coding-agent --global` may fail with `FileNotFound: failed linking dependency/workspace to node_modules`.
+- In that failure mode, `~/.bun/bin/pi` may still exist while its target package link is missing or broken.
+- If `which pi` fails or `pi` stops launching, inspect both links:
+  - `~/.bun/bin/pi`
+  - `~/.bun/install/global/node_modules/@mariozechner/pi-coding-agent`
 - `bun pm ls -g` may omit the linked package even when `pi` works.
 - `bun install` inside `~/.bun/install/global` may still fail on the linked package.
 
