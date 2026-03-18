@@ -23,7 +23,6 @@
   "doubleEscapeAction": "tree",
   "lastChangelogVersion": "0.60.0",
   "packages": [
-    "npm:pi-subagents",
     "npm:pi-interview",
     "npm:glimpseui"
   ]
