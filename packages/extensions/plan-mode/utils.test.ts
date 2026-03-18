@@ -149,6 +149,31 @@ Plan:
     expect(items).toHaveLength(2);
   });
 
+  it("extracts bullet items after a Plan header", () => {
+    const message = `Plan:
+- Audit the current flow
+- Improve test coverage
+`;
+    const items = extractTodoItems(message);
+    expect(items).toHaveLength(2);
+    expect(items[0]!.step).toBe(1);
+    expect(items[0]!.text).toBe("Audit the current flow");
+    expect(items[1]!.step).toBe(2);
+    expect(items[1]!.text).toBe("Improve test coverage");
+  });
+
+  it("handles checklist bullets and ignores nested bullet details", () => {
+    const message = `Plan:
+- [ ] Audit the current flow
+  - inspect session hydration
+- [x] Improve test coverage
+`;
+    const items = extractTodoItems(message);
+    expect(items).toHaveLength(2);
+    expect(items[0]!.text).toBe("Audit the current flow");
+    expect(items[1]!.text).toBe("Improve test coverage");
+  });
+
   it("handles markdown headings like ## Implementation Plan", () => {
     const message = `## Implementation Plan
 1. **Audit** the current flow

@@ -9,8 +9,7 @@
  *   /audit check react and effect   — with explicit focus
  */
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Message as PiMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readPrinciples } from "@cvr/pi-brain-principles";
 import { GitClient } from "@cvr/pi-git-client";
@@ -31,11 +30,11 @@ import { parseConcernsJson, parseFindingsJson, PHASE_MARKERS } from "./utils";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function isAssistantMessage(m: AgentMessage): m is AssistantMessage {
+function isAssistantMessage(m: PiMessage): m is AssistantMessage {
   return m.role === "assistant" && Array.isArray(m.content);
 }
 
-function getLastAssistantText(messages: AgentMessage[]): string {
+function getLastAssistantText(messages: PiMessage[]): string {
   const assistants = messages.filter(isAssistantMessage);
   const last = assistants[assistants.length - 1];
   if (!last) return "";

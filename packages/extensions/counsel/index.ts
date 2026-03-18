@@ -8,8 +8,10 @@
  * follows the oracle pattern: PiSpawnService + ManagedRuntime + getEnabledExtensionConfig.
  */
 
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as fs from "node:fs";
 import * as os from "node:os";
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
@@ -160,6 +162,39 @@ interface CounselParams {
   principles?: boolean;
 }
 
+function inlineFileForPrompt(filePath: string, cwd: string): string {
+  const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+  try {
+    const content = fs.readFileSync(resolved, "utf-8");
+    return `\nFile: ${filePath}\n\`\`\`\n${content}\n\`\`\``;
+  } catch {
+    return `\nFile: ${filePath} (could not read)`;
+  }
+}
+
+function buildCounselTask(params: CounselParams, cwd: string): string {
+  const parts: string[] = [params.prompt];
+  if (params.context) parts.push(`\nContext: ${params.context}`);
+  if (params.files && params.files.length > 0) {
+    for (const filePath of params.files) {
+      parts.push(inlineFileForPrompt(filePath, cwd));
+    }
+  }
+  return parts.join("\n");
+}
+
+function buildCounselSystemPrompt(
+  config: CounselConfig,
+  includePrinciples: boolean | undefined,
+  readPrinciplesFn: typeof readPrinciples,
+): string {
+  const basePrompt = config.systemPrompt || COUNSEL_SYSTEM_PROMPT;
+  if (includePrinciples === false) return basePrompt;
+
+  const principles = readPrinciplesFn(config.principlesDir ?? CONFIG_DEFAULTS.principlesDir);
+  return principles ? `${basePrompt}\n\n${principles}` : basePrompt;
+}
+
 export interface CounselConfig {
   systemPrompt?: string;
   model?: string;
@@ -256,31 +291,8 @@ export function createCounselTool(
         /* graceful */
       }
 
-      // compose task
-      const parts: string[] = [p.prompt];
-      if (p.context) parts.push(`\nContext: ${p.context}`);
-      if (p.files && p.files.length > 0) {
-        for (const filePath of p.files) {
-          const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(ctx.cwd, filePath);
-          try {
-            const content = fs.readFileSync(resolved, "utf-8");
-            parts.push(`\nFile: ${filePath}\n\`\`\`\n${content}\n\`\`\``);
-          } catch {
-            parts.push(`\nFile: ${filePath} (could not read)`);
-          }
-        }
-      }
-      const fullTask = parts.join("\n");
-
-      // build system prompt with optional principles
-      const systemParts: string[] = [config.systemPrompt || COUNSEL_SYSTEM_PROMPT];
-      if (p.principles !== false) {
-        const principles = readPrinciplesFn(config.principlesDir ?? CONFIG_DEFAULTS.principlesDir);
-        if (principles) {
-          systemParts.push(`\n\n${principles}`);
-        }
-      }
-      const systemPrompt = systemParts.join("");
+      const fullTask = buildCounselTask(p, ctx.cwd);
+      const systemPrompt = buildCounselSystemPrompt(config, p.principles, readPrinciplesFn);
 
       const singleResult: SingleResult = {
         agent: "counsel",

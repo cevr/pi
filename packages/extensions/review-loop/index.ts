@@ -4,8 +4,7 @@
  * Delegates all state transitions to machine.ts via pi-state-machine.
  */
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Message as PiMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { readPrinciples } from "@cvr/pi-brain-principles";
 import { register } from "@cvr/pi-state-machine";
@@ -21,7 +20,7 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function isAssistantMessage(m: AgentMessage): m is AssistantMessage {
+function isAssistantMessage(m: PiMessage): m is AssistantMessage {
   return m.role === "assistant" && Array.isArray(m.content);
 }
 

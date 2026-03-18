@@ -5,11 +5,12 @@
  * Handles pi API interactions, theme formatting, file I/O, and async UI.
  */
 
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as fs from "node:fs";
+// @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as path from "node:path";
 import * as os from "node:os";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Message as PiMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
 import { readPrinciples } from "@cvr/pi-brain-principles";
@@ -78,7 +79,7 @@ function updatePlanFileToDisk(planPath: string, items: TodoItem[]): void {
 // Message helpers
 // ---------------------------------------------------------------------------
 
-function isAssistantMessage(m: AgentMessage): m is AssistantMessage {
+function isAssistantMessage(m: PiMessage): m is AssistantMessage {
   return m.role === "assistant" && Array.isArray(m.content);
 }
 
@@ -308,12 +309,13 @@ Restrictions:
 - Bash is restricted to an allowlist of read-only commands
 - Use the interview tool to ask the user clarifying questions about scope
 
-Create a detailed numbered plan under a "Plan:" header:
+Create a detailed plan under a "Plan:" header.
+Use a numbered list or bullet points:
 
 Plan:
 1. First step description
 2. Second step description
-...
+- or a bullet step
 
 Do NOT attempt to make changes - just describe what you would do.${diffBlock}${principlesBlock}`,
                   display: false,

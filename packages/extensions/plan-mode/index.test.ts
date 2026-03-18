@@ -166,8 +166,42 @@ describe("plan-mode extension", () => {
       ctx,
     );
 
-    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-todo-list")).toBe(true);
-    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-mode-execute")).toBe(true);
+    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-todo-list")).toBe(
+      true,
+    );
+    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-mode-execute")).toBe(
+      true,
+    );
+  });
+
+  it("auto-executes after bullet-plan extraction when no UI is available", async () => {
+    const h = createMockExtensionApiHarness();
+    planModeExtension(h.pi);
+
+    const ctx = h.createContext({ hasUI: false });
+    await h.shortcuts[0]!.options.handler(ctx);
+
+    const agentEnd = h.getListener("agent_end");
+    expect(agentEnd).toBeDefined();
+
+    agentEnd!.handler(
+      {
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Plan:\n- Audit the flow\n- Improve coverage" }],
+          },
+        ],
+      },
+      ctx,
+    );
+
+    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-todo-list")).toBe(
+      true,
+    );
+    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-mode-execute")).toBe(
+      true,
+    );
   });
 
   it("restores an awaiting choice session and re-prompts on session start", () => {
@@ -198,7 +232,9 @@ describe("plan-mode extension", () => {
 
     sessionStart!.handler({}, h.createContext({ hasUI: false }));
 
-    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-mode-execute")).toBe(true);
+    expect(h.sentMessages.some((entry) => entry.message.customType === "plan-mode-execute")).toBe(
+      true,
+    );
     expect(h.getActiveTools()).toEqual(["read", "bash", "edit"]);
   });
 });

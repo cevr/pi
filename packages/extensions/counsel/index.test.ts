@@ -197,8 +197,7 @@ describe("createCounselTool", () => {
 
   it("retries once without a session file when prompt delivery fails upstream", async () => {
     const calls: PiSpawnConfig[] = [];
-    const errorText =
-      `400 {"type":"error","error":{"type":"invalid_request_error","message":"One of "input" or "previous_response_id"or 'prompt'or 'conversation_id' must be provided"}}`;
+    const errorText = `400 {"type":"error","error":{"type":"invalid_request_error","message":"One of "input" or "previous_response_id"or 'prompt'or 'conversation_id' must be provided"}}`;
     const runtime = createRuntime((config) => {
       calls.push(config);
       if (calls.length === 1) {

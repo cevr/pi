@@ -119,6 +119,8 @@ export interface TodoItem {
 /** Clean a plan step's text for display in the todo widget. */
 export function cleanStepText(text: string): string {
   let cleaned = text
+    .replace(/^\[(?: |x|X)\]\s+/, "")
+    .replace(/^[-*+]\s+/, "")
     .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
     .replace(
@@ -137,9 +139,21 @@ export function cleanStepText(text: string): string {
   return cleaned;
 }
 
+function appendTodoItem(items: TodoItem[], rawText: string): void {
+  const text = rawText.trim();
+  if (text.length <= 5 || text.startsWith("`") || text.startsWith("/") || text.startsWith("-")) {
+    return;
+  }
+
+  const cleaned = cleanStepText(text);
+  if (cleaned.length > 3) {
+    items.push({ step: items.length + 1, text: cleaned, completed: false });
+  }
+}
+
 /**
- * Extract numbered plan steps from an assistant message.
- * Looks for a plan heading and parses numbered items below it.
+ * Extract plan steps from an assistant message.
+ * Looks for a plan heading and parses numbered lists, bullets, or checklists below it.
  */
 function isPlanHeader(line: string): boolean {
   const normalized = line
@@ -151,7 +165,18 @@ function isPlanHeader(line: string): boolean {
     .trim()
     .toLowerCase();
 
-  return normalized === "plan" || normalized === "implementation plan" || normalized === "proposed plan";
+  return (
+    normalized === "plan" || normalized === "implementation plan" || normalized === "proposed plan"
+  );
+}
+
+function parsePlanListLine(line: string): { indent: number; text: string } | null {
+  const match = line.match(/^([ \t]*)(?:(?:\d+[.)])|[-*+])\s+(?:\[(?: |x|X)\]\s+)?(.+?)\s*$/);
+  if (!match?.[2]) return null;
+  return {
+    indent: match[1]?.length ?? 0,
+    text: match[2].trim(),
+  };
 }
 
 export function extractTodoItems(message: string): TodoItem[] {
@@ -160,37 +185,53 @@ export function extractTodoItems(message: string): TodoItem[] {
   if (headerIndex === -1) return [];
 
   const items: TodoItem[] = [];
+  let currentLines: string[] = [];
+  let listIndent: number | null = null;
+
+  const flushCurrentItem = () => {
+    if (currentLines.length === 0) return;
+    appendTodoItem(items, currentLines.join(" "));
+    currentLines = [];
+  };
 
   for (let i = headerIndex + 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line) continue;
+    const line = lines[i] ?? "";
+    const trimmed = line.trim();
+    if (!trimmed) continue;
 
-    if (items.length > 0 && /^\s*#{1,6}\s+/.test(line)) {
+    if ((items.length > 0 || currentLines.length > 0) && /^\s*#{1,6}\s+/.test(line)) {
+      flushCurrentItem();
       break;
     }
 
-    const match = line.match(/^\s*(\d+)[.)]\s+(.+?)\s*$/);
-    if (!match) continue;
+    const parsed = parsePlanListLine(line);
+    if (parsed) {
+      if (listIndent === null) listIndent = parsed.indent;
 
-    const rawText = match[2];
-    if (!rawText) continue;
+      if (parsed.indent === listIndent) {
+        flushCurrentItem();
+        currentLines = [parsed.text];
+        continue;
+      }
 
-    const text = rawText.trim();
-    if (
-      text.length <= 5 ||
-      text.startsWith("`") ||
-      text.startsWith("/") ||
-      text.startsWith("-")
-    ) {
-      continue;
+      if (currentLines.length > 0 && listIndent !== null && parsed.indent > listIndent) {
+        continue;
+      }
     }
 
-    const cleaned = cleanStepText(text);
-    if (cleaned.length > 3) {
-      items.push({ step: items.length + 1, text: cleaned, completed: false });
+    if (currentLines.length > 0 && listIndent !== null) {
+      const indent = line.length - line.trimStart().length;
+      if (indent > listIndent) {
+        currentLines.push(trimmed);
+        continue;
+      }
+
+      flushCurrentItem();
+      break;
     }
   }
 
+  flushCurrentItem();
   return items;
 }
 
