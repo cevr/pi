@@ -110,6 +110,17 @@ interface HandoffExtraction {
   relevantFiles: string[];
 }
 
+interface ModesPersistEntry {
+  type?: string;
+  customType?: string;
+  data?: {
+    planFilePath?: string | null;
+    pending?: {
+      planFilePath?: string | null;
+    };
+  };
+}
+
 function extractToolCallArgs(response: {
   content: ({ type: string } | ToolCall)[];
 }): HandoffExtraction | null {
@@ -128,16 +139,41 @@ function extractToolCallArgs(response: {
   };
 }
 
-function assembleHandoffPrompt(
+export function getPersistedModesPlanPath(entries: readonly unknown[]): string | null {
+  const modesEntry = [...entries]
+    .reverse()
+    .find(
+      (entry): entry is ModesPersistEntry =>
+        typeof entry === "object" &&
+        entry !== null &&
+        (entry as ModesPersistEntry).type === "custom" &&
+        (entry as ModesPersistEntry).customType === "modes",
+    );
+
+  const pendingPlanPath = modesEntry?.data?.pending?.planFilePath;
+  if (typeof pendingPlanPath === "string" && pendingPlanPath.trim()) return pendingPlanPath;
+
+  const planPath = modesEntry?.data?.planFilePath;
+  if (typeof planPath === "string" && planPath.trim()) return planPath;
+
+  return null;
+}
+
+export function assembleHandoffPrompt(
   sessionId: string,
   extraction: HandoffExtraction,
   goal: string,
+  planFilePath?: string | null,
 ): string {
   const parts: string[] = [];
 
   parts.push(
     `Continuing work from session ${sessionId}. Use read_session to retrieve details if needed.`,
   );
+
+  if (planFilePath) {
+    parts.push(`Plan file: ${planFilePath}`);
+  }
 
   if (extraction.relevantFiles.length > 0) {
     parts.push(extraction.relevantFiles.map((f) => `@${f}`).join(" "));
@@ -302,7 +338,8 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
       const extraction = extractToolCallArgs(response);
       if (!extraction) return null;
 
-      return assembleHandoffPrompt(sessionId, extraction, goal);
+      const planFilePath = getPersistedModesPlanPath(ctx.sessionManager.getEntries());
+      return assembleHandoffPrompt(sessionId, extraction, goal, planFilePath);
     }
 
     // -----------------------------------------------------------------------

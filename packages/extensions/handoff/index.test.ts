@@ -7,9 +7,11 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
 import {
+  assembleHandoffPrompt,
   createHandoffExtension,
   CONFIG_DEFAULTS,
   DEFAULT_DEPS,
+  getPersistedModesPlanPath,
   HANDOFF_CONFIG_SCHEMA,
 } from "./index";
 import { registerMentionSource } from "@cvr/pi-mentions";
@@ -91,6 +93,60 @@ afterEach(() => {
   // mock.restore() — manual cleanup;
   clearConfigCache();
   setGlobalSettingsPath(path.join(tmpdir, `nonexistent-${Date.now()}.json`));
+});
+
+describe("handoff helpers", () => {
+  it("prefers pending modes plan file paths", () => {
+    expect(
+      getPersistedModesPlanPath([
+        {
+          type: "custom",
+          customType: "modes",
+          data: { planFilePath: "/tmp/executing-plan.md" },
+        },
+        {
+          type: "custom",
+          customType: "modes",
+          data: {
+            planFilePath: "/tmp/stale-plan.md",
+            pending: { planFilePath: "/tmp/pending-plan.md" },
+          },
+        },
+      ]),
+    ).toBe("/tmp/pending-plan.md");
+  });
+
+  it("returns the latest persisted modes plan file path", () => {
+    expect(
+      getPersistedModesPlanPath([
+        { type: "custom", customType: "other", data: { planFilePath: "/tmp/ignore.md" } },
+        {
+          type: "custom",
+          customType: "modes",
+          data: { planFilePath: "" },
+        },
+        {
+          type: "custom",
+          customType: "modes",
+          data: { planFilePath: "/tmp/current-plan.md" },
+        },
+      ]),
+    ).toBe("/tmp/current-plan.md");
+  });
+
+  it("injects the persisted plan path into handoff prompts", () => {
+    expect(
+      assembleHandoffPrompt(
+        "session-123",
+        {
+          relevantInformation: "Keep going.",
+          relevantFiles: ["/repo/app/index.ts"],
+        },
+        "continue the most specific pending task from the conversation",
+        "/tmp/current-plan.md",
+      ),
+    ).toContain("Plan file: /tmp/current-plan.md");
+  });
 });
 
 describe("handoff extension", () => {
