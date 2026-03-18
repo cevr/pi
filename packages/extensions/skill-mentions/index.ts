@@ -95,6 +95,16 @@ function shouldTrackEditorInput(data: string): boolean {
   return matchesKey(data, Key.backspace) || (data.length >= 1 && !data.startsWith("\x1b"));
 }
 
+function projectEditorText(text: string, data: string): string {
+  if (matchesKey(data, Key.backspace)) {
+    return text.slice(0, -1);
+  }
+  if (data.length >= 1 && !data.startsWith("\x1b") && data.charCodeAt(0) >= 32) {
+    return text + data;
+  }
+  return text;
+}
+
 function shouldOpenPickerForInput(data: string, prefix: SkillMentionPrefix): boolean {
   if (matchesKey(data, Key.backspace)) return prefix.raw.length > 1;
   if (/^\s+$/.test(data)) return false;
@@ -442,7 +452,9 @@ export function createSkillMentionsExtension(deps: SkillMentionsDeps = DEFAULT_D
       inputUnsub = ctx.ui.onTerminalInput((data) => {
         if (!shouldTrackEditorInput(data)) return undefined;
 
-        const prefix = detectSkillMentionPrefix(ctx.ui.getEditorText());
+        const currentText = ctx.ui.getEditorText();
+        const projectedText = projectEditorText(currentText, data);
+        const prefix = detectSkillMentionPrefix(projectedText);
         if (!prefix || !shouldOpenPickerForInput(data, prefix)) return undefined;
 
         void openPicker(ctx, prefix);

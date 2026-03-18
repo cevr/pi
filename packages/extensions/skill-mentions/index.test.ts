@@ -75,12 +75,12 @@ describe("detectSkillMentionPrefix", () => {
 });
 
 describe("skill mentions extension", () => {
-  it("opens when the first real skill character appears and replaces the fragment", async () => {
+  it("opens immediately when the first real skill character appears after a bare dollar", async () => {
     const extension = createSkillMentionsExtension(createDeps());
     const harness = createMockExtensionApiHarness();
     extension(harness.pi);
 
-    let editorText = "$s";
+    let editorText = "$";
     let terminalInputHandler: ((data: string) => void) | undefined;
     let customCalls = 0;
 
@@ -108,6 +108,7 @@ describe("skill mentions extension", () => {
             undefined,
             () => {},
           );
+          expect(editorText).toBe("$");
           component.handleInput("\r");
         },
       },
@@ -128,7 +129,7 @@ describe("skill mentions extension", () => {
     const harness = createMockExtensionApiHarness();
     extension(harness.pi);
 
-    let editorText = "$sk";
+    let editorText = "$s";
     let terminalInputHandler: ((data: string) => void) | undefined;
     const seenEditorStates: string[] = [];
 
@@ -168,7 +169,7 @@ describe("skill mentions extension", () => {
     const sessionStartHandler = getHandler(harness.handlers, "session_start");
     await sessionStartHandler({}, ctx);
 
-    terminalInputHandler?.("$");
+    terminalInputHandler?.("k");
     await Promise.resolve();
 
     expect(seenEditorStates).toContain("$ski");
