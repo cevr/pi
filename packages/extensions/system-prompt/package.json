@@ -12,7 +12,7 @@
     "@cvr/pi-spawn": "workspace:*"
   },
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "catalog:"
+    "@mariozechner/pi-coding-agent": "file:../../../../../pi-mono/packages/coding-agent"
   },
   "pi": {
     "extensions": [

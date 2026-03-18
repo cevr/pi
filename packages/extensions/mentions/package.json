@@ -7,7 +7,7 @@
   "dependencies": {
     "@cvr/pi-editor-capabilities": "workspace:*",
     "@cvr/pi-mentions": "workspace:*",
-    "@mariozechner/pi-coding-agent": "catalog:"
+    "@mariozechner/pi-coding-agent": "file:../../../../../pi-mono/packages/coding-agent"
   },
   "devDependencies": {
     "vitest": "^3.0.0"

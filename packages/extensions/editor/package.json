@@ -10,8 +10,8 @@
     "@cvr/pi-process-runner": "workspace:*"
   },
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "catalog:",
-    "@mariozechner/pi-tui": "catalog:"
+    "@mariozechner/pi-coding-agent": "file:../../../../../pi-mono/packages/coding-agent",
+    "@mariozechner/pi-tui": "file:../../../../../pi-mono/packages/tui"
   },
   "peerDependencies": {
     "effect": "catalog:"
