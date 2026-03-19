@@ -274,11 +274,10 @@ describe("auditReducer — concern approval", () => {
         total: 2,
       });
     }
-    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(
-      r.effects,
-      "runConcernBatch",
+    const triggerTurn = getEffects<ExecutionEffect>(r.effects, "executeTurn").find(
+      (e) => e.request.triggerTurn === true,
     );
-    expect(batch?.state._tag).toBe("Auditing");
+    expect(triggerTurn).toBeTruthy();
   });
 
   it("AwaitingConcernApproval + ConcernsRejected → Idle", () => {
@@ -371,12 +370,7 @@ describe("auditReducer — ConcernAudited", () => {
       expect(r.state.concerns[0]!.metadata.notes).toBe("found issues in src/app.tsx");
       expect(r.state.concerns[1]!.status).toBe("in_progress");
     }
-    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(
-      r.effects,
-      "runConcernBatch",
-    );
-    expect(batch?.state._tag).toBe("Auditing");
-    expect(batch?.state.cursor).toEqual(createConcernCursor(2, 2));
+    expect(hasEffect(r.effects, "updateUI")).toBe(true);
   });
 
   it("last concern → Synthesizing", () => {
@@ -546,11 +540,10 @@ describe("auditReducer — Hydrate", () => {
       expect(result.state.concerns[1]!.status).toBe("in_progress");
       expect(result.state.userPrompt).toBe("focus on correctness");
     }
-    const batch = getEffect<AuditEffect & { type: "runConcernBatch" }>(
-      result.effects,
-      "runConcernBatch",
+    const triggerTurn = getEffects<ExecutionEffect>(result.effects, "executeTurn").find(
+      (e) => e.request.triggerTurn === true,
     );
-    expect(batch?.state._tag).toBe("Auditing");
+    expect(triggerTurn).toBeTruthy();
     expect(hasEffect(result.effects, "setStatus")).toBe(true);
     expect(hasEffect(result.effects, "updateUI")).toBe(true);
   });

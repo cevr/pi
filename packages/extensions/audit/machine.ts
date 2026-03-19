@@ -166,7 +166,6 @@ export type AuditEffect =
   | ExecutionEffect
   | { type: "persistState"; state: PersistPayload }
   | { type: "runDetection"; state: Extract<AuditState, { _tag: "Detecting" }> }
-  | { type: "runConcernBatch"; state: Extract<AuditState, { _tag: "Auditing" }> }
   | { type: "runSynthesis"; state: Extract<AuditState, { _tag: "Synthesizing" }> }
   | { type: "runExecution"; state: Extract<AuditState, { _tag: "Executing" }> }
   | { type: "updateUI" };
@@ -382,8 +381,13 @@ function runDetection(state: Extract<AuditState, { _tag: "Detecting" }>): AuditE
   return { type: "runDetection", state };
 }
 
-function runConcernBatch(state: Extract<AuditState, { _tag: "Auditing" }>): AuditEffect {
-  return { type: "runConcernBatch", state };
+function triggerConcernTool(): AuditEffect {
+  return executeTurn({
+    customType: "audit-progress",
+    content: "Concern audits are ready. Call audit_run_concerns to execute them.",
+    display: false,
+    triggerTurn: true,
+  });
 }
 
 function runSynthesis(state: Extract<AuditState, { _tag: "Synthesizing" }>): AuditEffect {
@@ -700,6 +704,7 @@ function transitionToAuditing(
     iteration: state.iteration,
     maxIterations: state.maxIterations,
     previousConcernSessionPaths: state.previousConcernSessionPaths,
+    previousSynthesisSessionPaths: state.previousSynthesisSessionPaths,
     previousExecutionSessionPaths: state.previousExecutionSessionPaths,
   };
   return {
@@ -707,7 +712,7 @@ function transitionToAuditing(
     effects: [
       statusEffectForState(next),
       visibleMessage(buildAuditPhaseMessage(next)),
-      runConcernBatch(next),
+      triggerConcernTool(),
       UI,
       persist(next),
     ],
@@ -795,7 +800,7 @@ function continueAuditLoop(
     effects: [
       statusEffectForState(next),
       visibleMessage(buildAuditPhaseMessage(next)),
-      runConcernBatch(next),
+      triggerConcernTool(),
       UI,
       persist(next),
     ],
@@ -1017,7 +1022,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       };
       return {
         state: next,
-        effects: [statusEffectForState(next), runConcernBatch(next), UI, persist(next)],
+        effects: [statusEffectForState(next), UI, persist(next)],
       };
     }
 
@@ -1214,7 +1219,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           previousSynthesisSessionPaths,
           previousExecutionSessionPaths,
         };
-        return { state: next, effects: [statusEffectForState(next), runConcernBatch(next), UI] };
+        return { state: next, effects: [statusEffectForState(next), triggerConcernTool(), UI] };
       }
 
       if (event.mode === "Synthesizing" && (event.concerns?.length ?? 0) > 0 && event.scope) {

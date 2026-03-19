@@ -608,6 +608,7 @@ describe("audit extension", () => {
       "audit_concern_complete",
       "audit_synthesis_complete",
       "audit_execution_result",
+      "audit_run_concerns",
     ]);
     expect(harness.messageRenderers.map((entry) => entry.customType)).toEqual([
       "audit-phase-result",
@@ -849,7 +850,7 @@ describe("audit extension", () => {
       expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: loop 1/5 1/2");
       const widgetCalls = (ctx.ui.setWidget as ReturnType<typeof mock>).mock.calls;
       expect(widgetCalls.at(-1)?.[0]).toBe("audit-progress");
-      expect(widgetCalls.at(-1)?.[1]).toEqual(["audit loop 1/5", "1/2 complete"]);
+      expect(widgetCalls.at(-1)?.[1]).toEqual(["audit loop 1/5 · 1/2 complete"]);
     });
   });
 
@@ -916,7 +917,7 @@ describe("audit extension", () => {
     expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: approve concerns");
   });
 
-  it("does not inject main-agent audit context while concern subagents are running", () => {
+  it("injects audit context instructing the agent to call audit_run_concerns during Auditing", () => {
     withFakePi(() => {
       const harness = createMockExtensionApiHarness();
       harness.setSessionEntries([
@@ -968,7 +969,9 @@ describe("audit extension", () => {
 
       sessionStart!.handler({}, ctx);
 
-      expect(beforeAgentStart!.handler({}, ctx)).toBeUndefined();
+      const reply = beforeAgentStart!.handler({}, ctx);
+      expect(reply).toBeDefined();
+      expect(reply.message.content).toContain("audit_run_concerns");
     });
   });
 
@@ -1040,8 +1043,7 @@ describe("audit extension", () => {
 
     expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: loop 2/5 executing");
     expect(ctx.ui.setWidget).toHaveBeenCalledWith("audit-progress", [
-      "audit loop 2/5",
-      "executing plan",
+      "audit loop 2/5 · executing plan",
     ]);
   });
 
@@ -1098,8 +1100,7 @@ describe("audit extension", () => {
 
     expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: loop 3/5 1/2");
     expect(ctx.ui.setWidget).toHaveBeenCalledWith("audit-progress", [
-      "audit loop 3/5",
-      "1/2 complete",
+      "audit loop 3/5 · 1/2 complete",
     ]);
   });
 });
