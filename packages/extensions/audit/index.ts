@@ -47,6 +47,7 @@ import {
   type AuditState,
   type PersistPayload,
   type SkillCatalogEntry,
+  type AuditThinkingLevel,
 } from "./machine";
 import type { GraphExecutionCursor } from "@cvr/pi-graph-execution";
 import { parseAuditScopeArgs, toAuditDisplayPath } from "./scope";
@@ -136,6 +137,25 @@ function normalizeHydratedConcernTasks(
       },
     ];
   });
+}
+
+const AUDIT_THINKING_LEVELS = new Set<AuditThinkingLevel>([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
+
+function normalizeAuditThinkingLevel(value: unknown): AuditThinkingLevel | undefined {
+  return typeof value === "string" && AUDIT_THINKING_LEVELS.has(value as AuditThinkingLevel)
+    ? (value as AuditThinkingLevel)
+    : undefined;
+}
+
+function getCurrentAuditThinkingLevel(pi: ExtensionAPI): AuditThinkingLevel {
+  return normalizeAuditThinkingLevel(pi.getThinkingLevel?.()) ?? "medium";
 }
 
 function normalizeHydratedConcernCursor(value: unknown): GraphExecutionCursor | undefined {
@@ -897,6 +917,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
               : undefined,
           );
           const concernCursor = normalizeHydratedConcernCursor(data?.concernCursor);
+          const previousThinkingLevel = normalizeAuditThinkingLevel(data?.previousThinkingLevel);
           const currentFinding =
             typeof data?.currentFinding === "number" ? data.currentFinding : undefined;
           const phase =
@@ -923,6 +944,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
               : [],
             skillCatalog,
             userPrompt: data?.userPrompt ?? "",
+            previousThinkingLevel,
             concernCursor,
             findings,
             currentFinding,
@@ -1099,6 +1121,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
           targetPaths,
           skillCatalog,
           userPrompt: parsedArgs.userPrompt,
+          previousThinkingLevel: getCurrentAuditThinkingLevel(pi),
         });
         return;
       }
@@ -1123,6 +1146,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
         targetPaths: changedFiles,
         skillCatalog,
         userPrompt,
+        previousThinkingLevel: getCurrentAuditThinkingLevel(pi),
       });
     },
   });

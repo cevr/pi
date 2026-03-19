@@ -49,6 +49,7 @@ function detecting(userPrompt = "", scope: "diff" | "paths" = "diff"): AuditStat
     targetPaths: ["src/app.tsx", "src/lib.ts"],
     skillCatalog: CATALOG,
     userPrompt,
+    previousThinkingLevel: "medium",
   };
 }
 
@@ -89,6 +90,7 @@ function awaitingConcernApproval(
     targetPaths: ["src/app.tsx", "src/lib.ts"],
     skillCatalog: CATALOG,
     userPrompt: "",
+    previousThinkingLevel: "medium",
   };
 }
 
@@ -154,6 +156,7 @@ describe("auditReducer — Start", () => {
       targetPaths: ["a.ts", "b.tsx"],
       skillCatalog: CATALOG,
       userPrompt: "check react",
+      previousThinkingLevel: "medium",
     });
     expect(r.state._tag).toBe("Detecting");
     if (r.state._tag === "Detecting") {
@@ -161,6 +164,9 @@ describe("auditReducer — Start", () => {
       expect(r.state.targetPaths).toEqual(["a.ts", "b.tsx"]);
       expect(r.state.userPrompt).toBe("check react");
     }
+    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
+      level: "xhigh",
+    });
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
     const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
     expect(turns).toHaveLength(2);
@@ -184,6 +190,7 @@ describe("auditReducer — Start", () => {
       targetPaths: [],
       skillCatalog: [],
       userPrompt: "",
+      previousThinkingLevel: "medium",
     });
     expect(r.state).toBe(state);
   });
@@ -204,6 +211,9 @@ describe("auditReducer — ConcernsProposed", () => {
       expect(r.state.concerns).toEqual(CONCERNS);
       expect(r.state.userPrompt).toBe("check react");
     }
+    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
+      level: "medium",
+    });
     const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
     expect(turns).toHaveLength(1);
     expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
@@ -218,6 +228,9 @@ describe("auditReducer — ConcernsProposed", () => {
   it("Detecting + empty concerns → Idle with notify", () => {
     const r = auditReducer(detecting(), { _tag: "ConcernsProposed", concerns: [] });
     expect(r.state._tag).toBe("Idle");
+    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
+      level: "medium",
+    });
     const notify = getEffect<BuiltinEffect>(r.effects, "notify");
     expect(notify).toMatchObject({ message: expect.stringContaining("no audit concerns") });
   });
@@ -263,6 +276,9 @@ describe("auditReducer — concern approval", () => {
       feedback: "merge correctness into architecture",
     });
     expect(r.state._tag).toBe("Detecting");
+    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
+      level: "xhigh",
+    });
     expect(getEffect<BuiltinEffect>(r.effects, "sendUserMessage")).toMatchObject({
       content: "merge correctness into architecture",
       deliverAs: "followUp",
@@ -283,6 +299,9 @@ describe("auditReducer — ConcernsDetected", () => {
       concerns: CONCERNS,
     });
     expect(r.state._tag).toBe("Auditing");
+    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
+      level: "medium",
+    });
   });
 
   it("AwaitingConcernApproval + concerns → Auditing", () => {
@@ -321,6 +340,9 @@ describe("auditReducer — DetectionFailed", () => {
   it("Detecting → Idle with error notify", () => {
     const r = auditReducer(detecting(), { _tag: "DetectionFailed" });
     expect(r.state._tag).toBe("Idle");
+    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
+      level: "medium",
+    });
     const notify = getEffect<BuiltinEffect>(r.effects, "notify");
     expect(notify).toMatchObject({ level: "error" });
   });
@@ -634,6 +656,9 @@ describe("auditReducer — Cancel", () => {
   it("Detecting → Idle", () => {
     const r = auditReducer(detecting(), { _tag: "Cancel" });
     expect(r.state._tag).toBe("Idle");
+    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
+      level: "medium",
+    });
     expect(hasEffect(r.effects, "notify")).toBe(true);
   });
 
@@ -664,6 +689,32 @@ describe("auditReducer — Cancel", () => {
 // ---------------------------------------------------------------------------
 
 describe("auditReducer — Hydrate", () => {
+  it("restores Detecting with xhigh thinking", () => {
+    const result = auditReducer(idle(), {
+      _tag: "Hydrate",
+      mode: "Detecting",
+      scope: "diff",
+      diffStat: " 3 files changed",
+      targetPaths: ["src/app.tsx", "src/lib.ts"],
+      skillCatalog: CATALOG,
+      userPrompt: "focus on correctness",
+      previousThinkingLevel: "medium",
+    });
+
+    expect(result.state).toEqual({
+      _tag: "Detecting",
+      scope: "diff",
+      diffStat: " 3 files changed",
+      targetPaths: ["src/app.tsx", "src/lib.ts"],
+      skillCatalog: CATALOG,
+      userPrompt: "focus on correctness",
+      previousThinkingLevel: "medium",
+    });
+    expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
+      level: "xhigh",
+    });
+  });
+
   it("restores Auditing with the persisted concern cursor", () => {
     const result = auditReducer(idle(), {
       _tag: "Hydrate",

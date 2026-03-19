@@ -105,6 +105,7 @@ function createMockExtensionApiHarness() {
   const sentUserMessages: Array<{ message: string; options?: unknown }> = [];
   const appendedEntries: Array<{ customType: string; data: unknown }> = [];
   const sessionEntries: unknown[] = [];
+  let thinkingLevel = "medium";
 
   const pi = {
     registerTool(tool: any) {
@@ -125,6 +126,12 @@ function createMockExtensionApiHarness() {
     appendEntry(customType: string, data: unknown) {
       appendedEntries.push({ customType, data });
     },
+    getThinkingLevel() {
+      return thinkingLevel;
+    },
+    setThinkingLevel(level: string) {
+      thinkingLevel = level;
+    },
   } as unknown as ExtensionAPI;
 
   return {
@@ -135,6 +142,7 @@ function createMockExtensionApiHarness() {
     sentMessages,
     sentUserMessages,
     appendedEntries,
+    getThinkingLevel: () => thinkingLevel,
     getTool: (name: string) => tools.find((tool) => tool.name === name)?.tool,
     getListener: (event: string) => listeners.find((listener) => listener.event === event),
     setSessionEntries: (entries: unknown[]) => {
@@ -333,6 +341,29 @@ describe("audit extension", () => {
     ]);
   });
 
+  it("raises thinking to xhigh during concern detection and restores it after proposal", async () => {
+    const harness = createMockExtensionApiHarness();
+    auditExtension(harness.pi);
+
+    const ctx = harness.createContext({ cwd: "/Users/cvr/Developer/personal/dotfiles/pi" });
+    harness.getListener("session_start")!.handler({}, ctx);
+    await harness.commands.find((command) => command.name === "audit")!.command.handler(
+      "packages/extensions/audit",
+      ctx,
+    );
+
+    expect(harness.getThinkingLevel()).toBe("xhigh");
+
+    const proposeTool = harness.getTool("audit_proposed_concerns");
+    await proposeTool.execute("tc-1", {
+      concerns: [
+        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
+      ],
+    });
+
+    expect(harness.getThinkingLevel()).toBe("medium");
+  });
+
   it("accepts proposed concerns and waits for UI approval", async () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
@@ -346,6 +377,7 @@ describe("audit extension", () => {
           targetPaths: ["src/app.tsx"],
           skillCatalog: [],
           userPrompt: "check react",
+          previousThinkingLevel: "medium",
         },
       },
     ]);
@@ -388,6 +420,7 @@ describe("audit extension", () => {
           targetPaths: ["src/app.tsx"],
           skillCatalog: [],
           userPrompt: "check react",
+          previousThinkingLevel: "medium",
         },
       },
     ]);
@@ -422,6 +455,7 @@ describe("audit extension", () => {
           targetPaths: ["src/app.tsx"],
           skillCatalog: [],
           userPrompt: "check react",
+          previousThinkingLevel: "medium",
         },
       },
     ]);
@@ -463,6 +497,7 @@ describe("audit extension", () => {
           targetPaths: ["src/app.tsx"],
           skillCatalog: [],
           userPrompt: "check react",
+          previousThinkingLevel: "medium",
         },
       },
     ]);
@@ -497,6 +532,7 @@ describe("audit extension", () => {
           targetPaths: ["src/app.tsx"],
           skillCatalog: [],
           userPrompt: "check react",
+          previousThinkingLevel: "medium",
         },
       },
     ]);
@@ -540,6 +576,7 @@ describe("audit extension", () => {
           targetPaths: ["packages/extensions"],
           skillCatalog: [],
           userPrompt: "check architecture",
+          previousThinkingLevel: "medium",
         },
       },
     ]);
@@ -632,6 +669,7 @@ describe("audit extension", () => {
           targetPaths: ["packages/extensions"],
           skillCatalog: [],
           userPrompt: "check architecture",
+          previousThinkingLevel: "medium",
         },
       },
     ]);
@@ -672,6 +710,7 @@ describe("audit extension", () => {
           targetPaths: ["packages/extensions"],
           skillCatalog: [],
           userPrompt: "check architecture",
+          previousThinkingLevel: "medium",
         },
       },
     ]);

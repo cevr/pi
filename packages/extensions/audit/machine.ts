@@ -22,6 +22,10 @@ import {
 import type { TaskListItem } from "@cvr/pi-task-list";
 import type { BuiltinEffect, Reducer, TransitionResult } from "@cvr/pi-state-machine";
 
+export type AuditThinkingLevel = Extract<BuiltinEffect, { type: "setThinkingLevel" }>["level"];
+
+const DETECTION_THINKING_LEVEL: AuditThinkingLevel = "xhigh";
+
 export type { SkillCatalogEntry, DiffContext } from "@cvr/pi-diff-context";
 
 // ---------------------------------------------------------------------------
@@ -76,6 +80,7 @@ export type AuditState =
       targetPaths: string[];
       skillCatalog: SkillCatalogEntry[];
       userPrompt: string;
+      previousThinkingLevel: AuditThinkingLevel;
     }
   | {
       _tag: "AwaitingConcernApproval";
@@ -84,6 +89,7 @@ export type AuditState =
       targetPaths: string[];
       skillCatalog: SkillCatalogEntry[];
       userPrompt: string;
+      previousThinkingLevel: AuditThinkingLevel;
       concerns: AuditConcern[];
     }
   | {
@@ -126,6 +132,7 @@ export type AuditEvent =
       targetPaths: string[];
       skillCatalog: SkillCatalogEntry[];
       userPrompt: string;
+      previousThinkingLevel: AuditThinkingLevel;
     }
   | { _tag: "ConcernsProposed"; concerns: AuditConcern[] }
   | { _tag: "ConcernsApproved" }
@@ -159,6 +166,7 @@ export type AuditEvent =
       targetPaths?: string[];
       skillCatalog?: SkillCatalogEntry[];
       userPrompt?: string;
+      previousThinkingLevel?: AuditThinkingLevel;
       concernCursor?: GraphExecutionCursor;
       findings?: AuditFinding[];
       currentFinding?: number;
@@ -187,6 +195,7 @@ export interface PersistPayload {
   targetPaths?: string[];
   skillCatalog?: SkillCatalogEntry[];
   userPrompt?: string;
+  previousThinkingLevel?: AuditThinkingLevel;
   concernCursor?: GraphExecutionCursor;
   findings?: AuditFinding[];
   currentFinding?: number;
@@ -398,6 +407,7 @@ function persist(state: AuditState): AuditEffect {
           targetPaths: state.targetPaths,
           skillCatalog: state.skillCatalog,
           userPrompt: state.userPrompt,
+          previousThinkingLevel: state.previousThinkingLevel,
         };
       case "AwaitingConcernApproval":
         return {
@@ -408,6 +418,7 @@ function persist(state: AuditState): AuditEffect {
           targetPaths: state.targetPaths,
           skillCatalog: state.skillCatalog,
           userPrompt: state.userPrompt,
+          previousThinkingLevel: state.previousThinkingLevel,
         };
       case "Auditing":
         return {
@@ -504,6 +515,14 @@ function visibleMessage(content: string, customType = "audit-progress"): Executi
 
 function statusEffect(text?: string): BuiltinEffect {
   return { type: "setStatus", key: "audit", text };
+}
+
+function thinkingEffect(level: AuditThinkingLevel): BuiltinEffect {
+  return { type: "setThinkingLevel", level };
+}
+
+function restoreThinkingEffect(state: Extract<AuditState, { _tag: "Detecting" | "AwaitingConcernApproval" }>): BuiltinEffect {
+  return thinkingEffect(state.previousThinkingLevel);
 }
 
 function statusEffectForState(state: AuditState): BuiltinEffect {
@@ -675,6 +694,7 @@ function transitionToAuditing(
   state: Extract<AuditState, { _tag: "Detecting" | "AwaitingConcernApproval" }>,
   concerns: readonly AuditConcern[],
 ): Result {
+  const thinkingEffects = state._tag === "Detecting" ? [restoreThinkingEffect(state)] : [];
   const concernExecution = startConcernExecution(
     createConcernTasks(concerns.slice(0, MAX_CONCERNS)),
   );
@@ -683,6 +703,7 @@ function transitionToAuditing(
     return {
       state: next,
       effects: [
+        ...thinkingEffects,
         {
           type: "notify",
           message: "audit: couldn't start concern execution",
@@ -707,6 +728,7 @@ function transitionToAuditing(
   return {
     state: next,
     effects: [
+      ...thinkingEffects,
       statusEffectForState(next),
       visibleMessage(buildAuditPhaseMessage(next)),
       runConcernBatch(next),
@@ -788,10 +810,12 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         targetPaths: event.targetPaths,
         skillCatalog: event.skillCatalog,
         userPrompt: event.userPrompt,
+        previousThinkingLevel: event.previousThinkingLevel,
       };
       return {
         state: next,
         effects: [
+          thinkingEffect(DETECTION_THINKING_LEVEL),
           statusEffectForState(next),
           visibleMessage(buildAuditPhaseMessage(next)),
           triggerMessage(buildDetectionPrompt(next)),
@@ -810,6 +834,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         return {
           state: next,
           effects: [
+            restoreThinkingEffect(state),
             { type: "notify", message: "no audit concerns detected", level: "info" },
             statusEffectForState(next),
             UI,
@@ -826,10 +851,11 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         targetPaths: state.targetPaths,
         skillCatalog: state.skillCatalog,
         userPrompt: state.userPrompt,
+        previousThinkingLevel: state.previousThinkingLevel,
       };
       return {
         state: next,
-        effects: [statusEffectForState(next), visibleMessage(buildAuditPhaseMessage(next)), UI, persist(next)],
+        effects: [restoreThinkingEffect(state), statusEffectForState(next), visibleMessage(buildAuditPhaseMessage(next)), UI, persist(next)],
       };
     }
 
@@ -864,10 +890,12 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         targetPaths: state.targetPaths,
         skillCatalog: state.skillCatalog,
         userPrompt: state.userPrompt,
+        previousThinkingLevel: state.previousThinkingLevel,
       };
       return {
         state: next,
         effects: [
+          thinkingEffect(DETECTION_THINKING_LEVEL),
           statusEffectForState(next),
           visibleMessage("Revising audit concerns with user edits."),
           { type: "sendUserMessage", content: event.feedback, deliverAs: "followUp" },
@@ -884,9 +912,11 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
 
       if (event.concerns.length === 0) {
         const next: AuditState = { _tag: "Idle" };
+        const thinkingEffects = state._tag === "Detecting" ? [restoreThinkingEffect(state)] : [];
         return {
           state: next,
           effects: [
+            ...thinkingEffects,
             { type: "notify", message: "no audit concerns detected", level: "info" },
             statusEffectForState(next),
             UI,
@@ -905,6 +935,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       return {
         state: next,
         effects: [
+          restoreThinkingEffect(state),
           {
             type: "notify",
             message: "audit: concern detection ended before audit_detected_concerns was called",
@@ -1229,9 +1260,14 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
     case "Cancel": {
       if (state._tag === "Idle") return { state };
       const next: AuditState = { _tag: "Idle" };
+      const thinkingEffects =
+        state._tag === "Detecting" || state._tag === "AwaitingConcernApproval"
+          ? [restoreThinkingEffect(state)]
+          : [];
       return {
         state: next,
         effects: [
+          ...thinkingEffects,
           { type: "notify", message: "audit cancelled", level: "info" },
           statusEffectForState(next),
           UI,
@@ -1242,7 +1278,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
 
     // ----- Hydrate -----
     case "Hydrate": {
-      if (event.mode === "Detecting" && event.scope) {
+      if (event.mode === "Detecting" && event.scope && event.previousThinkingLevel) {
         const next: AuditState = {
           _tag: "Detecting",
           scope: event.scope,
@@ -1250,11 +1286,20 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           targetPaths: event.targetPaths ?? [],
           skillCatalog: event.skillCatalog ?? [],
           userPrompt: event.userPrompt ?? "",
+          previousThinkingLevel: event.previousThinkingLevel,
         };
-        return { state: next, effects: [statusEffectForState(next), UI] };
+        return {
+          state: next,
+          effects: [thinkingEffect(DETECTION_THINKING_LEVEL), statusEffectForState(next), UI],
+        };
       }
 
-      if (event.mode === "AwaitingConcernApproval" && event.scope && (event.proposedConcerns?.length ?? 0) > 0) {
+      if (
+        event.mode === "AwaitingConcernApproval" &&
+        event.scope &&
+        event.previousThinkingLevel &&
+        (event.proposedConcerns?.length ?? 0) > 0
+      ) {
         const next: AuditState = {
           _tag: "AwaitingConcernApproval",
           scope: event.scope,
@@ -1263,8 +1308,12 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           targetPaths: event.targetPaths ?? [],
           skillCatalog: event.skillCatalog ?? [],
           userPrompt: event.userPrompt ?? "",
+          previousThinkingLevel: event.previousThinkingLevel,
         };
-        return { state: next, effects: [statusEffectForState(next), UI] };
+        return {
+          state: next,
+          effects: [restoreThinkingEffect(next), statusEffectForState(next), UI],
+        };
       }
 
       if (event.mode === "Auditing" && event.scope && (event.concerns?.length ?? 0) > 0) {
