@@ -149,6 +149,8 @@ function createMockExtensionApiHarness() {
         notify: mock(() => {}),
         setStatus: mock(() => {}),
         setWidget: mock(() => {}),
+        select: mock(async () => new Promise<undefined>(() => {})),
+        editor: mock(async () => null),
         theme,
       };
       return {
@@ -315,6 +317,7 @@ describe("audit extension", () => {
     auditExtension(harness.pi);
 
     expect(harness.tools.map((tool) => tool.name)).toEqual([
+      "audit_proposed_concerns",
       "audit_detected_concerns",
       "audit_concern_complete",
       "audit_synthesis_complete",
@@ -330,7 +333,124 @@ describe("audit extension", () => {
     ]);
   });
 
-  it("accepts approved concerns through the detection tool", async () => {
+  it("accepts proposed concerns and waits for UI approval", async () => {
+    const harness = createMockExtensionApiHarness();
+    harness.setSessionEntries([
+      {
+        type: "custom",
+        customType: "audit",
+        data: {
+          mode: "Detecting",
+          scope: "diff",
+          diffStat: " 2 files changed",
+          targetPaths: ["src/app.tsx"],
+          skillCatalog: [],
+          userPrompt: "check react",
+        },
+      },
+    ]);
+    auditExtension(harness.pi);
+
+    const ctx = harness.createContext();
+    harness.getListener("session_start")!.handler({}, ctx);
+
+    const proposeTool = harness.getTool("audit_proposed_concerns");
+    const result = await proposeTool.execute("tc-1", {
+      concerns: [
+        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
+      ],
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]?.text).toContain("Captured 1 proposed audit concern");
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: approve concerns");
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      "Proposed 1 audit concern:\n1. correctness — Bugs and soundness [skills: code-review]",
+      "info",
+    );
+    expect(ctx.ui.select).toHaveBeenCalledWith("Audit concerns ready — approve, reject, or edit?", [
+      "Approve concerns",
+      "Reject concerns",
+      "Edit concerns",
+    ]);
+  });
+
+  it("launches audits after UI approval", async () => {
+    const harness = createMockExtensionApiHarness();
+    harness.setSessionEntries([
+      {
+        type: "custom",
+        customType: "audit",
+        data: {
+          mode: "Detecting",
+          scope: "diff",
+          diffStat: " 2 files changed",
+          targetPaths: ["src/app.tsx"],
+          skillCatalog: [],
+          userPrompt: "check react",
+        },
+      },
+    ]);
+    auditExtension(harness.pi);
+
+    const ctx = harness.createContext();
+    ctx.ui.select = mock(async () => "Approve concerns");
+    harness.getListener("session_start")!.handler({}, ctx);
+
+    const proposeTool = harness.getTool("audit_proposed_concerns");
+    await proposeTool.execute("tc-1", {
+      concerns: [
+        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
+      ],
+    });
+    await Promise.resolve();
+
+    expect(harness.appendedEntries.some((entry) => entry.customType === "audit")).toBe(true);
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: concern 1/1");
+  });
+
+  it("feeds edited concern feedback back into detection", async () => {
+    const harness = createMockExtensionApiHarness();
+    harness.setSessionEntries([
+      {
+        type: "custom",
+        customType: "audit",
+        data: {
+          mode: "Detecting",
+          scope: "diff",
+          diffStat: " 2 files changed",
+          targetPaths: ["src/app.tsx"],
+          skillCatalog: [],
+          userPrompt: "check react",
+        },
+      },
+    ]);
+    auditExtension(harness.pi);
+
+    const ctx = harness.createContext();
+    ctx.ui.select = mock(async () => "Edit concerns");
+    ctx.ui.editor = mock(async () => "Merge correctness into architecture and add duplication.");
+    harness.getListener("session_start")!.handler({}, ctx);
+
+    const proposeTool = harness.getTool("audit_proposed_concerns");
+    await proposeTool.execute("tc-1", {
+      concerns: [
+        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
+      ],
+    });
+    await Promise.resolve();
+
+    expect(harness.sentUserMessages.at(-1)?.message).toBe(
+      "Merge correctness into architecture and add duplication.",
+    );
+    expect(ctx.ui.editor).toHaveBeenCalledWith(
+      "Edit audit concerns — describe what to change",
+      expect.stringContaining("skills: code-review"),
+    );
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: detecting concerns...");
+  });
+
+  it("still accepts approved concerns through the fallback detection tool", async () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
       {
@@ -362,6 +482,78 @@ describe("audit extension", () => {
     expect(result.content[0]?.text).toContain("Captured 1 approved audit concern");
     expect(harness.appendedEntries.some((entry) => entry.customType === "audit")).toBe(true);
     expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: concern 1/1");
+  });
+
+  it("does not allow the fallback detection tool after concerns are already awaiting approval", async () => {
+    const harness = createMockExtensionApiHarness();
+    harness.setSessionEntries([
+      {
+        type: "custom",
+        customType: "audit",
+        data: {
+          mode: "Detecting",
+          scope: "diff",
+          diffStat: " 2 files changed",
+          targetPaths: ["src/app.tsx"],
+          skillCatalog: [],
+          userPrompt: "check react",
+        },
+      },
+    ]);
+    auditExtension(harness.pi);
+
+    const ctx = harness.createContext();
+    harness.getListener("session_start")!.handler({}, ctx);
+
+    await harness.getTool("audit_proposed_concerns").execute("tc-1", {
+      concerns: [
+        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
+      ],
+    });
+
+    const result = await harness.getTool("audit_detected_concerns").execute("tc-2", {
+      concerns: [
+        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
+      ],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toBe("Audit detection is not currently active.");
+  });
+
+  it("restores persisted AwaitingConcernApproval state on session start", () => {
+    const harness = createMockExtensionApiHarness();
+    harness.setSessionEntries([
+      {
+        type: "custom",
+        customType: "audit",
+        data: {
+          mode: "AwaitingConcernApproval",
+          scope: "paths",
+          proposedConcerns: [
+            {
+              name: "architecture",
+              description: "Check extension architecture consistency",
+              skills: ["architecture"],
+            },
+          ],
+          targetPaths: ["packages/extensions"],
+          skillCatalog: [],
+          userPrompt: "check architecture",
+        },
+      },
+    ]);
+    auditExtension(harness.pi);
+
+    const ctx = harness.createContext();
+    harness.getListener("session_start")!.handler({}, ctx);
+
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: approve concerns");
+    expect(ctx.ui.select).toHaveBeenCalledWith("Audit concerns ready — approve, reject, or edit?", [
+      "Approve concerns",
+      "Reject concerns",
+      "Edit concerns",
+    ]);
   });
 
   it("restores persisted Auditing state on session start", () => {
@@ -425,6 +617,83 @@ describe("audit extension", () => {
         expect.stringContaining("session: /Users/cvr/.pi/agent/sessions/"),
       ]);
     });
+  });
+
+  it("keeps Detecting active after agent_end without the approval signal", async () => {
+    const harness = createMockExtensionApiHarness();
+    harness.setSessionEntries([
+      {
+        type: "custom",
+        customType: "audit",
+        data: {
+          mode: "Detecting",
+          scope: "paths",
+          diffStat: "",
+          targetPaths: ["packages/extensions"],
+          skillCatalog: [],
+          userPrompt: "check architecture",
+        },
+      },
+    ]);
+    auditExtension(harness.pi);
+
+    const ctx = harness.createContext();
+    harness.getListener("session_start")!.handler({}, ctx);
+    harness.getListener("agent_end")!.handler({ messages: [] }, ctx);
+
+    const detectionTool = harness.getTool("audit_detected_concerns");
+    const result = await detectionTool.execute("tc-1", {
+      concerns: [
+        {
+          name: "architecture",
+          description: "Check extension architecture consistency",
+          skills: ["architecture"],
+        },
+      ],
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+      "audit: concern detection ended before audit_detected_concerns was called",
+      "error",
+    );
+  });
+
+  it("does not cancel Detecting on interactive input while waiting for approval", async () => {
+    const harness = createMockExtensionApiHarness();
+    harness.setSessionEntries([
+      {
+        type: "custom",
+        customType: "audit",
+        data: {
+          mode: "Detecting",
+          scope: "paths",
+          diffStat: "",
+          targetPaths: ["packages/extensions"],
+          skillCatalog: [],
+          userPrompt: "check architecture",
+        },
+      },
+    ]);
+    auditExtension(harness.pi);
+
+    const ctx = harness.createContext();
+    harness.getListener("session_start")!.handler({}, ctx);
+    harness.getListener("input")!.handler({ source: "interactive", text: "approve" }, ctx);
+    await Promise.resolve();
+
+    const detectionTool = harness.getTool("audit_detected_concerns");
+    const result = await detectionTool.execute("tc-1", {
+      concerns: [
+        {
+          name: "architecture",
+          description: "Check extension architecture consistency",
+          skills: ["architecture"],
+        },
+      ],
+    });
+
+    expect(result.isError).toBeUndefined();
   });
 
   it("does not inject main-agent audit context while concern subagents are running", () => {

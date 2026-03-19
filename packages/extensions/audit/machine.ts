@@ -78,6 +78,15 @@ export type AuditState =
       userPrompt: string;
     }
   | {
+      _tag: "AwaitingConcernApproval";
+      scope: AuditScopeMode;
+      diffStat: string;
+      targetPaths: string[];
+      skillCatalog: SkillCatalogEntry[];
+      userPrompt: string;
+      concerns: AuditConcern[];
+    }
+  | {
       _tag: "Auditing";
       scope: AuditScopeMode;
       concerns: AuditConcernTask[];
@@ -118,6 +127,10 @@ export type AuditEvent =
       skillCatalog: SkillCatalogEntry[];
       userPrompt: string;
     }
+  | { _tag: "ConcernsProposed"; concerns: AuditConcern[] }
+  | { _tag: "ConcernsApproved" }
+  | { _tag: "ConcernsRejected" }
+  | { _tag: "ConcernsEdited"; feedback: string }
   | { _tag: "ConcernsDetected"; concerns: AuditConcern[] }
   | { _tag: "DetectionFailed" }
   | {
@@ -141,6 +154,7 @@ export type AuditEvent =
       mode?: AuditState["_tag"];
       scope?: AuditScopeMode;
       concerns?: AuditConcernTask[];
+      proposedConcerns?: AuditConcern[];
       diffStat?: string;
       targetPaths?: string[];
       skillCatalog?: SkillCatalogEntry[];
@@ -168,6 +182,7 @@ export interface PersistPayload {
   mode: AuditState["_tag"];
   scope?: AuditScopeMode;
   concerns?: AuditConcernTask[];
+  proposedConcerns?: AuditConcern[];
   diffStat?: string;
   targetPaths?: string[];
   skillCatalog?: SkillCatalogEntry[];
@@ -204,11 +219,11 @@ A concern is a review category (e.g., "correctness", "frontend-patterns", "type-
 
 Consider: file extensions, import patterns, directory structure, and the instructions above for explicit skill mentions.
 
-You must get explicit user approval before starting concern audits.
-- If anything is ambiguous, use the interview tool to ask the user to confirm or refine the concerns.
-- Even if the concerns seem obvious, show them to the user and get approval.
-- Once the user has approved the final concern list, call the audit_detected_concerns tool with the approved concerns.
-- Do not continue to auditing until that tool has been called.`;
+When you have the proposed concern list, call the audit_proposed_concerns tool with:
+- concerns: [{ name, description, skills }]
+
+Do not start concern audits yourself after proposing them.
+The extension will ask the user to approve, reject, or edit the concern list.`;
 }
 
 export function buildConcernAuditPrompt(
@@ -315,12 +330,22 @@ function summarizeAuditTargets(targetPaths: readonly string[]): string {
 export function buildAuditPhaseMessage(
   state: Extract<
     AuditState,
-    { _tag: "Detecting" | "Auditing" | "Synthesizing" | "Fixing" | "Failed" }
+    {
+      _tag:
+        | "Detecting"
+        | "AwaitingConcernApproval"
+        | "Auditing"
+        | "Synthesizing"
+        | "Fixing"
+        | "Failed";
+    }
   >,
 ): string {
   switch (state._tag) {
     case "Detecting":
       return `Audit started. Developing concerns for ${summarizeAuditTargets(state.targetPaths)}.${formatFocusBlock(state.userPrompt)}`;
+    case "AwaitingConcernApproval":
+      return `Concern proposal ready. Waiting for approval on ${state.concerns.length} concern${state.concerns.length === 1 ? "" : "s"}.${formatFocusBlock(state.userPrompt)}`;
     case "Auditing":
       return `Confirmed ${state.concerns.length} audit concern${state.concerns.length === 1 ? "" : "s"}. Launching concern audits.${formatFocusBlock(state.userPrompt)}\n\n${formatConcernList(state.concerns)}`;
     case "Synthesizing":
@@ -374,6 +399,16 @@ function persist(state: AuditState): AuditEffect {
           skillCatalog: state.skillCatalog,
           userPrompt: state.userPrompt,
         };
+      case "AwaitingConcernApproval":
+        return {
+          mode: "AwaitingConcernApproval",
+          scope: state.scope,
+          proposedConcerns: state.concerns,
+          diffStat: state.diffStat,
+          targetPaths: state.targetPaths,
+          skillCatalog: state.skillCatalog,
+          userPrompt: state.userPrompt,
+        };
       case "Auditing":
         return {
           mode: "Auditing",
@@ -417,6 +452,8 @@ export function getAuditStatusText(state: AuditState): string | undefined {
       return undefined;
     case "Detecting":
       return "audit: detecting concerns...";
+    case "AwaitingConcernApproval":
+      return "audit: approve concerns";
     case "Auditing": {
       const activeConcerns = getActiveAuditConcerns(state);
       if (activeConcerns.length <= 1) {
@@ -635,7 +672,7 @@ export function getCurrentAuditConcern(
 }
 
 function transitionToAuditing(
-  state: Extract<AuditState, { _tag: "Detecting" }>,
+  state: Extract<AuditState, { _tag: "Detecting" | "AwaitingConcernApproval" }>,
   concerns: readonly AuditConcern[],
 ): Result {
   const concernExecution = startConcernExecution(
@@ -764,9 +801,86 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       };
     }
 
+    // ----- ConcernsProposed -----
+    case "ConcernsProposed": {
+      if (state._tag !== "Detecting") return { state };
+
+      if (event.concerns.length === 0) {
+        const next: AuditState = { _tag: "Idle" };
+        return {
+          state: next,
+          effects: [
+            { type: "notify", message: "no audit concerns detected", level: "info" },
+            statusEffectForState(next),
+            UI,
+            persist(next),
+          ],
+        };
+      }
+
+      const next: AuditState = {
+        _tag: "AwaitingConcernApproval",
+        scope: state.scope,
+        concerns: event.concerns.slice(0, MAX_CONCERNS),
+        diffStat: state.diffStat,
+        targetPaths: state.targetPaths,
+        skillCatalog: state.skillCatalog,
+        userPrompt: state.userPrompt,
+      };
+      return {
+        state: next,
+        effects: [statusEffectForState(next), visibleMessage(buildAuditPhaseMessage(next)), UI, persist(next)],
+      };
+    }
+
+    // ----- ConcernsApproved -----
+    case "ConcernsApproved": {
+      if (state._tag !== "AwaitingConcernApproval") return { state };
+      return transitionToAuditing(state, state.concerns);
+    }
+
+    // ----- ConcernsRejected -----
+    case "ConcernsRejected": {
+      if (state._tag !== "AwaitingConcernApproval") return { state };
+      const next: AuditState = { _tag: "Idle" };
+      return {
+        state: next,
+        effects: [
+          { type: "notify", message: "audit cancelled before concern approval", level: "info" },
+          statusEffectForState(next),
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
+    // ----- ConcernsEdited -----
+    case "ConcernsEdited": {
+      if (state._tag !== "AwaitingConcernApproval") return { state };
+      const next: AuditState = {
+        _tag: "Detecting",
+        scope: state.scope,
+        diffStat: state.diffStat,
+        targetPaths: state.targetPaths,
+        skillCatalog: state.skillCatalog,
+        userPrompt: state.userPrompt,
+      };
+      return {
+        state: next,
+        effects: [
+          statusEffectForState(next),
+          visibleMessage("Revising audit concerns with user edits."),
+          { type: "sendUserMessage", content: event.feedback, deliverAs: "followUp" },
+          triggerMessage(buildDetectionPrompt(next)),
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
     // ----- ConcernsDetected -----
     case "ConcernsDetected": {
-      if (state._tag !== "Detecting") return { state };
+      if (state._tag !== "Detecting" && state._tag !== "AwaitingConcernApproval") return { state };
 
       if (event.concerns.length === 0) {
         const next: AuditState = { _tag: "Idle" };
@@ -1132,6 +1246,19 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         const next: AuditState = {
           _tag: "Detecting",
           scope: event.scope,
+          diffStat: event.diffStat ?? "",
+          targetPaths: event.targetPaths ?? [],
+          skillCatalog: event.skillCatalog ?? [],
+          userPrompt: event.userPrompt ?? "",
+        };
+        return { state: next, effects: [statusEffectForState(next), UI] };
+      }
+
+      if (event.mode === "AwaitingConcernApproval" && event.scope && (event.proposedConcerns?.length ?? 0) > 0) {
+        const next: AuditState = {
+          _tag: "AwaitingConcernApproval",
+          scope: event.scope,
+          concerns: event.proposedConcerns ?? [],
           diffStat: event.diffStat ?? "",
           targetPaths: event.targetPaths ?? [],
           skillCatalog: event.skillCatalog ?? [],

@@ -7,6 +7,7 @@ import { getDisplayItems } from "@cvr/pi-sub-agent-render";
 import type { AuditFinding } from "./machine";
 
 export const AUDIT_SIGNAL_TOOLS = {
+  proposeConcerns: "audit_proposed_concerns",
   detectConcerns: "audit_detected_concerns",
   concernComplete: "audit_concern_complete",
   synthesisComplete: "audit_synthesis_complete",

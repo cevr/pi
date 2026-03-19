@@ -77,6 +77,21 @@ function createConcernCursor(currentConcern = 1, total = CONCERNS.length) {
   };
 }
 
+function awaitingConcernApproval(
+  concerns = CONCERNS,
+  scope: "diff" | "paths" = "diff",
+): AuditState {
+  return {
+    _tag: "AwaitingConcernApproval",
+    scope,
+    concerns,
+    diffStat: scope === "diff" ? " 3 files changed" : "",
+    targetPaths: ["src/app.tsx", "src/lib.ts"],
+    skillCatalog: CATALOG,
+    userPrompt: "",
+  };
+}
+
 function auditing(
   concerns = createConcernTasks(),
   scope: "diff" | "paths" = "diff",
@@ -175,15 +190,42 @@ describe("auditReducer — Start", () => {
 });
 
 // ---------------------------------------------------------------------------
-// ConcernsDetected
+// Concern proposal / approval
 // ---------------------------------------------------------------------------
 
-describe("auditReducer — ConcernsDetected", () => {
-  it("Detecting + concerns → Auditing", () => {
+describe("auditReducer — ConcernsProposed", () => {
+  it("Detecting + concerns → AwaitingConcernApproval", () => {
     const r = auditReducer(detecting("check react"), {
-      _tag: "ConcernsDetected",
+      _tag: "ConcernsProposed",
       concerns: CONCERNS,
     });
+    expect(r.state._tag).toBe("AwaitingConcernApproval");
+    if (r.state._tag === "AwaitingConcernApproval") {
+      expect(r.state.concerns).toEqual(CONCERNS);
+      expect(r.state.userPrompt).toBe("check react");
+    }
+    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
+    expect(turns[0]?.request.content).toContain("Concern proposal ready. Waiting for approval");
+    expect(getPersistPayload(r.effects)).toMatchObject({
+      mode: "AwaitingConcernApproval",
+      proposedConcerns: CONCERNS,
+      userPrompt: "check react",
+    });
+  });
+
+  it("Detecting + empty concerns → Idle with notify", () => {
+    const r = auditReducer(detecting(), { _tag: "ConcernsProposed", concerns: [] });
+    expect(r.state._tag).toBe("Idle");
+    const notify = getEffect<BuiltinEffect>(r.effects, "notify");
+    expect(notify).toMatchObject({ message: expect.stringContaining("no audit concerns") });
+  });
+});
+
+describe("auditReducer — concern approval", () => {
+  it("AwaitingConcernApproval + ConcernsApproved → Auditing", () => {
+    const r = auditReducer(awaitingConcernApproval(CONCERNS), { _tag: "ConcernsApproved" });
     expect(r.state._tag).toBe("Auditing");
     if (r.state._tag === "Auditing") {
       expect(r.state.concerns.map((concern) => concern.subject)).toEqual([
@@ -191,7 +233,6 @@ describe("auditReducer — ConcernsDetected", () => {
         "frontend",
       ]);
       expect(r.state.concerns.every((concern) => concern.status === "in_progress")).toBe(true);
-      expect(r.state.userPrompt).toBe("check react");
       expect(r.state.cursor).toEqual({
         phase: "running",
         frontierTaskIds: ["1", "2"],
@@ -204,29 +245,52 @@ describe("auditReducer — ConcernsDetected", () => {
       "runConcernBatch",
     );
     expect(batch?.state._tag).toBe("Auditing");
-    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
-    expect(turns).toHaveLength(1);
-    expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
-    expect(turns[0]?.request.content).toContain("Confirmed 2 audit concerns");
-    expect(turns[0]?.request.content).toContain("Focus: check react");
-    expect(hasEffect(r.effects, "updateUI")).toBe(true);
-    expect(getPersistPayload(r.effects)).toMatchObject({
-      mode: "Auditing",
-      userPrompt: "check react",
-      concernCursor: {
-        phase: "running",
-        frontierTaskIds: ["1", "2"],
-        activeTaskIds: ["1", "2"],
-        total: 2,
-      },
+  });
+
+  it("AwaitingConcernApproval + ConcernsRejected → Idle", () => {
+    const r = auditReducer(awaitingConcernApproval(), { _tag: "ConcernsRejected" });
+    expect(r.state._tag).toBe("Idle");
+    const notify = getEffect<BuiltinEffect>(r.effects, "notify");
+    expect(notify).toMatchObject({
+      message: "audit cancelled before concern approval",
+      level: "info",
     });
   });
 
-  it("Detecting + empty concerns → Idle with notify", () => {
-    const r = auditReducer(detecting(), { _tag: "ConcernsDetected", concerns: [] });
-    expect(r.state._tag).toBe("Idle");
-    const notify = getEffect<BuiltinEffect>(r.effects, "notify");
-    expect(notify).toMatchObject({ message: expect.stringContaining("no audit concerns") });
+  it("AwaitingConcernApproval + ConcernsEdited → Detecting with follow-up", () => {
+    const r = auditReducer(awaitingConcernApproval(), {
+      _tag: "ConcernsEdited",
+      feedback: "merge correctness into architecture",
+    });
+    expect(r.state._tag).toBe("Detecting");
+    expect(getEffect<BuiltinEffect>(r.effects, "sendUserMessage")).toMatchObject({
+      content: "merge correctness into architecture",
+      deliverAs: "followUp",
+    });
+    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
+    expect(turns.at(-1)?.request).toMatchObject({ customType: "audit-trigger", triggerTurn: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ConcernsDetected
+// ---------------------------------------------------------------------------
+
+describe("auditReducer — ConcernsDetected", () => {
+  it("Detecting + concerns → Auditing", () => {
+    const r = auditReducer(detecting("check react"), {
+      _tag: "ConcernsDetected",
+      concerns: CONCERNS,
+    });
+    expect(r.state._tag).toBe("Auditing");
+  });
+
+  it("AwaitingConcernApproval + concerns → Auditing", () => {
+    const r = auditReducer(awaitingConcernApproval(CONCERNS), {
+      _tag: "ConcernsDetected",
+      concerns: CONCERNS,
+    });
+    expect(r.state._tag).toBe("Auditing");
   });
 
   it("caps concerns at MAX_CONCERNS", () => {
@@ -242,7 +306,7 @@ describe("auditReducer — ConcernsDetected", () => {
     }
   });
 
-  it("non-Detecting + ConcernsDetected is no-op", () => {
+  it("non-detection states + ConcernsDetected is no-op", () => {
     const state = auditing();
     const r = auditReducer(state, { _tag: "ConcernsDetected", concerns: CONCERNS });
     expect(r.state).toBe(state);

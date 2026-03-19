@@ -27,7 +27,7 @@ import { GraphRuntime } from "@cvr/pi-graph-runtime";
 import { ProcessRunner } from "@cvr/pi-process-runner";
 import { PiSpawnService } from "@cvr/pi-spawn";
 import { register, type MachineConfig } from "@cvr/pi-state-machine";
-import type { Command } from "@cvr/pi-state-machine";
+import type { Command, StateObserver } from "@cvr/pi-state-machine";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import {
   resolveBaseBranch,
@@ -76,6 +76,23 @@ function normalizeHydratedSkillCatalog(
   return (entries ?? []).flatMap((entry) => {
     if (typeof entry.name !== "string" || typeof entry.description !== "string") return [];
     return [{ name: entry.name, description: entry.description }];
+  });
+}
+
+function normalizeHydratedProposedConcerns(
+  items: readonly Record<string, unknown>[] | undefined,
+): { name: string; description: string; skills: string[] }[] {
+  return (items ?? []).flatMap((item) => {
+    if (typeof item.name !== "string" || typeof item.description !== "string") return [];
+    return [
+      {
+        name: item.name,
+        description: item.description,
+        skills: Array.isArray(item.skills)
+          ? item.skills.filter((value): value is string => typeof value === "string")
+          : [],
+      },
+    ];
   });
 }
 
@@ -215,6 +232,17 @@ function renderConcernLines(concerns: readonly AuditConcernTask[]): string[] {
   });
 }
 
+function formatConcernApprovalPreview(concerns: readonly { name: string; description: string; skills: string[] }[]): string {
+  const lines = [
+    `Proposed ${concerns.length} audit concern${concerns.length === 1 ? "" : "s"}:`,
+    ...concerns.map(
+      (concern, index) =>
+        `${index + 1}. ${concern.name} — ${concern.description} [skills: ${concern.skills.join(", ") || "none"}]`,
+    ),
+  ];
+  return lines.join("\n");
+}
+
 function buildConcernBatchError(message: string, sessionPath: string): string {
   return `${message}\n\nConcern transcript: ${sessionPath}`;
 }
@@ -336,7 +364,19 @@ function formatUI(state: AuditState, ctx: ExtensionContext): void {
     if (state.userPrompt.trim().length > 0) {
       lines.push(`focus: ${state.userPrompt.trim()}`);
     }
-    lines.push("status: developing concerns + awaiting approval");
+    lines.push("status: developing concerns");
+    ctx.ui.setWidget("audit-progress", lines);
+  } else if (state._tag === "AwaitingConcernApproval") {
+    const lines = [
+      `scope: ${state.targetPaths[0] ?? "(none)"}${state.targetPaths.length > 1 ? ` +${state.targetPaths.length - 1} more` : ""}`,
+    ];
+    if (state.userPrompt.trim().length > 0) {
+      lines.push(`focus: ${state.userPrompt.trim()}`);
+      lines.push("");
+    }
+    lines.push(...state.concerns.map((concern, index) => `${index + 1}. ${concern.name} — ${concern.description}`));
+    lines.push("");
+    lines.push("status: awaiting approval");
     ctx.ui.setWidget("audit-progress", lines);
   } else if (state._tag === "Auditing") {
     const focusLines =
@@ -417,7 +457,10 @@ export default function auditExtension(pi: ExtensionAPI): void {
             ctx.ui.notify("No audit in progress", "info");
             break;
           case "Detecting":
-            ctx.ui.notify("Audit: detecting concerns and awaiting approval...", "info");
+            ctx.ui.notify("Audit: detecting concerns...", "info");
+            break;
+          case "AwaitingConcernApproval":
+            ctx.ui.notify("Audit: waiting for concern approval...", "info");
             break;
           case "Auditing":
             ctx.ui.notify(`Audit: running ${state.concerns.length} concern audits`, "info");
@@ -449,25 +492,63 @@ export default function auditExtension(pi: ExtensionAPI): void {
     isError: true,
   });
 
+  const concernSchema = Type.Object({
+    name: Type.String({ minLength: 1 }),
+    description: Type.String({ minLength: 1 }),
+    skills: Type.Array(Type.String({ minLength: 1 })),
+  });
+
+  pi.registerTool({
+    name: AUDIT_SIGNAL_TOOLS.proposeConcerns,
+    label: "Audit Proposed Concerns",
+    description: "Submit the proposed audit concerns so the extension can ask the user to approve, reject, or edit them.",
+    promptSnippet: "Call this tool once you have the proposed concern list.",
+    promptGuidelines: [
+      "Use this only while the audit is in Detecting mode.",
+      "Call this as soon as you have the proposed concern list.",
+      "Do not start concern audits yourself after calling this tool.",
+    ],
+    parameters: Type.Object({
+      concerns: Type.Array(concernSchema, { minItems: 1 }),
+    }),
+    async execute(_toolCallId, params) {
+      const state = machine.getState();
+      if (state._tag !== "Detecting") {
+        return toolError("Audit detection is not currently active.");
+      }
+
+      const concerns = params.concerns.filter(
+        (concern) => concern.name.trim().length > 0 && concern.description.trim().length > 0,
+      );
+      if (concerns.length === 0) {
+        return toolError("At least one valid proposed concern is required.");
+      }
+
+      machine.send({ _tag: "ConcernsProposed", concerns });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Captured ${concerns.length} proposed audit concern${concerns.length === 1 ? "" : "s"}. Waiting for user approval.`,
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
   pi.registerTool({
     name: AUDIT_SIGNAL_TOOLS.detectConcerns,
     label: "Audit Detected Concerns",
     description: "Finalize the approved audit concerns detected for the current audit run.",
-    promptSnippet: "Call this tool once the user has explicitly approved the final audit concerns.",
+    promptSnippet: "Fallback: call this only if the final approved concerns must be submitted directly.",
     promptGuidelines: [
-      "Use this only while the audit is in Detecting mode.",
-      "Always get explicit user approval before calling this tool.",
-      "Prefer using the interview tool to present the concerns and gather approval or edits.",
+      "Prefer audit_proposed_concerns for the normal flow.",
+      "Only use this while the audit is in Detecting mode.",
+      "Use this only when the final approved concern list is already known.",
     ],
     parameters: Type.Object({
-      concerns: Type.Array(
-        Type.Object({
-          name: Type.String({ minLength: 1 }),
-          description: Type.String({ minLength: 1 }),
-          skills: Type.Array(Type.String({ minLength: 1 })),
-        }),
-        { minItems: 1 },
-      ),
+      concerns: Type.Array(concernSchema, { minItems: 1 }),
     }),
     async execute(_toolCallId, params) {
       const state = machine.getState();
@@ -649,6 +730,47 @@ export default function auditExtension(pi: ExtensionAPI): void {
     },
   });
 
+  const awaitingConcernApprovalObserver: StateObserver<AuditState, AuditEvent> = {
+    match: (state) => state._tag === "AwaitingConcernApproval",
+    handler: async (state, sendIfCurrent, ctx) => {
+      if (state._tag !== "AwaitingConcernApproval" || !ctx.hasUI) return;
+
+      ctx.ui.notify(formatConcernApprovalPreview(state.concerns), "info");
+
+      const choice = await ctx.ui.select("Audit concerns ready — approve, reject, or edit?", [
+        "Approve concerns",
+        "Reject concerns",
+        "Edit concerns",
+      ]);
+
+      if (choice === "Approve concerns") {
+        sendIfCurrent({ _tag: "ConcernsApproved" });
+        return;
+      }
+
+      if (choice === "Edit concerns") {
+        const seed = state.concerns
+          .map(
+            (concern, index) =>
+              `${index + 1}. ${concern.name} — ${concern.description}\n   skills: ${concern.skills.join(", ") || "none"}`,
+          )
+          .join("\n");
+        const edited = await ctx.ui.editor(
+          "Edit audit concerns — describe what to change",
+          `Current concerns:\n${seed}\n\nReply with concrete edits, merges, drops, or additions:\n`,
+        );
+        if (!edited?.trim()) {
+          sendIfCurrent({ _tag: "ConcernsRejected" });
+          return;
+        }
+        sendIfCurrent({ _tag: "ConcernsEdited", feedback: edited.trim() });
+        return;
+      }
+
+      sendIfCurrent({ _tag: "ConcernsRejected" });
+    },
+  };
+
   // ----- Machine config -----
   const machineConfig: MachineConfig<AuditState, AuditEvent, AuditEffect> = {
     id: "audit",
@@ -667,8 +789,9 @@ export default function auditExtension(pi: ExtensionAPI): void {
           let content: string;
           switch (state._tag) {
             case "Detecting":
-              content = `[AUDIT MODE — DETECTION]\n\nYou are detecting which audit concerns apply to this branch's changes. Always get explicit user approval, preferably via the interview tool, before calling ${AUDIT_SIGNAL_TOOLS.detectConcerns}.${principlesBlock}`;
+              content = `[AUDIT MODE — DETECTION]\n\nYou are detecting which audit concerns apply to this branch's changes. When you have the proposed concern list, call ${AUDIT_SIGNAL_TOOLS.proposeConcerns} with the ordered concerns. Do not start concern audits yourself after proposing them.${principlesBlock}`;
               break;
+            case "AwaitingConcernApproval":
             case "Auditing":
             case "Failed":
               return;
@@ -713,6 +836,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
           if (!ctx.hasUI || state._tag === "Idle" || state._tag === "Failed") return null;
 
           const signalHandled = [
+            AUDIT_SIGNAL_TOOLS.proposeConcerns,
             AUDIT_SIGNAL_TOOLS.detectConcerns,
             AUDIT_SIGNAL_TOOLS.synthesisComplete,
             AUDIT_SIGNAL_TOOLS.findingResult,
@@ -722,7 +846,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
           if (signalHandled) return null;
 
           if (state._tag === "Detecting") {
-            return { _tag: "DetectionFailed" };
+            return null;
           }
 
           if (state._tag === "Auditing") {
@@ -757,6 +881,11 @@ export default function auditExtension(pi: ExtensionAPI): void {
               ? (data.concerns as Record<string, unknown>[])
               : undefined,
           );
+          const proposedConcerns = normalizeHydratedProposedConcerns(
+            Array.isArray(data?.proposedConcerns)
+              ? (data.proposedConcerns as Record<string, unknown>[])
+              : undefined,
+          );
           const findings = normalizeHydratedFindings(
             Array.isArray(data?.findings)
               ? (data.findings as Record<string, unknown>[])
@@ -787,6 +916,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
             mode,
             scope,
             concerns,
+            proposedConcerns,
             diffStat: data?.diffStat ?? "",
             targetPaths: Array.isArray(data?.targetPaths)
               ? data.targetPaths.filter((value): value is string => typeof value === "string")
@@ -811,7 +941,13 @@ export default function auditExtension(pi: ExtensionAPI): void {
       input: {
         mode: "reply" as const,
         handle: (state, event) => {
-          if (state._tag !== "Idle" && state._tag !== "Failed" && event.source === "interactive") {
+          if (
+            state._tag !== "Idle" &&
+            state._tag !== "Failed" &&
+            state._tag !== "Detecting" &&
+            state._tag !== "AwaitingConcernApproval" &&
+            event.source === "interactive"
+          ) {
             queueMicrotask(() => machine.send({ _tag: "Cancel" }));
           }
           return { action: "continue" as const };
@@ -820,6 +956,7 @@ export default function auditExtension(pi: ExtensionAPI): void {
     },
 
     commands,
+    observers: [awaitingConcernApprovalObserver],
   };
 
   const machine = register<AuditState, AuditEvent, AuditEffect>(
