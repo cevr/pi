@@ -5,6 +5,7 @@ import type { BuiltinEffect } from "@cvr/pi-state-machine";
 import {
   AUTO_SIGNAL_TOOLS,
   EXECUTION_SIGNAL_TOOLS,
+  SPEC_COUNSEL_TOOLS,
   SPEC_SIGNAL_TOOLS,
   SPEC_TOOLS,
   TASK_LIST_SIGNAL_TOOLS,
@@ -31,6 +32,16 @@ function specReview(
 ): Extract<ModesState, { _tag: "SpecReview" }> {
   return {
     _tag: "SpecReview",
+    savedTools,
+    spec: { specFilePath: "/tmp/spec.md", specText: "# Spec" },
+  };
+}
+
+function specCounseling(
+  savedTools = ["read", "bash", "edit"],
+): Extract<ModesState, { _tag: "SpecCounseling" }> {
+  return {
+    _tag: "SpecCounseling",
     savedTools,
     spec: { specFilePath: "/tmp/spec.md", specText: "# Spec" },
   };
@@ -117,19 +128,22 @@ describe("modesReducer", () => {
     });
   });
 
-  it("captures a spec and waits for approval before creating tasks", () => {
+  it("captures a spec and enters SpecCounseling before user review", () => {
     const result = modesReducer(specMode(), {
       _tag: "SpecReady",
       spec: { specFilePath: "/tmp/spec.md", specText: "# Spec" },
     });
-    expect(result.state._tag).toBe("SpecReview");
-    if (result.state._tag === "SpecReview") {
+    expect(result.state._tag).toBe("SpecCounseling");
+    if (result.state._tag === "SpecCounseling") {
       expect(result.state.spec.specFilePath).toBe("/tmp/spec.md");
       expect(result.state.pending).toBeUndefined();
     }
+    expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
+      tools: [...SPEC_COUNSEL_TOOLS],
+    });
     expect(hasEffect(result.effects, "writeSpecFile")).toBe(true);
-    expect(hasEffect(result.effects, "sendMessage")).toBe(true);
-    expect(hasEffect(result.effects, "executeTurn")).toBe(false);
+    expect(hasEffect(result.effects, "executeTurn")).toBe(true);
+    expect(hasEffect(result.effects, "sendMessage")).toBe(false);
   });
 
   it("approves a spec and only then requests a task list in AUTO mode", () => {
@@ -326,5 +340,82 @@ describe("modesReducer", () => {
     expect(getEffect<BuiltinEffect>(legacy.effects, "setThinkingLevel")).toMatchObject({
       level: "xhigh",
     });
+  });
+
+  it("counsel pass on spec transitions SpecCounseling → SpecReview", () => {
+    const result = modesReducer(specCounseling(), {
+      _tag: "CounselResult",
+      status: "pass",
+    });
+    expect(result.state._tag).toBe("SpecReview");
+    if (result.state._tag === "SpecReview") {
+      expect(result.state.spec.specText).toBe("# Spec");
+    }
+    expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
+      tools: [...SPEC_TOOLS, ...SPEC_SIGNAL_TOOLS],
+    });
+    expect(hasEffect(result.effects, "sendMessage")).toBe(true);
+    expect(hasEffect(result.effects, "persistState")).toBe(true);
+  });
+
+  it("counsel fail on spec returns SpecCounseling → Spec for revision", () => {
+    const result = modesReducer(specCounseling(), {
+      _tag: "CounselResult",
+      status: "fail",
+    });
+    expect(result.state._tag).toBe("Spec");
+    expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
+      tools: [...SPEC_TOOLS, ...SPEC_SIGNAL_TOOLS],
+    });
+    expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
+      level: "xhigh",
+    });
+    expect(hasEffect(result.effects, "executeTurn")).toBe(true);
+    expect(hasEffect(result.effects, "persistState")).toBe(true);
+  });
+
+  it("toggle in SpecCounseling returns to Spec", () => {
+    const result = modesReducer(specCounseling(), {
+      _tag: "Toggle",
+      currentTools: [],
+    });
+    expect(result.state._tag).toBe("Spec");
+    expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
+      tools: [...SPEC_TOOLS, ...SPEC_SIGNAL_TOOLS],
+    });
+    expect(hasEffect(result.effects, "persistState")).toBe(true);
+  });
+
+  it("hydrates SpecCounseling with counsel tools and re-triggers counsel", () => {
+    const result = modesReducer(auto(), {
+      _tag: "Hydrate",
+      mode: "SpecCounseling",
+      todoItems: [],
+      planFilePath: null,
+      savedTools: ["read", "bash"],
+      pending: undefined,
+      spec: { specFilePath: "/tmp/spec.md", specText: "# Spec" },
+      flagSpec: false,
+      flagPlan: false,
+      currentTools: ["read", "bash"],
+    });
+    expect(result.state._tag).toBe("SpecCounseling");
+    expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
+      tools: [...SPEC_COUNSEL_TOOLS],
+    });
+    expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
+      level: "xhigh",
+    });
+    expect(hasEffect(result.effects, "executeTurn")).toBe(true);
+  });
+
+  it("CounselResult is ignored in SpecCounseling-unrelated states", () => {
+    const fromAuto = modesReducer(auto(), { _tag: "CounselResult", status: "pass" });
+    expect(fromAuto.state._tag).toBe("Auto");
+    expect(fromAuto.effects).toBeUndefined();
+
+    const fromSpec = modesReducer(specMode(), { _tag: "CounselResult", status: "pass" });
+    expect(fromSpec.state._tag).toBe("Spec");
+    expect(fromSpec.effects).toBeUndefined();
   });
 });

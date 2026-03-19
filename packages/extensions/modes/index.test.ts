@@ -170,7 +170,7 @@ describe("modes extension", () => {
     expect(harness.getThinkingLevel()).toBe("xhigh");
   });
 
-  it("captures a spec when SPEC mode is active", async () => {
+  it("captures a spec and enters SpecCounseling when SPEC mode is active", async () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
     await harness.shortcuts[0]!.options.handler(harness.createContext());
@@ -180,7 +180,7 @@ describe("modes extension", () => {
 
     expect(result.isError).toBeUndefined();
     expect(
-      harness.sentMessages.some((entry) => entry.message.customType === "modes-review:spec"),
+      harness.sentMessages.some((entry) => entry.message.customType === "modes-counsel:spec"),
     ).toBe(true);
   });
 

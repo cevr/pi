@@ -33,6 +33,7 @@ import { Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import {
   AUTO_SIGNAL_TOOLS,
   EXECUTION_SIGNAL_TOOLS,
+  SPEC_COUNSEL_TOOLS,
   SPEC_SIGNAL_TOOLS,
   SPEC_TOOLS,
   TASK_LIST_SIGNAL_TOOLS,
@@ -305,7 +306,7 @@ async function loadTaskListSnapshot(
 }
 
 function getEditorMode(state: ModesState): EditorMode {
-  return state._tag === "Spec" ? "spec" : "auto";
+  return state._tag === "Spec" || state._tag === "SpecCounseling" ? "spec" : "auto";
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +329,10 @@ function formatUI(state: ModesState, pi: ExtensionAPI, ctx: ExtensionContext): v
     }
     case "Spec":
       ctx.ui.setStatus("modes", ctx.ui.theme.fg("toolTitle", "⏸ spec"));
+      ctx.ui.setWidget("modes-todos", undefined);
+      break;
+    case "SpecCounseling":
+      ctx.ui.setStatus("modes", ctx.ui.theme.fg("toolTitle", "⏸ spec counsel"));
       ctx.ui.setWidget("modes-todos", undefined);
       break;
     case "SpecReview":
@@ -437,7 +442,7 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
         description: "Show current executable task list",
         handler: (state, _args, ctx): void => {
           const todoItems =
-            state._tag === "Spec" || state._tag === "SpecReview"
+            state._tag === "Spec" || state._tag === "SpecCounseling" || state._tag === "SpecReview"
               ? state.pending?.todoItems
               : state._tag === "Executing"
                 ? state.todoItems
@@ -456,7 +461,9 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
           const planFilePath =
             state._tag === "Executing"
               ? state.planFilePath
-              : state._tag === "Spec" || state._tag === "SpecReview"
+              : state._tag === "Spec" ||
+                  state._tag === "SpecCounseling" ||
+                  state._tag === "SpecReview"
                 ? (state.pending?.planFilePath ?? null)
                 : null;
           const pathInfo = planFilePath ? `\nTask list file: ${planFilePath}` : "";
@@ -473,7 +480,7 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
         "Signal that the current work needs deeper specification before execution and switch into SPEC mode.",
       promptSnippet: "Signal when AUTO mode should switch into SPEC mode for deeper planning.",
       promptGuidelines: [
-        "In AUTO mode, call this tool when the request still needs design, scoping, discovery, or a PRD before it can become an executable task list.",
+        "In AUTO mode, call this tool when the request still needs design, scoping, discovery, or a PRD before it can become an executable task list. Call it early — before writing speculative prose.",
       ],
       parameters: Type.Object({
         prompt: Type.String({
@@ -523,9 +530,10 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
       name: SPEC_SIGNAL_TOOLS[0],
       label: "Spec Ready",
       description: "Signal that spec drafting is complete and the spec should be persisted.",
-      promptSnippet: "Signal when the spec is ready to save.",
+      promptSnippet:
+        "In SPEC mode, call this tool ONLY AFTER your spec/PRD is fully written and complete.",
       promptGuidelines: [
-        "In SPEC mode, call this tool when your spec/PRD is ready instead of generating task lists.",
+        "In SPEC mode, call this tool ONLY AFTER your spec/PRD is fully written and complete. The specText parameter must contain the final, complete spec. Do not call this tool before you have finished drafting.",
       ],
       parameters: Type.Object({
         specText: Type.String({ description: "The full spec or PRD markdown/text." }),
@@ -565,9 +573,10 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
       label: "Task List Ready",
       description:
         "Signal that an executable task list is ready so modes can persist it and begin execution.",
-      promptSnippet: "Signal when the executable task list is ready.",
+      promptSnippet:
+        "In AUTO mode, call this tool ONLY AFTER you have fully produced the executable task list.",
       promptGuidelines: [
-        "In AUTO mode, call this tool when you have produced an executable task list.",
+        "In AUTO mode, call this tool ONLY AFTER you have fully produced the executable task list. The steps array must contain all steps. Do not call this before the task list is complete.",
       ],
       parameters: Type.Object({
         planText: Type.String({ description: "The full task list markdown/text." }),
@@ -628,9 +637,10 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
       name: EXECUTION_SIGNAL_TOOLS[0],
       label: "Step Done",
       description: "Signal that the current execution step is complete and ready for gating.",
-      promptSnippet: "Signal completed plan steps during execution.",
+      promptSnippet:
+        "During execution, call this tool ONLY AFTER you have fully completed a step's implementation.",
       promptGuidelines: [
-        "During execution, call this tool when a plan step is complete instead of writing [DONE:n] tags.",
+        "During execution, call this tool ONLY AFTER you have fully completed the step's implementation. All code changes for the step must be done before calling this. Do not call this preemptively.",
       ],
       parameters: Type.Object({
         step: Type.Number({ minimum: 1, description: "Completed step number." }),
@@ -733,7 +743,9 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
       }),
       async execute(_toolCallId, params) {
         const state = machine.getState();
-        if (state._tag !== "Executing" || state.phase !== "counseling") {
+        const inExecCounseling = state._tag === "Executing" && state.phase === "counseling";
+        const inSpecCounseling = state._tag === "SpecCounseling";
+        if (!inExecCounseling && !inSpecCounseling) {
           return {
             content: [{ type: "text" as const, text: "Counsel is not active right now." }],
             details: {},
@@ -742,6 +754,22 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
         }
 
         machine.send({ _tag: "CounselResult", status: params.status });
+
+        if (inSpecCounseling) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  params.status === "pass"
+                    ? "Counsel approved the spec. Presenting to the user for review."
+                    : "Counsel found issues with the spec. Revise and resubmit.",
+              },
+            ],
+            details: {},
+          };
+        }
+
         return {
           content: [
             {
@@ -816,6 +844,25 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
                     "SPEC mode is waiting for the user's spec approval choice. Do not continue with more tools until the choice is resolved.",
                 };
               }
+              if (state._tag === "SpecCounseling") {
+                const allowed = new Set(SPEC_COUNSEL_TOOLS);
+                if (!allowed.has(event.toolName)) {
+                  return {
+                    block: true,
+                    reason: `Spec counsel is in progress. Only counsel and modes_counsel_result are expected right now.`,
+                  };
+                }
+                if (event.toolName === "bash") {
+                  const command = event.input.command as string;
+                  if (!isSafeCommand(command)) {
+                    return {
+                      block: true,
+                      reason: `Spec counsel: command blocked (not allowlisted).\nCommand: ${command}`,
+                    };
+                  }
+                }
+                return;
+              }
               if (state._tag !== "Spec") return;
               if (event.toolName !== "bash") return;
               const command = event.input.command as string;
@@ -834,6 +881,8 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
               messages: event.messages.filter((message: any) => {
                 if (message.customType === "modes-context:auto") return false;
                 if (message.customType === "modes-context:spec") return false;
+                if (message.customType === "modes-context:spec-counsel") return false;
+                if (message.customType === "modes-context:spec-review") return false;
                 if (message.customType === "modes-context:executing") return false;
                 if (message.customType === "modes-context:auto-task-list") return false;
                 if (
@@ -900,8 +949,33 @@ Restrictions:
 When your spec is ready, call ${SPEC_SIGNAL_TOOLS[0]} with:
 - specText: the full spec/PRD markdown/text
 
+IMPORTANT: Only call ${SPEC_SIGNAL_TOOLS[0]} AFTER your spec is fully drafted and complete. The specText must be the final content. Do NOT call it prematurely — finish writing first, then signal.
+
 Do NOT generate executable task lists in SPEC mode.
 Do NOT attempt to make changes - just describe the spec, then call ${SPEC_SIGNAL_TOOLS[0]}.${diffBlock}${principlesBlock}`,
+                    display: false,
+                  },
+                };
+              }
+
+              if (state._tag === "SpecCounseling") {
+                return {
+                  message: {
+                    customType: "modes-context:spec-counsel",
+                    content: `[SPEC COUNSEL IN PROGRESS]
+Run counsel to review the spec, then call modes_counsel_result with pass or fail.
+Do not skip counsel. Do not present the spec to the user yet.`,
+                    display: false,
+                  },
+                };
+              }
+
+              if (state._tag === "SpecReview") {
+                return {
+                  message: {
+                    customType: "modes-context:spec-review",
+                    content: `[SPEC REVIEW — WAITING FOR USER]
+The spec is under user review. Do not continue working until the user approves, rejects, or edits.`,
                     display: false,
                   },
                 };
@@ -931,6 +1005,8 @@ ${todoList}${planRef}
 Use ${EXECUTION_SIGNAL_TOOLS[0]} when a step is complete.
 Use ${EXECUTION_SIGNAL_TOOLS[1]} after the validation gate.
 Use ${EXECUTION_SIGNAL_TOOLS[2]} after counsel review.
+
+IMPORTANT: Only call ${EXECUTION_SIGNAL_TOOLS[0]} AFTER you have fully completed all code changes for the current step. Do NOT call it before the work is done.
 
 Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_PASS, or COUNSEL_FAIL text markers anymore — use the signal tools instead.${principlesBlock}`,
                     display: false,
@@ -1019,7 +1095,10 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
 
         if (
           !prompt &&
-          (state._tag === "Spec" || state._tag === "SpecReview" || state._tag === "Executing")
+          (state._tag === "Spec" ||
+            state._tag === "SpecCounseling" ||
+            state._tag === "SpecReview" ||
+            state._tag === "Executing")
         ) {
           machine.send({ _tag: "Toggle", currentTools });
           return;

@@ -28,6 +28,15 @@ export const EXECUTION_SIGNAL_TOOLS = [
   "modes_gate_result",
   "modes_counsel_result",
 ] as const;
+export const SPEC_COUNSEL_TOOLS = [
+  "read",
+  "bash",
+  "grep",
+  "find",
+  "ls",
+  "counsel",
+  "modes_counsel_result",
+] as const;
 export const AUTO_DEFAULT_THINKING = "medium" as const;
 export const SPEC_DEFAULT_THINKING = "xhigh" as const;
 
@@ -55,6 +64,13 @@ export type ModesState =
       _tag: "Spec";
       savedTools: string[];
       spec?: SpecDraft;
+      pending?: PendingTaskList;
+      diffContext?: DiffContext;
+    }
+  | {
+      _tag: "SpecCounseling";
+      savedTools: string[];
+      spec: SpecDraft;
       pending?: PendingTaskList;
       diffContext?: DiffContext;
     }
@@ -160,6 +176,15 @@ function persist(state: ModesState): ModesEffect {
           pending: state.pending,
           spec: state.spec,
         };
+      case "SpecCounseling":
+        return {
+          mode: "SpecCounseling",
+          todoItems: state.pending?.todoItems ?? [],
+          planFilePath: state.pending?.planFilePath ?? null,
+          savedTools: state.savedTools,
+          pending: state.pending,
+          spec: state.spec,
+        };
       case "SpecReview":
         return {
           mode: "SpecReview",
@@ -199,10 +224,14 @@ function getSpecModeTools(): string[] {
   return mergeTools(SPEC_TOOLS, SPEC_SIGNAL_TOOLS);
 }
 
+function getSpecCounselTools(): string[] {
+  return [...SPEC_COUNSEL_TOOLS];
+}
+
 function getModeThinkingLevel(
   state: ModesState,
 ): typeof AUTO_DEFAULT_THINKING | typeof SPEC_DEFAULT_THINKING {
-  return state._tag === "Spec" || state._tag === "SpecReview"
+  return state._tag === "Spec" || state._tag === "SpecCounseling" || state._tag === "SpecReview"
     ? SPEC_DEFAULT_THINKING
     : AUTO_DEFAULT_THINKING;
 }
@@ -315,6 +344,25 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
         return { state: next, effects };
       }
 
+      if (state._tag === "SpecCounseling") {
+        const next: ModesState = {
+          _tag: "Spec",
+          savedTools: state.savedTools,
+          spec: state.spec,
+          pending: state.pending,
+          diffContext: state.diffContext,
+        };
+        return {
+          state: next,
+          effects: [
+            { type: "setActiveTools", tools: getSpecModeTools() },
+            setModeThinking(next),
+            UI,
+            persist(next),
+          ],
+        };
+      }
+
       if (state._tag === "SpecReview") {
         const next: ModesState = {
           _tag: "Spec",
@@ -325,7 +373,12 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
         };
         return {
           state: next,
-          effects: [setModeThinking(next), UI, persist(next)],
+          effects: [
+            { type: "setActiveTools", tools: getSpecModeTools() },
+            setModeThinking(next),
+            UI,
+            persist(next),
+          ],
         };
       }
 
@@ -401,20 +454,23 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       if (state._tag !== "Spec") return { state };
 
       const next: ModesState = {
-        _tag: "SpecReview",
+        _tag: "SpecCounseling",
         savedTools: state.savedTools,
         spec: event.spec,
         pending: state.pending,
         diffContext: state.diffContext,
       };
-      const pathInfo = event.spec.specFilePath ? `\n\nSaved to: ${event.spec.specFilePath}` : "";
       const effects: Effect[] = [
-        {
-          type: "sendMessage",
-          customType: "modes-review:spec",
-          content: `**Spec Draft Ready**${pathInfo}\n\n${event.spec.specText}`,
-          display: true,
-        },
+        { type: "setActiveTools", tools: getSpecCounselTools() },
+        setModeThinking(next),
+        executeTurn({
+          customType: "modes-counsel:spec",
+          content:
+            "The spec draft is complete. Run counsel to get a cross-vendor review of the spec before presenting it to the user. " +
+            "Call the counsel tool with the spec content, then call modes_counsel_result with pass or fail.",
+          display: false,
+          triggerTurn: true,
+        }),
       ];
       if (event.spec.specFilePath) {
         effects.push({
@@ -722,6 +778,61 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
 
     // ----- CounselResult -----
     case "CounselResult": {
+      // --- SpecCounseling branch ---
+      if (state._tag === "SpecCounseling") {
+        if (event.status === "pass") {
+          const next: ModesState = {
+            _tag: "SpecReview",
+            savedTools: state.savedTools,
+            spec: state.spec,
+            pending: state.pending,
+            diffContext: state.diffContext,
+          };
+          const pathInfo = state.spec.specFilePath
+            ? `\n\nSaved to: ${state.spec.specFilePath}`
+            : "";
+          return {
+            state: next,
+            effects: [
+              { type: "setActiveTools", tools: getSpecModeTools() },
+              {
+                type: "sendMessage",
+                customType: "modes-review:spec",
+                content: `**Spec Draft Ready**${pathInfo}\n\n${state.spec.specText}`,
+                display: true,
+              },
+              UI,
+              persist(next),
+            ],
+          };
+        }
+
+        // fail → back to Spec for revision
+        const next: ModesState = {
+          _tag: "Spec",
+          savedTools: state.savedTools,
+          spec: state.spec,
+          pending: state.pending,
+          diffContext: state.diffContext,
+        };
+        return {
+          state: next,
+          effects: [
+            { type: "setActiveTools", tools: getSpecModeTools() },
+            setModeThinking(next),
+            executeTurn({
+              customType: "modes-counsel:spec-revise",
+              content:
+                "Counsel found issues with the spec. Revise the spec based on counsel's feedback, then call modes_spec_ready again when the revised spec is complete.",
+              display: false,
+              triggerTurn: true,
+            }),
+            UI,
+            persist(next),
+          ],
+        };
+      }
+
       if (state._tag !== "Executing" || state.phase !== "counseling") return { state };
 
       const progress = resolveSequentialExecutionCounsel(
@@ -833,6 +944,29 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
     case "Hydrate": {
       const effects: Effect[] = [];
       const savedTools = event.savedTools ?? event.currentTools;
+
+      if (event.mode === "SpecCounseling" && event.spec) {
+        const next: ModesState = {
+          _tag: "SpecCounseling",
+          savedTools,
+          spec: event.spec,
+          pending: event.pending,
+          diffContext: undefined,
+        };
+        effects.push(
+          { type: "setActiveTools", tools: getSpecCounselTools() },
+          setModeThinking(next),
+          executeTurn({
+            customType: "modes-counsel:spec",
+            content:
+              "Session resumed during spec counsel. Run counsel to review the spec, then call modes_counsel_result with pass or fail.",
+            display: false,
+            triggerTurn: true,
+          }),
+          UI,
+        );
+        return { state: next, effects };
+      }
 
       if (event.mode === "SpecReview" && event.spec) {
         const next: ModesState = {
