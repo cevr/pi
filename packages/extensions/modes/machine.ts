@@ -40,7 +40,7 @@ export interface SpecDraft {
   specText: string;
 }
 
-/** Pending executable task list carried across Auto/AwaitingChoice for refine + execute flows. */
+/** Pending executable task list carried across mode transitions and hydration. */
 export interface PendingTaskList {
   todoItems: TaskListItem[];
   planFilePath: string | null;
@@ -50,7 +50,7 @@ export interface PendingTaskList {
 export type ExecutionPhase = SequentialExecutionPhase;
 
 export type ModesState =
-  | { _tag: "Auto"; spec?: SpecDraft; pending?: PendingTaskList }
+  | { _tag: "Auto"; spec?: SpecDraft }
   | {
       _tag: "Spec";
       savedTools: string[];
@@ -58,7 +58,13 @@ export type ModesState =
       pending?: PendingTaskList;
       diffContext?: DiffContext;
     }
-  | { _tag: "AwaitingChoice"; savedTools: string[]; pending: PendingTaskList; spec?: SpecDraft }
+  | {
+      _tag: "SpecReview";
+      savedTools: string[];
+      spec: SpecDraft;
+      pending?: PendingTaskList;
+      diffContext?: DiffContext;
+    }
   | {
       _tag: "Executing";
       savedTools: string[];
@@ -77,15 +83,15 @@ export type ModesEvent =
   | { _tag: "Toggle"; currentTools: string[]; diffContext?: DiffContext }
   | { _tag: "SpecWithPrompt"; prompt: string; currentTools: string[]; diffContext?: DiffContext }
   | { _tag: "SpecReady"; spec: SpecDraft }
+  | { _tag: "ApproveSpec" }
+  | { _tag: "RejectSpec" }
+  | { _tag: "EditSpec"; feedback: string }
   | { _tag: "TaskListReady"; pending: PendingTaskList; currentTools: string[] }
   | { _tag: "RestoreTaskList"; todoItems: TaskListItem[]; currentTools: string[] }
-  | { _tag: "ChooseExecute" }
-  | { _tag: "ChooseStay" }
-  | { _tag: "ChooseRefine"; refinement: string }
   | { _tag: "Reset" }
   | {
       _tag: "Hydrate";
-      mode?: ModesState["_tag"] | "Planning";
+      mode?: ModesState["_tag"] | "Planning" | "AwaitingSpecApproval" | "AwaitingChoice";
       todoItems: TaskListItem[];
       planFilePath: string | null;
       savedTools: string[] | null;
@@ -140,10 +146,9 @@ function persist(state: ModesState): ModesEffect {
       case "Auto":
         return {
           mode: "Auto",
-          todoItems: state.pending?.todoItems ?? [],
-          planFilePath: state.pending?.planFilePath ?? null,
+          todoItems: [],
+          planFilePath: null,
           savedTools: null,
-          pending: state.pending,
           spec: state.spec,
         };
       case "Spec":
@@ -155,11 +160,11 @@ function persist(state: ModesState): ModesEffect {
           pending: state.pending,
           spec: state.spec,
         };
-      case "AwaitingChoice":
+      case "SpecReview":
         return {
-          mode: "AwaitingChoice",
-          todoItems: state.pending.todoItems,
-          planFilePath: state.pending.planFilePath,
+          mode: "SpecReview",
+          todoItems: state.pending?.todoItems ?? [],
+          planFilePath: state.pending?.planFilePath ?? null,
           savedTools: state.savedTools,
           pending: state.pending,
           spec: state.spec,
@@ -197,7 +202,9 @@ function getSpecModeTools(): string[] {
 function getModeThinkingLevel(
   state: ModesState,
 ): typeof AUTO_DEFAULT_THINKING | typeof SPEC_DEFAULT_THINKING {
-  return state._tag === "Spec" ? SPEC_DEFAULT_THINKING : AUTO_DEFAULT_THINKING;
+  return state._tag === "Spec" || state._tag === "SpecReview"
+    ? SPEC_DEFAULT_THINKING
+    : AUTO_DEFAULT_THINKING;
 }
 
 function formatRestoredPlanText(todoItems: readonly TaskListItem[]): string {
@@ -217,13 +224,13 @@ function requestTaskListFromSpec(spec: SpecDraft): ExecutionEffect {
     ? `Read the saved spec at: ${spec.specFilePath}`
     : `Use this spec as the source of truth:\n\n${spec.specText}`;
   return executeTurn({
-    customType: "modes-auto-task-list",
+    customType: "modes-context:auto-task-list",
     content:
       `You are back in AUTO mode. ${specRef}\n\n` +
       "Convert the spec into an executable task list, then call modes_task_list_ready with:\n" +
       "- planText: the full executable task list markdown/text\n" +
       "- steps: the ordered implementation steps\n\n" +
-      "Do not start executing the work until the tool has been called and the user's choice is resolved.",
+      "After calling the tool, execution will begin through the modes state machine. Do not continue manually beyond that point.",
     display: false,
     triggerTurn: true,
   });
@@ -275,7 +282,6 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           _tag: "Spec",
           savedTools: event.currentTools,
           spec: state.spec,
-          pending: state.pending,
           diffContext: event.diffContext,
         };
 
@@ -295,7 +301,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       }
 
       if (state._tag === "Spec") {
-        const next: ModesState = { _tag: "Auto", spec: state.spec, pending: state.pending };
+        const next: ModesState = { _tag: "Auto", spec: state.spec };
         const effects: Effect[] = [
           { type: "setActiveTools", tools: getAutoModeTools(state.savedTools) },
           setModeThinking(next),
@@ -309,17 +315,17 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
         return { state: next, effects };
       }
 
-      if (state._tag === "AwaitingChoice") {
-        const next: ModesState = { _tag: "Auto", spec: state.spec, pending: state.pending };
+      if (state._tag === "SpecReview") {
+        const next: ModesState = {
+          _tag: "Spec",
+          savedTools: state.savedTools,
+          spec: state.spec,
+          pending: state.pending,
+          diffContext: state.diffContext,
+        };
         return {
           state: next,
-          effects: [
-            { type: "setActiveTools", tools: getAutoModeTools(state.savedTools) },
-            setModeThinking(next),
-            { type: "notify", message: "AUTO mode restored. Full access enabled." },
-            UI,
-            persist(next),
-          ],
+          effects: [setModeThinking(next), UI, persist(next)],
         };
       }
 
@@ -357,13 +363,15 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       const savedTools =
         state._tag === "Auto"
           ? event.currentTools
-          : state._tag === "Spec" || state._tag === "AwaitingChoice"
+          : state._tag === "Spec" || state._tag === "SpecReview"
             ? state.savedTools
             : event.currentTools;
-      const pending = state.pending;
+      const pending =
+        state._tag === "Spec" || state._tag === "SpecReview" ? state.pending : undefined;
       const spec = state.spec;
       const diffContext =
-        event.diffContext ?? (state._tag === "Spec" ? state.diffContext : undefined);
+        event.diffContext ??
+        (state._tag === "Spec" || state._tag === "SpecReview" ? state.diffContext : undefined);
       const next: ModesState = { _tag: "Spec", savedTools, spec, pending, diffContext };
 
       return {
@@ -374,6 +382,12 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           {
             type: "notify",
             message: `SPEC mode enabled. Tools: ${getSpecModeTools().join(", ")}`,
+          },
+          {
+            type: "sendMessage",
+            customType: "modes-transition:spec",
+            content: `AUTO → SPEC\n\nSpec goal: ${event.prompt}`,
+            display: true,
           },
           UI,
           { type: "sendUserMessage", content: event.prompt, deliverAs: "followUp" },
@@ -386,13 +400,19 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
     case "SpecReady": {
       if (state._tag !== "Spec") return { state };
 
-      const next: ModesState = { ...state, spec: event.spec };
+      const next: ModesState = {
+        _tag: "SpecReview",
+        savedTools: state.savedTools,
+        spec: event.spec,
+        pending: state.pending,
+        diffContext: state.diffContext,
+      };
       const pathInfo = event.spec.specFilePath ? `\n\nSaved to: ${event.spec.specFilePath}` : "";
       const effects: Effect[] = [
         {
           type: "sendMessage",
-          customType: "modes-spec",
-          content: `**Spec Captured**${pathInfo}`,
+          customType: "modes-review:spec",
+          content: `**Spec Draft Ready**${pathInfo}\n\n${event.spec.specText}`,
           display: true,
         },
       ];
@@ -407,33 +427,117 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       return { state: next, effects };
     }
 
+    // ----- ApproveSpec -----
+    case "ApproveSpec": {
+      if (state._tag !== "SpecReview") return { state };
+
+      const next: ModesState = { _tag: "Auto", spec: state.spec };
+      return {
+        state: next,
+        effects: [
+          { type: "setActiveTools", tools: getAutoModeTools(state.savedTools) },
+          setModeThinking(next),
+          {
+            type: "notify",
+            message: "Spec approved. AUTO mode restored; extracting the executable task list.",
+          },
+          requestTaskListFromSpec(state.spec),
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
+    // ----- RejectSpec -----
+    case "RejectSpec": {
+      if (state._tag !== "SpecReview") return { state };
+
+      const next: ModesState = {
+        _tag: "Spec",
+        savedTools: state.savedTools,
+        spec: state.spec,
+        pending: state.pending,
+        diffContext: state.diffContext,
+      };
+      return {
+        state: next,
+        effects: [
+          setModeThinking(next),
+          {
+            type: "notify",
+            message: "Spec rejected. Stay in SPEC mode and revise it before approval.",
+            level: "warning",
+          },
+          UI,
+          persist(next),
+        ],
+      };
+    }
+
+    // ----- EditSpec -----
+    case "EditSpec": {
+      if (state._tag !== "SpecReview") return { state };
+
+      const next: ModesState = {
+        _tag: "Spec",
+        savedTools: state.savedTools,
+        spec: state.spec,
+        pending: state.pending,
+        diffContext: state.diffContext,
+      };
+      return {
+        state: next,
+        effects: [
+          setModeThinking(next),
+          UI,
+          { type: "sendUserMessage", content: event.feedback, deliverAs: "followUp" },
+          persist(next),
+        ],
+      };
+    }
+
     // ----- TaskListReady -----
     case "TaskListReady": {
       if (state._tag !== "Auto") return { state };
       if (event.pending.todoItems.length === 0) return { state };
 
+      const todoItems = startTaskExecution(event.pending.todoItems);
+      const firstTask = todoItems[0];
       const next: ModesState = {
-        _tag: "AwaitingChoice",
+        _tag: "Executing",
         savedTools: event.currentTools,
-        pending: event.pending,
+        todoItems,
+        planFilePath: event.pending.planFilePath,
+        phase: "running",
+        currentStep: firstTask?.order ?? null,
         spec: state.spec,
       };
-      const todoListText = event.pending.todoItems
-        .map((task) => `${task.order}. ◻ ${task.subject}`)
-        .join("\n");
+      const todoListText = todoItems.map((task) => `${task.order}. ◻ ${task.subject}`).join("\n");
       const pathInfo = event.pending.planFilePath
         ? `\n\nSaved to: ${event.pending.planFilePath}`
         : "";
+      const execMessage =
+        firstTask !== undefined
+          ? `Execute the task list. Start with step ${firstTask.order}: ${firstTask.subject}`
+          : "Execute the task list you just created.";
 
       const effects: Effect[] = [
         setModeThinking(next),
         {
           type: "sendMessage",
-          customType: "modes-todo-list",
-          content: `**Task List (${event.pending.todoItems.length}):**\n\n${todoListText}${pathInfo}`,
+          customType: "modes-plan:task-list",
+          content: `**Task List (${todoItems.length}):**\n\n${todoListText}${pathInfo}`,
           display: true,
         },
-        { type: "persistTaskList", todoItems: event.pending.todoItems },
+        { type: "setActiveTools", tools: getExecutionTools(event.currentTools) },
+        executeTurn({
+          customType: "modes-execution:start",
+          content: execMessage,
+          display: true,
+          triggerTurn: true,
+        }),
+        { type: "persistTaskList", todoItems },
+        UI,
         persist(next),
       ];
       if (event.pending.planFilePath) {
@@ -441,7 +545,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           type: "writePlanFile",
           planFilePath: event.pending.planFilePath,
           planText: event.pending.planText,
-          todoItems: event.pending.todoItems,
+          todoItems,
         });
       }
 
@@ -462,26 +566,42 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       };
 
       if (state._tag === "Auto" && !state.pending) {
+        const todoItems = startTaskExecution(pending.todoItems);
+        const firstTask = todoItems[0];
         const next: ModesState = {
-          _tag: "AwaitingChoice",
+          _tag: "Executing",
           savedTools: event.currentTools,
-          pending,
+          todoItems,
+          planFilePath: pending.planFilePath,
+          phase: "running",
+          currentStep: firstTask?.order ?? null,
           spec: state.spec,
         };
         return {
           state: next,
           effects: [
+            { type: "setActiveTools", tools: getExecutionTools(event.currentTools) },
             setModeThinking(next),
             {
               type: "notify",
-              message: "Restored executable task list from session storage.",
+              message: "Restored executable task list from session storage and resumed execution.",
             },
+            executeTurn({
+              customType: "modes-execution:start",
+              content: firstTask
+                ? `Resume the restored task list. Continue with step ${firstTask.order}: ${firstTask.subject}`
+                : "Resume the restored task list.",
+              display: true,
+              triggerTurn: true,
+            }),
+            { type: "persistTaskList", todoItems },
+            UI,
             persist(next),
           ],
         };
       }
 
-      if (state._tag === "Spec" && !state.pending) {
+      if ((state._tag === "Spec" || state._tag === "SpecReview") && !state.pending) {
         const next: ModesState = { ...state, pending };
         return {
           state: next,
@@ -496,88 +616,6 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       }
 
       return { state };
-    }
-
-    // ----- ChooseExecute -----
-    case "ChooseExecute": {
-      if (state._tag !== "AwaitingChoice") return { state };
-
-      const { pending, savedTools } = state;
-      const todoItems = startTaskExecution(pending.todoItems);
-      const firstTask = todoItems[0];
-      const next: ModesState = {
-        _tag: "Executing",
-        savedTools,
-        todoItems,
-        planFilePath: pending.planFilePath,
-        phase: "running",
-        currentStep: firstTask?.order ?? null,
-        spec: state.spec,
-      };
-      const execMessage =
-        firstTask !== undefined
-          ? `Execute the task list. Start with step ${firstTask.order}: ${firstTask.subject}`
-          : "Execute the task list you just created.";
-
-      return {
-        state: next,
-        effects: [
-          { type: "setActiveTools", tools: getExecutionTools(savedTools) },
-          setModeThinking(next),
-          UI,
-          executeTurn({
-            customType: "modes-execute",
-            content: execMessage,
-            display: true,
-            triggerTurn: true,
-          }),
-          { type: "persistTaskList", todoItems },
-          persist(next),
-        ],
-      };
-    }
-
-    // ----- ChooseStay -----
-    case "ChooseStay": {
-      if (state._tag !== "AwaitingChoice") return { state };
-
-      const next: ModesState = {
-        _tag: "Auto",
-        spec: state.spec,
-        pending: state.pending,
-      };
-
-      return {
-        state: next,
-        effects: [
-          { type: "setActiveTools", tools: getAutoModeTools(state.savedTools) },
-          setModeThinking(next),
-          UI,
-          persist(next),
-        ],
-      };
-    }
-
-    // ----- ChooseRefine -----
-    case "ChooseRefine": {
-      if (state._tag !== "AwaitingChoice") return { state };
-
-      const next: ModesState = {
-        _tag: "Auto",
-        spec: state.spec,
-        pending: state.pending,
-      };
-
-      return {
-        state: next,
-        effects: [
-          { type: "setActiveTools", tools: getAutoModeTools(state.savedTools) },
-          setModeThinking(next),
-          UI,
-          { type: "sendUserMessage", content: event.refinement, deliverAs: "followUp" },
-          persist(next),
-        ],
-      };
     }
 
     // ----- StepDone (execution progress signal) -----
@@ -611,7 +649,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       };
       const effects: Effect[] = [
         executeTurn({
-          customType: "modes-gate",
+          customType: "modes-execution:gate",
           content:
             "Run the full gate (typecheck, lint, format, test) for the completed step. When finished, call modes_gate_result with status 'pass' or 'fail'.",
           display: false,
@@ -650,7 +688,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           state: next,
           effects: [
             executeTurn({
-              customType: "modes-counsel",
+              customType: "modes-execution:counsel",
               content:
                 "Gate passed. Run counsel for cross-vendor review of the changes for this step. When finished, call modes_counsel_result with status 'pass' or 'fail'.",
               display: false,
@@ -668,7 +706,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
         effects: [
           { type: "notify", message: "Gate failed — fix and retry", level: "warning" },
           executeTurn({
-            customType: "modes-gate-fix",
+            customType: "modes-execution:gate-fix",
             content:
               state.currentStep === null
                 ? "Gate failed. Fix the failures, rerun the gate, then call modes_step_done again when the step is truly complete."
@@ -707,7 +745,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
               level: "warning",
             },
             executeTurn({
-              customType: "modes-counsel-fix",
+              customType: "modes-execution:counsel-fix",
               content:
                 state.currentStep === null
                   ? "Counsel found issues. Address the feedback, then call modes_step_done again when the step is actually complete."
@@ -743,7 +781,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
         effects: [
           { type: "notify", message: "Counsel approved — continue to the next step" },
           executeTurn({
-            customType: "modes-counsel-pass",
+            customType: "modes-execution:next-step",
             content: nextStep
               ? `Counsel approved. Continue with step ${nextStep.order}: ${nextStep.subject}. When that step is complete, call modes_step_done for step ${nextStep.order}.`
               : "Counsel approved. Continue the task list and call modes_step_done when the next step is complete.",
@@ -766,7 +804,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       const effects: Effect[] = [
         {
           type: "sendMessage",
-          customType: "modes-complete",
+          customType: "modes-execution:complete",
           content: `**Task List Complete!**\n\n${completedList}${pathInfo}`,
           display: true,
         },
@@ -796,15 +834,36 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       const effects: Effect[] = [];
       const savedTools = event.savedTools ?? event.currentTools;
 
-      if (event.mode === "AwaitingChoice" && event.pending) {
+      if (event.mode === "SpecReview" && event.spec) {
         const next: ModesState = {
-          _tag: "AwaitingChoice",
+          _tag: "SpecReview",
           savedTools,
+          spec: event.spec,
           pending: event.pending,
+          diffContext: undefined,
+        };
+        effects.push(
+          { type: "setActiveTools", tools: getSpecModeTools() },
+          setModeThinking(next),
+          UI,
+        );
+        return { state: next, effects };
+      }
+
+      if (event.mode === "AwaitingChoice" && event.pending) {
+        const todoItems = startTaskExecution(event.pending.todoItems);
+        const firstTask = todoItems[0];
+        const next: ModesState = {
+          _tag: "Executing",
+          savedTools,
+          todoItems,
+          planFilePath: event.pending.planFilePath,
+          phase: "running",
+          currentStep: firstTask?.order ?? null,
           spec: event.spec,
         };
         effects.push(
-          { type: "setActiveTools", tools: getAutoModeTools(savedTools) },
+          { type: "setActiveTools", tools: getExecutionTools(savedTools) },
           setModeThinking(next),
           UI,
         );
@@ -861,13 +920,19 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       }
 
       if (event.pending) {
+        const todoItems = startTaskExecution(event.pending.todoItems);
+        const firstTask = todoItems[0];
         const next: ModesState = {
-          _tag: "Auto",
+          _tag: "Executing",
+          savedTools,
+          todoItems,
+          planFilePath: event.pending.planFilePath,
+          phase: "running",
+          currentStep: firstTask?.order ?? null,
           spec: event.spec,
-          pending: event.pending,
         };
         effects.push(
-          { type: "setActiveTools", tools: getAutoModeTools(savedTools) },
+          { type: "setActiveTools", tools: getExecutionTools(savedTools) },
           setModeThinking(next),
           UI,
         );

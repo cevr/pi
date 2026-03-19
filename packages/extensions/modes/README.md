@@ -2,6 +2,81 @@
 
 AUTO / SPEC / execution flow for pi.
 
+## High-level flow
+
+### AUTO
+
+Normal working mode.
+
+- if work is executable now, AUTO produces an executable task list
+- task lists are part of AUTO mode; there is no separate task-review state
+- once AUTO has a task list, execution starts immediately
+- if deeper design is needed first, AUTO escalates to SPEC
+
+### SPEC
+
+Read-only exploration and spec writing.
+
+- SPEC drafts the spec only
+- SPEC does not generate executable task lists
+- when the draft is ready, the agent calls `modes_spec_ready`
+
+### Spec review
+
+After `modes_spec_ready`, modes pauses for user review.
+
+- approve → return to AUTO, then AUTO extracts the task list from the approved spec
+- reject/edit → return to SPEC and revise
+
+### EXECUTING
+
+Sequential step execution.
+
+- run current step
+- call `modes_step_done`
+- run gate, then call `modes_gate_result`
+- run counsel, then call `modes_counsel_result`
+- continue until complete, then return to AUTO
+
+## Transcript visibility
+
+Modes emits both user-visible milestones and hidden control/context messages.
+
+### Visible history entries
+
+These should appear in the transcript because they are meaningful phase boundaries or user-review artifacts:
+
+- `modes-transition:spec` — AUTO escalated into SPEC, including the spec goal
+- `modes-review:spec` — full drafted spec for approval
+- `modes-plan:task-list` — generated executable task list
+- `modes-execution:start` — execution kickoff / resume message
+- `modes-execution:complete` — execution completion summary
+
+### Hidden control/context entries
+
+These should stay hidden because they are machine steering or context injection, not user-facing artifacts:
+
+- `modes-context:auto`
+- `modes-context:spec`
+- `modes-context:executing`
+- `modes-context:auto-task-list`
+- `modes-execution:gate`
+- `modes-execution:gate-fix`
+- `modes-execution:counsel`
+- `modes-execution:counsel-fix`
+- `modes-execution:next-step`
+
+Rule of thumb:
+
+- if an entry explains a real workflow transition the user may want to review later, keep it visible
+- if an entry only steers the agent/runtime, keep it hidden
+
+Non-goal:
+
+- this naming discipline is for workflow/control transcript entries
+- the internal persisted machine snapshot still uses the plain custom type `modes`
+- handoff may copy that `modes` snapshot into the child session, but that is persistence state, not a handoff transcript milestone
+
 ## Task-list scope
 
 `scope` answers one question:
@@ -84,8 +159,9 @@ Then it checks the task-list store.
 
 If stored task-list data exists and the current machine state does **not** already have a task list:
 
-- `Auto` restores into `AwaitingChoice`
+- `Auto` restores the task list and resumes execution
 - `Spec` restores as pending task-list state
+- legacy `AwaitingChoice` sessions hydrate into `Executing`
 
 This means store-backed task lists fill gaps, but do not override stronger session-state data.
 

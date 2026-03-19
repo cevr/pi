@@ -5,14 +5,18 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Effect } from "effect";
 import { clearConfigCache, setGlobalSettingsPath } from "@cvr/pi-config";
+import { TaskListStore } from "@cvr/pi-task-list-store";
 import {
   assembleHandoffPrompt,
   createHandoffExtension,
   CONFIG_DEFAULTS,
   DEFAULT_DEPS,
   getPersistedModesPlanPath,
+  getPersistedModesState,
   HANDOFF_CONFIG_SCHEMA,
+  transferSessionScopedTaskListForHandoff,
 } from "./index";
 import { registerMentionSource } from "@cvr/pi-mentions";
 
@@ -89,13 +93,31 @@ const HANDOFF_SESSION = {
   isHandoffCandidate: true,
 };
 
-afterEach(() => {
+afterEach(async () => {
   // mock.restore() — manual cleanup;
   clearConfigCache();
   setGlobalSettingsPath(path.join(tmpdir, `nonexistent-${Date.now()}.json`));
+  await TaskListStore.clearRuntimeCache();
 });
 
 describe("handoff helpers", () => {
+  it("returns the latest persisted modes state", () => {
+    expect(
+      getPersistedModesState([
+        {
+          type: "custom",
+          customType: "modes",
+          data: { planFilePath: "/tmp/older-plan.md" },
+        },
+        {
+          type: "custom",
+          customType: "modes",
+          data: { planFilePath: "/tmp/current-plan.md", pending: { planText: "# Task List" } },
+        },
+      ]),
+    ).toEqual({ planFilePath: "/tmp/current-plan.md", pending: { planText: "# Task List" } });
+  });
+
   it("prefers pending modes plan file paths", () => {
     expect(
       getPersistedModesPlanPath([
@@ -146,6 +168,42 @@ describe("handoff helpers", () => {
         "/tmp/current-plan.md",
       ),
     ).toContain("Plan file: /tmp/current-plan.md");
+  });
+
+  it("copies session-scoped task lists to the handoff session", async () => {
+    const cwd = fs.mkdtempSync(path.join(tmpdir, "pi-handoff-task-transfer-"));
+    const sourceRuntime = TaskListStore.runtime({ cwd, scope: "session", sessionId: "parent" });
+    await sourceRuntime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskListStore;
+        yield* store.save([
+          { id: "1", order: 1, subject: "Carry me", status: "pending", blockedBy: [] },
+        ]);
+      }),
+    );
+
+    await expect(
+      transferSessionScopedTaskListForHandoff({
+        cwd,
+        fromSessionId: "parent",
+        toSessionId: "child",
+      }),
+    ).resolves.toBe(true);
+
+    const targetRuntime = TaskListStore.runtime({ cwd, scope: "session", sessionId: "child" });
+    const restored = await targetRuntime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskListStore;
+        return yield* store.load;
+      }),
+    );
+
+    expect(restored._tag).toBe("Some");
+    if (restored._tag === "Some") {
+      expect(restored.value.tasks[0]?.subject).toBe("Carry me");
+    }
+
+    fs.rmSync(cwd, { recursive: true, force: true });
   });
 });
 

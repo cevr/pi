@@ -26,18 +26,13 @@ function specMode(savedTools = ["read", "bash", "edit"], spec?: SpecDraft): Mode
   return { _tag: "Spec", savedTools, spec };
 }
 
-function awaitingChoice(
+function specReview(
   savedTools = ["read", "bash", "edit"],
-): Extract<ModesState, { _tag: "AwaitingChoice" }> {
+): Extract<ModesState, { _tag: "SpecReview" }> {
   return {
-    _tag: "AwaitingChoice",
+    _tag: "SpecReview",
     savedTools,
     spec: { specFilePath: "/tmp/spec.md", specText: "# Spec" },
-    pending: {
-      todoItems: tasks("First step", "Second step"),
-      planFilePath: "/tmp/task-list.md",
-      planText: "# Task List\n1. First step",
-    },
   };
 }
 
@@ -122,21 +117,60 @@ describe("modesReducer", () => {
     });
   });
 
-  it("captures a spec without creating tasks", () => {
+  it("captures a spec and waits for approval before creating tasks", () => {
     const result = modesReducer(specMode(), {
       _tag: "SpecReady",
       spec: { specFilePath: "/tmp/spec.md", specText: "# Spec" },
     });
-    expect(result.state._tag).toBe("Spec");
-    if (result.state._tag === "Spec") {
-      expect(result.state.spec?.specFilePath).toBe("/tmp/spec.md");
+    expect(result.state._tag).toBe("SpecReview");
+    if (result.state._tag === "SpecReview") {
+      expect(result.state.spec.specFilePath).toBe("/tmp/spec.md");
       expect(result.state.pending).toBeUndefined();
     }
     expect(hasEffect(result.effects, "writeSpecFile")).toBe(true);
     expect(hasEffect(result.effects, "sendMessage")).toBe(true);
+    expect(hasEffect(result.effects, "executeTurn")).toBe(false);
   });
 
-  it("captures a task list in Auto and moves to AwaitingChoice", () => {
+  it("approves a spec and only then requests a task list in AUTO mode", () => {
+    const result = modesReducer(specReview(["read", "bash"]), { _tag: "ApproveSpec" });
+    expect(result.state._tag).toBe("Auto");
+    expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
+      tools: ["read", "bash", ...AUTO_SIGNAL_TOOLS, ...TASK_LIST_SIGNAL_TOOLS],
+    });
+    expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
+      level: "medium",
+    });
+    expect(hasEffect(result.effects, "executeTurn")).toBe(true);
+  });
+
+  it("rejects a spec back into SPEC mode", () => {
+    const result = modesReducer(specReview(), { _tag: "RejectSpec" });
+    expect(result.state._tag).toBe("Spec");
+    expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
+      level: "xhigh",
+    });
+    expect(getEffect<BuiltinEffect>(result.effects, "notify")).toMatchObject({
+      level: "warning",
+    });
+  });
+
+  it("edits a spec by returning to SPEC mode and sending feedback", () => {
+    const result = modesReducer(specReview(), {
+      _tag: "EditSpec",
+      feedback: "Add success metrics and rollout details.",
+    });
+    expect(result.state._tag).toBe("Spec");
+    expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
+      level: "xhigh",
+    });
+    expect(getEffect<BuiltinEffect>(result.effects, "sendUserMessage")).toMatchObject({
+      content: "Add success metrics and rollout details.",
+      deliverAs: "followUp",
+    });
+  });
+
+  it("captures a task list in Auto and immediately enters Executing", () => {
     const pending = {
       todoItems: tasks("Step one", "Step two"),
       planFilePath: "/tmp/task-list.md",
@@ -147,62 +181,38 @@ describe("modesReducer", () => {
       pending,
       currentTools: ["read", "bash"],
     });
-    expect(result.state._tag).toBe("AwaitingChoice");
-    expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
-      level: "medium",
-    });
-    expect(hasEffect(result.effects, "writePlanFile")).toBe(true);
-    expect(hasEffect(result.effects, "sendMessage")).toBe(true);
-    expect(hasEffect(result.effects, "persistTaskList")).toBe(true);
-  });
-
-  it("restores a stored task list into AwaitingChoice from Auto", () => {
-    const result = modesReducer(auto(), {
-      _tag: "RestoreTaskList",
-      todoItems: tasks("Recovered step"),
-      currentTools: ["read", "bash"],
-    });
-    expect(result.state._tag).toBe("AwaitingChoice");
-    if (result.state._tag === "AwaitingChoice") {
-      expect(result.state.pending.todoItems[0]?.subject).toBe("Recovered step");
-      expect(result.state.pending.planFilePath).toBeNull();
-    }
-    expect(hasEffect(result.effects, "persistState")).toBe(true);
-  });
-
-  it("ChooseExecute enters Executing with task-list signals enabled", () => {
-    const result = modesReducer(awaitingChoice(["full", "tools"]), { _tag: "ChooseExecute" });
     expect(result.state._tag).toBe("Executing");
     if (result.state._tag === "Executing") {
       expect(result.state.todoItems[0]!.status).toBe("in_progress");
       expect(result.state.currentStep).toBe(1);
     }
     expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
-      tools: ["full", "tools", ...TASK_LIST_SIGNAL_TOOLS, ...EXECUTION_SIGNAL_TOOLS],
+      tools: ["read", "bash", ...TASK_LIST_SIGNAL_TOOLS, ...EXECUTION_SIGNAL_TOOLS],
     });
     expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
       level: "medium",
     });
+    expect(hasEffect(result.effects, "writePlanFile")).toBe(true);
+    expect(hasEffect(result.effects, "sendMessage")).toBe(true);
+    expect(hasEffect(result.effects, "executeTurn")).toBe(true);
     expect(hasEffect(result.effects, "persistTaskList")).toBe(true);
   });
 
-  it("ChooseStay and ChooseRefine return to Auto with pending tasks intact", () => {
-    const state = awaitingChoice();
-    const expectedPending = state.pending;
-    const stay = modesReducer(state, { _tag: "ChooseStay" });
-    expect(stay.state).toMatchObject({ _tag: "Auto", pending: expectedPending });
-    expect(getEffect<BuiltinEffect>(stay.effects, "setThinkingLevel")).toMatchObject({
-      level: "medium",
+  it("restores a stored task list and resumes execution from Auto", () => {
+    const result = modesReducer(auto(), {
+      _tag: "RestoreTaskList",
+      todoItems: tasks("Recovered step"),
+      currentTools: ["read", "bash"],
     });
-
-    const refine = modesReducer(state, { _tag: "ChooseRefine", refinement: "split step two" });
-    expect(refine.state._tag).toBe("Auto");
-    expect(getEffect<BuiltinEffect>(refine.effects, "setThinkingLevel")).toMatchObject({
-      level: "medium",
-    });
-    expect(getEffect<BuiltinEffect>(refine.effects, "sendUserMessage")).toMatchObject({
-      content: "split step two",
-    });
+    expect(result.state._tag).toBe("Executing");
+    if (result.state._tag === "Executing") {
+      expect(result.state.todoItems[0]?.subject).toBe("Recovered step");
+      expect(result.state.todoItems[0]?.status).toBe("in_progress");
+      expect(result.state.currentStep).toBe(1);
+    }
+    expect(hasEffect(result.effects, "executeTurn")).toBe(true);
+    expect(hasEffect(result.effects, "persistTaskList")).toBe(true);
+    expect(hasEffect(result.effects, "persistState")).toBe(true);
   });
 
   it("StepDone enters gating and keeps the active task in progress", () => {
@@ -228,7 +238,29 @@ describe("modesReducer", () => {
     expect(hasEffect(result.effects, "clearTaskList")).toBe(true);
   });
 
-  it("hydrates AwaitingChoice with auto-mode tools and preserved spec", () => {
+  it("hydrates SpecReview with spec tools", () => {
+    const result = modesReducer(auto(), {
+      _tag: "Hydrate",
+      mode: "SpecReview",
+      todoItems: [],
+      planFilePath: null,
+      savedTools: ["read", "bash"],
+      pending: undefined,
+      spec: { specFilePath: "/tmp/spec.md", specText: "# Spec" },
+      flagSpec: false,
+      flagPlan: false,
+      currentTools: ["read", "bash"],
+    });
+    expect(result.state._tag).toBe("SpecReview");
+    expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
+      tools: [...SPEC_TOOLS, ...SPEC_SIGNAL_TOOLS],
+    });
+    expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
+      level: "xhigh",
+    });
+  });
+
+  it("hydrates legacy AwaitingChoice into Executing", () => {
     const pending = {
       todoItems: tasks("Do it"),
       planFilePath: "/tmp/task-list.md",
@@ -246,9 +278,14 @@ describe("modesReducer", () => {
       flagPlan: false,
       currentTools: ["read", "bash"],
     });
-    expect(result.state._tag).toBe("AwaitingChoice");
+    expect(result.state._tag).toBe("Executing");
+    if (result.state._tag === "Executing") {
+      expect(result.state.todoItems[0]?.subject).toBe("Do it");
+      expect(result.state.todoItems[0]?.status).toBe("in_progress");
+      expect(result.state.currentStep).toBe(1);
+    }
     expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
-      tools: ["read", "bash", ...AUTO_SIGNAL_TOOLS, ...TASK_LIST_SIGNAL_TOOLS],
+      tools: ["read", "bash", ...TASK_LIST_SIGNAL_TOOLS, ...EXECUTION_SIGNAL_TOOLS],
     });
     expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
       level: "medium",

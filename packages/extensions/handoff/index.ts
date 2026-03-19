@@ -37,6 +37,8 @@ import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-c
 import { registerMentionSource } from "@cvr/pi-mentions";
 import { resolvePrompt } from "@cvr/pi-spawn";
 import { register, type MachineConfig } from "@cvr/pi-state-machine";
+import { TaskListStore } from "@cvr/pi-task-list-store";
+import { Effect, Option } from "effect";
 import { createHandoffMentionSource } from "./handoff-mention-source";
 import {
   handoffReducer,
@@ -92,6 +94,15 @@ export const HANDOFF_CONFIG_SCHEMA: ExtensionConfigSchema<HandoffExtConfig> = {
 
 const MAX_RELEVANT_FILES = 10;
 
+/**
+ * Internal modes persistence snapshot carried across handoff setup.
+ *
+ * This is not a handoff-owned transcript milestone. The visible/hidden
+ * `namespace:type` discipline applies to workflow/control messages, while this
+ * entry remains the modes extension's private persisted state payload.
+ */
+const MODES_PERSIST_CUSTOM_TYPE = "modes";
+
 function parsePromptSections(content: string): Record<string, string> {
   const sections: Record<string, string> = {};
   const parts = content.split("\n# ");
@@ -110,15 +121,25 @@ interface HandoffExtraction {
   relevantFiles: string[];
 }
 
+interface ModesPersistPayload {
+  mode?: string;
+  todoItems?: unknown[];
+  planFilePath?: string | null;
+  savedTools?: string[] | null;
+  spec?: unknown;
+  phase?: string;
+  currentStep?: number | null;
+  pending?: {
+    todoItems?: unknown[];
+    planFilePath?: string | null;
+    planText?: string;
+  };
+}
+
 interface ModesPersistEntry {
   type?: string;
   customType?: string;
-  data?: {
-    planFilePath?: string | null;
-    pending?: {
-      planFilePath?: string | null;
-    };
-  };
+  data?: ModesPersistPayload;
 }
 
 function extractToolCallArgs(response: {
@@ -139,7 +160,7 @@ function extractToolCallArgs(response: {
   };
 }
 
-export function getPersistedModesPlanPath(entries: readonly unknown[]): string | null {
+export function getPersistedModesState(entries: readonly unknown[]): ModesPersistPayload | null {
   const modesEntry = [...entries]
     .reverse()
     .find(
@@ -147,13 +168,60 @@ export function getPersistedModesPlanPath(entries: readonly unknown[]): string |
         typeof entry === "object" &&
         entry !== null &&
         (entry as ModesPersistEntry).type === "custom" &&
-        (entry as ModesPersistEntry).customType === "modes",
+        (entry as ModesPersistEntry).customType === MODES_PERSIST_CUSTOM_TYPE,
     );
 
-  const pendingPlanPath = modesEntry?.data?.pending?.planFilePath;
+  return modesEntry?.data ?? null;
+}
+
+function getPersistedModesTaskCount(state: ModesPersistPayload | null): number {
+  const pendingCount = Array.isArray(state?.pending?.todoItems)
+    ? state.pending.todoItems.length
+    : 0;
+  if (pendingCount > 0) return pendingCount;
+  return Array.isArray(state?.todoItems) ? state.todoItems.length : 0;
+}
+
+export async function transferSessionScopedTaskListForHandoff(options: {
+  cwd: string;
+  fromSessionId: string;
+  toSessionId: string;
+}): Promise<boolean> {
+  const sourceRuntime = TaskListStore.runtime({
+    cwd: options.cwd,
+    scope: "session",
+    sessionId: options.fromSessionId,
+  });
+  const targetRuntime = TaskListStore.runtime({
+    cwd: options.cwd,
+    scope: "session",
+    sessionId: options.toSessionId,
+  });
+
+  const snapshot = await sourceRuntime.runPromise(
+    Effect.gen(function* () {
+      const store = yield* TaskListStore;
+      return yield* store.load;
+    }),
+  );
+  if (Option.isNone(snapshot)) return false;
+
+  await targetRuntime.runPromise(
+    Effect.gen(function* () {
+      const store = yield* TaskListStore;
+      yield* store.save(snapshot.value.tasks);
+    }),
+  );
+  return true;
+}
+
+export function getPersistedModesPlanPath(entries: readonly unknown[]): string | null {
+  const modesState = getPersistedModesState(entries);
+
+  const pendingPlanPath = modesState?.pending?.planFilePath;
   if (typeof pendingPlanPath === "string" && pendingPlanPath.trim()) return pendingPlanPath;
 
-  const planPath = modesEntry?.data?.planFilePath;
+  const planPath = modesState?.planFilePath;
   if (typeof planPath === "string" && planPath.trim()) return planPath;
 
   return null;
@@ -355,7 +423,23 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
     ): Promise<"handed-off" | "cancelled"> {
       machine.send({ _tag: "SwitchStart", parentSessionFile });
 
-      const switchResult = await ctx.newSession({ parentSession: parentSessionFile });
+      const sourceSessionId = ctx.sessionManager.getSessionId();
+      const persistedModesState = getPersistedModesState(ctx.sessionManager.getEntries());
+      const shouldTransferModesState = getPersistedModesTaskCount(persistedModesState) > 0;
+
+      const switchResult = await ctx.newSession({
+        parentSession: parentSessionFile,
+        setup: async (sessionManager) => {
+          if (shouldTransferModesState && persistedModesState) {
+            sessionManager.appendCustomEntry(MODES_PERSIST_CUSTOM_TYPE, persistedModesState);
+            await transferSessionScopedTaskListForHandoff({
+              cwd: ctx.cwd,
+              fromSessionId: sourceSessionId,
+              toSessionId: sessionManager.getSessionId(),
+            }).catch(() => false);
+          }
+        },
+      });
       if (switchResult.cancelled) {
         machine.send({ _tag: "SwitchCancelled" });
         ctx.ui.notify("session switch cancelled", "info");

@@ -213,6 +213,51 @@ function normalizeHydratedSpec(value: unknown): SpecDraft | undefined {
   return undefined;
 }
 
+function buildHydrateEvent(
+  data: PersistPayload | undefined,
+  pi: ExtensionAPI,
+): Extract<ModesEvent, { _tag: "Hydrate" }> {
+  const mode = data?.mode === "AwaitingSpecApproval" ? "SpecReview" : data?.mode;
+  const pendingData = data?.pending;
+  const rawTodoItems = pendingData?.todoItems ?? data?.todoItems;
+  const todoItems = normalizeHydratedTaskList(Array.isArray(rawTodoItems) ? rawTodoItems : []);
+  const pending = pendingData
+    ? {
+        ...pendingData,
+        todoItems,
+      }
+    : undefined;
+  const planFilePath = pending?.planFilePath ?? data?.planFilePath ?? null;
+  const savedTools = data?.savedTools ?? null;
+  const currentStep = typeof data?.currentStep === "number" ? data.currentStep : null;
+  const phase =
+    data?.phase === "running" || data?.phase === "gating" || data?.phase === "counseling"
+      ? data.phase
+      : undefined;
+  const spec = normalizeHydratedSpec(data?.spec);
+
+  return {
+    _tag: "Hydrate",
+    mode,
+    todoItems,
+    planFilePath,
+    savedTools,
+    pending,
+    spec,
+    flagSpec: pi.getFlag("spec") === true,
+    flagPlan: pi.getFlag("plan") === true,
+    currentStep,
+    phase,
+    currentTools: pi.getActiveTools(),
+  };
+}
+
+function getLatestPersistedModesState(entries: readonly unknown[]): PersistPayload | undefined {
+  return entries
+    .filter((entry: any) => entry.type === "custom" && entry.customType === "modes")
+    .pop()?.data as PersistPayload | undefined;
+}
+
 function createTaskListStoreRuntime(ctx: ExtensionContext, scope: TaskListScope) {
   return TaskListStore.runtime({
     cwd: ctx.cwd,
@@ -285,8 +330,8 @@ function formatUI(state: ModesState, pi: ExtensionAPI, ctx: ExtensionContext): v
       ctx.ui.setStatus("modes", ctx.ui.theme.fg("toolTitle", "⏸ spec"));
       ctx.ui.setWidget("modes-todos", undefined);
       break;
-    case "AwaitingChoice":
-      ctx.ui.setStatus("modes", ctx.ui.theme.fg("toolTitle", "⏸ task list"));
+    case "SpecReview":
+      ctx.ui.setStatus("modes", ctx.ui.theme.fg("toolTitle", "⏸ spec review"));
       ctx.ui.setWidget("modes-todos", undefined);
       break;
     case "Auto":
@@ -392,13 +437,11 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
         description: "Show current executable task list",
         handler: (state, _args, ctx): void => {
           const todoItems =
-            state._tag === "Auto" || state._tag === "Spec"
+            state._tag === "Spec" || state._tag === "SpecReview"
               ? state.pending?.todoItems
-              : state._tag === "AwaitingChoice"
-                ? state.pending.todoItems
-                : state._tag === "Executing"
-                  ? state.todoItems
-                  : undefined;
+              : state._tag === "Executing"
+                ? state.todoItems
+                : undefined;
           if (!todoItems || todoItems.length === 0) {
             ctx.ui.notify("No task list. Create one in AUTO mode.", "info");
             return;
@@ -413,9 +456,9 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
           const planFilePath =
             state._tag === "Executing"
               ? state.planFilePath
-              : state._tag === "AwaitingChoice"
-                ? state.pending.planFilePath
-                : (state.pending?.planFilePath ?? null);
+              : state._tag === "Spec" || state._tag === "SpecReview"
+                ? (state.pending?.planFilePath ?? null)
+                : null;
           const pathInfo = planFilePath ? `\nTask list file: ${planFilePath}` : "";
           ctx.ui.notify(`Task List:\n${list}${pathInfo}`, "info");
         },
@@ -509,7 +552,7 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
           content: [
             {
               type: "text" as const,
-              text: "Spec captured. Return to AUTO mode to generate or refresh the executable task list.",
+              text: "Spec captured. Review the draft and approve, reject, or edit it before AUTO mode extracts the task list.",
             },
           ],
           details: {},
@@ -521,8 +564,8 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
       name: TASK_LIST_SIGNAL_TOOLS[0],
       label: "Task List Ready",
       description:
-        "Signal that an executable task list is ready and the user must choose what happens next.",
-      promptSnippet: "Signal when the executable task list is ready for user review and choice.",
+        "Signal that an executable task list is ready so modes can persist it and begin execution.",
+      promptSnippet: "Signal when the executable task list is ready.",
       promptGuidelines: [
         "In AUTO mode, call this tool when you have produced an executable task list.",
       ],
@@ -573,7 +616,7 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
           content: [
             {
               type: "text" as const,
-              text: "Task list captured. The system is now waiting for the user's choice. Do not continue until that choice is resolved.",
+              text: "Task list captured. Execution has started.",
             },
           ],
           details: {},
@@ -714,33 +757,43 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
       },
     });
 
-    // ----- Observer: AwaitingChoice async UI -----
-    const awaitingChoiceObserver: StateObserver<ModesState, ModesEvent> = {
-      match: (state) => state._tag === "AwaitingChoice",
-      handler: async (_state, sendIfCurrent, ctx) => {
+    // ----- Observer: SpecReview async UI -----
+    const specReviewObserver: StateObserver<ModesState, ModesEvent> = {
+      match: (state) => state._tag === "SpecReview",
+      handler: async (state, sendIfCurrent, ctx) => {
+        if (state._tag !== "SpecReview") {
+          return;
+        }
         if (!ctx.hasUI) {
-          sendIfCurrent({ _tag: "ChooseExecute" });
+          sendIfCurrent({ _tag: "ApproveSpec" });
           return;
         }
 
-        const choice = await ctx.ui.select("AUTO mode — what next?", [
-          "Execute the task list",
-          "Stay in AUTO mode",
-          "Refine the task list",
+        const choice = await ctx.ui.select("Spec ready — approve, reject, or edit?", [
+          "Approve spec",
+          "Reject spec",
+          "Edit spec",
         ]);
 
-        if (choice?.startsWith("Execute")) {
-          sendIfCurrent({ _tag: "ChooseExecute" });
-        } else if (choice === "Refine the task list") {
-          const refinement = await ctx.ui.editor("Refine the task list:", "");
-          if (refinement?.trim()) {
-            sendIfCurrent({ _tag: "ChooseRefine", refinement: refinement.trim() });
-          } else {
-            sendIfCurrent({ _tag: "ChooseStay" });
-          }
-        } else {
-          sendIfCurrent({ _tag: "ChooseStay" });
+        if (choice === "Approve spec") {
+          sendIfCurrent({ _tag: "ApproveSpec" });
+          return;
         }
+
+        if (choice === "Edit spec") {
+          const edited = await ctx.ui.editor(
+            "Edit spec — describe what should change",
+            `Current spec:\n\n${state.spec.specText}\n\nDescribe the edits you want made:\n`,
+          );
+          if (!edited?.trim()) {
+            sendIfCurrent({ _tag: "RejectSpec" });
+            return;
+          }
+          sendIfCurrent({ _tag: "EditSpec", feedback: edited.trim() });
+          return;
+        }
+
+        sendIfCurrent({ _tag: "RejectSpec" });
       },
     };
 
@@ -756,11 +809,11 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
           tool_call: {
             mode: "reply",
             handle: (state, event) => {
-              if (state._tag === "AwaitingChoice") {
+              if (state._tag === "SpecReview") {
                 return {
                   block: true,
                   reason:
-                    "AUTO mode is waiting for the user's task-list choice. Do not continue with more tools until the choice is resolved.",
+                    "SPEC mode is waiting for the user's spec approval choice. Do not continue with more tools until the choice is resolved.",
                 };
               }
               if (state._tag !== "Spec") return;
@@ -779,18 +832,15 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
             mode: "reply",
             handle: (state, event) => ({
               messages: event.messages.filter((message: any) => {
-                if (message.customType === "modes-context") return false;
-                if (message.customType === "modes-auto-context") return false;
-                if (message.customType === "modes-execution-context") return false;
+                if (message.customType === "modes-context:auto") return false;
+                if (message.customType === "modes-context:spec") return false;
+                if (message.customType === "modes-context:executing") return false;
+                if (message.customType === "modes-context:auto-task-list") return false;
                 if (
                   typeof message.customType === "string" &&
-                  message.customType.startsWith("modes-gate")
-                ) {
-                  return false;
-                }
-                if (
-                  typeof message.customType === "string" &&
-                  message.customType.startsWith("modes-counsel")
+                  message.customType.startsWith("modes-execution:") &&
+                  message.customType !== "modes-execution:start" &&
+                  message.customType !== "modes-execution:complete"
                 ) {
                   return false;
                 }
@@ -816,11 +866,12 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
               if (state._tag === "Auto") {
                 return {
                   message: {
-                    customType: "modes-auto-context",
+                    customType: "modes-context:auto",
                     content: `[AUTO MODE ACTIVE]
 You are in auto mode - normal working mode.
 
 If the request is ready for execution, produce an executable task list and call ${TASK_LIST_SIGNAL_TOOLS[0]}.
+After that tool call, modes will persist the task list and start execution.
 If the request still needs design, scoping, discovery, or a spec before it can become executable, call ${AUTO_SIGNAL_TOOLS[0]} with:
 - prompt: what SPEC mode should clarify or produce
 
@@ -836,7 +887,7 @@ Do not stay in AUTO mode and write a long speculative PRD when the work clearly 
                 const diffBlock = state.diffContext ? buildDiffContextBlock(state.diffContext) : "";
                 return {
                   message: {
-                    customType: "modes-context",
+                    customType: "modes-context:spec",
                     content: `[SPEC MODE ACTIVE]
 You are in spec mode - a read-only exploration mode for safe analysis, PRDs, and specs.
 
@@ -871,7 +922,7 @@ Do NOT attempt to make changes - just describe the spec, then call ${SPEC_SIGNAL
                   : "";
                 return {
                   message: {
-                    customType: "modes-execution-context",
+                    customType: "modes-context:executing",
                     content: `[EXECUTING TASK LIST - Full tool access enabled]
 
 Remaining steps:
@@ -891,60 +942,17 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
 
           session_switch: {
             mode: "fire",
-            toEvent: (): ModesEvent => {
-              pi.events.emit("editor:set-mode", { mode: "auto" });
-              return { _tag: "Reset" };
+            toEvent: (_state, _event, ctx): ModesEvent => {
+              const data = getLatestPersistedModesState(ctx.sessionManager.getEntries());
+              return buildHydrateEvent(data, pi);
             },
           },
 
           session_start: {
             mode: "fire",
             toEvent: (_state, _event, ctx): ModesEvent => {
-              const entries = ctx.sessionManager.getEntries();
-              const modesEntry = entries
-                .filter((entry: any) => entry.type === "custom" && entry.customType === "modes")
-                .pop() as { data?: PersistPayload } | undefined;
-
-              const data = modesEntry?.data;
-              const mode = data?.mode;
-              const pendingData = data?.pending;
-              const rawTodoItems = pendingData?.todoItems ?? data?.todoItems;
-              const todoItems = normalizeHydratedTaskList(
-                Array.isArray(rawTodoItems) ? rawTodoItems : [],
-              );
-              const pending = pendingData
-                ? {
-                    ...pendingData,
-                    todoItems,
-                  }
-                : undefined;
-              const planFilePath = pending?.planFilePath ?? data?.planFilePath ?? null;
-              const savedTools = data?.savedTools ?? null;
-              const currentStep = typeof data?.currentStep === "number" ? data.currentStep : null;
-              const phase =
-                data?.phase === "running" ||
-                data?.phase === "gating" ||
-                data?.phase === "counseling"
-                  ? data.phase
-                  : undefined;
-              const spec = normalizeHydratedSpec(data?.spec);
-              const flagSpec = pi.getFlag("spec") === true;
-              const flagPlan = pi.getFlag("plan") === true;
-
-              return {
-                _tag: "Hydrate",
-                mode,
-                todoItems,
-                planFilePath,
-                savedTools,
-                pending,
-                spec,
-                flagSpec,
-                flagPlan,
-                currentStep,
-                phase,
-                currentTools: pi.getActiveTools(),
-              };
+              const data = getLatestPersistedModesState(ctx.sessionManager.getEntries());
+              return buildHydrateEvent(data, pi);
             },
           },
         },
@@ -959,7 +967,7 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
           },
         ],
 
-        observers: [awaitingChoiceObserver],
+        observers: [specReviewObserver],
 
         flags: [
           {
@@ -973,7 +981,7 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
       interpretEffect,
     );
 
-    pi.on("session_start", async (_event, ctx) => {
+    const restoreSnapshotIfNeeded = async (ctx: ExtensionContext) => {
       const restoredTodoItems = await loadTaskListSnapshot(ctx, cfg.taskListScope).catch(
         () => null,
       );
@@ -981,7 +989,8 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
 
       const state = machine.getState();
       const canRestore =
-        (state._tag === "Auto" && !state.pending) || (state._tag === "Spec" && !state.pending);
+        (state._tag === "Auto" || state._tag === "Spec" || state._tag === "SpecReview") &&
+        (state._tag === "Auto" || !state.pending);
       if (!canRestore) return;
 
       machine.send({
@@ -989,6 +998,14 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
         todoItems: restoredTodoItems,
         currentTools: pi.getActiveTools(),
       });
+    };
+
+    pi.on("session_start", async (_event, ctx) => {
+      await restoreSnapshotIfNeeded(ctx);
+    });
+
+    pi.on("session_switch", async (_event, ctx) => {
+      await restoreSnapshotIfNeeded(ctx);
     });
 
     // ----- /spec command (imperative — async diff context gathering) -----
@@ -1002,7 +1019,7 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
 
         if (
           !prompt &&
-          (state._tag === "Spec" || state._tag === "AwaitingChoice" || state._tag === "Executing")
+          (state._tag === "Spec" || state._tag === "SpecReview" || state._tag === "Executing")
         ) {
           machine.send({ _tag: "Toggle", currentTools });
           return;

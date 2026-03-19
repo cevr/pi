@@ -179,12 +179,12 @@ describe("modes extension", () => {
     const result = await specReady.execute("tc-1", { specText: "# Spec\n\nGoals" });
 
     expect(result.isError).toBeUndefined();
-    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-spec")).toBe(
-      true,
-    );
+    expect(
+      harness.sentMessages.some((entry) => entry.message.customType === "modes-review:spec"),
+    ).toBe(true);
   });
 
-  it("lets AUTO mode escalate into SPEC mode via tool and switches to xhigh thinking", async () => {
+  it("lets AUTO mode escalate into SPEC mode via tool, records a history entry, and switches to xhigh thinking", async () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
 
@@ -211,13 +211,16 @@ describe("modes extension", () => {
       "interview",
       "modes_spec_ready",
     ]);
+    expect(
+      harness.sentMessages.some((entry) => entry.message.customType === "modes-transition:spec"),
+    ).toBe(true);
     expect(harness.sentUserMessages).toContainEqual({
       content: "Write a PRD for the architecture.",
       options: { deliverAs: "followUp" },
     });
   });
 
-  it("hydrates AUTO mode with medium thinking and captures a task list", async () => {
+  it("hydrates AUTO mode with medium thinking and starts execution when a task list is captured", async () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
 
@@ -234,8 +237,12 @@ describe("modes extension", () => {
 
     expect(result.isError).toBeUndefined();
     expect(
-      harness.sentMessages.some((entry) => entry.message.customType === "modes-todo-list"),
+      harness.sentMessages.some((entry) => entry.message.customType === "modes-plan:task-list"),
     ).toBe(true);
+    expect(
+      harness.sentMessages.some((entry) => entry.message.customType === "modes-execution:start"),
+    ).toBe(true);
+    expect(harness.getActiveTools()).toContain("modes_step_done");
   });
 
   it("restores a stored task list on session start when session entries are empty", async () => {
@@ -265,11 +272,12 @@ describe("modes extension", () => {
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(ctx.ui.select).toHaveBeenCalledWith("AUTO mode — what next?", [
-      "Execute the task list",
-      "Stay in AUTO mode",
-      "Refine the task list",
-    ]);
+    expect(ctx.ui.select).not.toHaveBeenCalled();
+    expect(harness.getThinkingLevel()).toBe("medium");
+    expect(
+      harness.sentMessages.some((entry) => entry.message.customType === "modes-execution:start"),
+    ).toBe(true);
+    expect(harness.getActiveTools()).toContain("modes_step_done");
 
     fs.rmSync(cwd, { recursive: true, force: true });
   });
@@ -310,21 +318,21 @@ describe("modes extension", () => {
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(ctx.ui.select).toHaveBeenCalledWith("AUTO mode — what next?", [
-      "Execute the task list",
-      "Stay in AUTO mode",
-      "Refine the task list",
-    ]);
+    expect(ctx.ui.select).not.toHaveBeenCalled();
+    expect(harness.getThinkingLevel()).toBe("medium");
+    expect(
+      harness.sentMessages.some((entry) => entry.message.customType === "modes-execution:start"),
+    ).toBe(true);
+    expect(harness.getActiveTools()).toContain("modes_step_done");
 
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
-  it("blocks further tool calls while awaiting a task-list choice", async () => {
+  it("does not block tool calls after task-list capture because execution begins immediately", async () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
 
     const ctx = harness.createContext();
-    ctx.ui.select = mock(async () => new Promise<undefined>(() => {}));
     harness.getListener("session_start")!.handler({}, ctx);
 
     const taskListReady = harness.getTool("modes_task_list_ready");
@@ -332,7 +340,7 @@ describe("modes extension", () => {
 
     const toolCall = harness.getListener("tool_call");
     const reply = toolCall!.handler({ toolName: "read", input: { path: "/tmp/foo" } }, ctx);
-    expect(reply).toMatchObject({ block: true });
+    expect(reply).toBeUndefined();
   });
 
   it("rejects marking a non-active step done after execution starts", async () => {
@@ -371,7 +379,7 @@ describe("modes extension", () => {
     expect(result.content[0]?.text).toContain("Step 1 is currently active");
   });
 
-  it("restores awaiting choice on session start and auto-executes with no UI", () => {
+  it("hydrates legacy AwaitingChoice sessions into executing mode", () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
       {
@@ -392,12 +400,13 @@ describe("modes extension", () => {
     ]);
     modesExtension(harness.pi);
 
+    const ctx = harness.createContext({ hasUI: false });
     const sessionStart = harness.getListener("session_start");
-    sessionStart!.handler({}, harness.createContext({ hasUI: false }));
+    sessionStart!.handler({}, ctx);
 
-    expect(harness.sentMessages.some((entry) => entry.message.customType === "modes-execute")).toBe(
-      true,
-    );
+    expect(
+      harness.sentMessages.some((entry) => entry.message.customType === "modes-execution:start"),
+    ).toBe(false);
     expect(harness.getActiveTools()).toContain("modes_step_done");
   });
 
