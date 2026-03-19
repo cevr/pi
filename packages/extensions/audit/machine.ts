@@ -853,7 +853,12 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       };
       return {
         state: next,
-        effects: [statusEffectForState(next), visibleMessage(buildAuditPhaseMessage(next)), UI, persist(next)],
+        effects: [
+          statusEffectForState(next),
+          visibleMessage(buildAuditPhaseMessage(next)),
+          UI,
+          persist(next),
+        ],
       };
     }
 
@@ -1010,7 +1015,11 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         return {
           state: next,
           effects: [
-            { type: "notify", message: "audit complete — no actionable findings remain", level: "info" },
+            {
+              type: "notify",
+              message: "audit complete — no actionable findings remain",
+              level: "info",
+            },
             visibleMessage("Audit complete. No actionable findings remain."),
             statusEffectForState(next),
             UI,
@@ -1075,17 +1084,14 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
 
     case "ExecutionFailed": {
       if (state._tag !== "Executing") return { state };
-      const loop = continueAuditLoop(
-        state,
-        [],
-        event.sessionPath ? [event.sessionPath] : [],
-      );
+      const loop = continueAuditLoop(state, [], event.sessionPath ? [event.sessionPath] : []);
       return {
         state: loop.state,
         effects: [
           {
             type: "notify",
-            message: event.message ?? "audit execution ended before audit_execution_result was called",
+            message:
+              event.message ?? "audit execution ended before audit_execution_result was called",
             level: "warning",
           },
           ...loop.effects,
@@ -1156,7 +1162,10 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       }
 
       if (event.mode === "Auditing" && event.scope && (event.concerns?.length ?? 0) > 0) {
-        const concernExecution = getHydratedConcernExecution(event.concerns ?? [], event.concernCursor);
+        const concernExecution = getHydratedConcernExecution(
+          event.concerns ?? [],
+          event.concernCursor,
+        );
         if (!concernExecution) {
           const next: AuditState = { _tag: "Idle" };
           return { state: next, effects: [statusEffectForState(next), UI] };

@@ -127,7 +127,10 @@ describe("modes extension", () => {
   it("registers nothing when disabled by config", () => {
     const harness = createMockExtensionApiHarness();
     const extension = createModesExtension({
-      getEnabledExtensionConfig: <T extends Record<string, unknown>>(_namespace: string, defaults: T) => ({
+      getEnabledExtensionConfig: <T extends Record<string, unknown>>(
+        _namespace: string,
+        defaults: T,
+      ) => ({
         enabled: false,
         config: defaults,
       }),
@@ -255,7 +258,9 @@ describe("modes extension", () => {
         getSessionId: () => "test-session",
       },
     });
-    for (const listener of harness.listeners.filter((listener) => listener.event === "session_start")) {
+    for (const listener of harness.listeners.filter(
+      (listener) => listener.event === "session_start",
+    )) {
       await listener.handler({}, ctx);
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -272,7 +277,10 @@ describe("modes extension", () => {
   it("restores project-scoped task lists across session ids", async () => {
     const harness = createMockExtensionApiHarness();
     const extension = createModesExtension({
-      getEnabledExtensionConfig: <T extends Record<string, unknown>>(_namespace: string, defaults: T) => ({
+      getEnabledExtensionConfig: <T extends Record<string, unknown>>(
+        _namespace: string,
+        defaults: T,
+      ) => ({
         enabled: true,
         config: { ...defaults, taskListScope: "project" },
       }),
@@ -295,7 +303,9 @@ describe("modes extension", () => {
         getSessionId: () => "another-session",
       },
     });
-    for (const listener of harness.listeners.filter((listener) => listener.event === "session_start")) {
+    for (const listener of harness.listeners.filter(
+      (listener) => listener.event === "session_start",
+    )) {
       await listener.handler({}, ctx);
     }
     await new Promise((resolve) => setTimeout(resolve, 0));

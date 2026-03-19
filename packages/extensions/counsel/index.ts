@@ -232,7 +232,8 @@ function classifyCounselFailure(result: PiSpawnResult): CounselFailureKind {
   if (COUNSEL_CONFIG_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return "config";
   if (COUNSEL_INPUT_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return "input";
 
-  const looksTransientByShape = result.stopReason === "error" && result.exitCode !== 0 && !text.trim();
+  const looksTransientByShape =
+    result.stopReason === "error" && result.exitCode !== 0 && !text.trim();
   if (looksTransientByShape) return "transient";
   if (COUNSEL_TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return "transient";
 
@@ -419,7 +420,9 @@ function buildCounselTask(
   }
 
   if (params.files.length > 0) {
-    parts.push(`## Files to Inspect\n${params.files.map((filePath) => `- ${filePath}`).join("\n")}`);
+    parts.push(
+      `## Files to Inspect\n${params.files.map((filePath) => `- ${filePath}`).join("\n")}`,
+    );
   }
 
   if (mode === "full" && params.files.length > 0) {

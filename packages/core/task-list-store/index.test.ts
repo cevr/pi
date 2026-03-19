@@ -44,36 +44,46 @@ describe("TaskListStore", () => {
     const runtime = TaskListStore.runtime({ cwd: "/tmp/work", scope: "memory" });
     const tasks = createTaskList(["First", "Second"]);
 
-    const initial = await runtime.runPromise(Effect.gen(function* () {
-      const store = yield* TaskListStore;
-      return yield* store.load;
-    }));
+    const initial = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskListStore;
+        return yield* store.load;
+      }),
+    );
     expect(Option.isNone(initial)).toBe(true);
 
-    const saved = await runtime.runPromise(Effect.gen(function* () {
-      const store = yield* TaskListStore;
-      return yield* store.save(tasks);
-    }));
+    const saved = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskListStore;
+        return yield* store.save(tasks);
+      }),
+    );
     expect(saved.tasks).toEqual(tasks);
 
-    const loaded = await runtime.runPromise(Effect.gen(function* () {
-      const store = yield* TaskListStore;
-      return yield* store.load;
-    }));
+    const loaded = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskListStore;
+        return yield* store.load;
+      }),
+    );
     expect(Option.isSome(loaded)).toBe(true);
     if (Option.isSome(loaded)) {
       expect(loaded.value.tasks).toEqual(tasks);
     }
 
-    await runtime.runPromise(Effect.gen(function* () {
-      const store = yield* TaskListStore;
-      yield* store.clear;
-    }));
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskListStore;
+        yield* store.clear;
+      }),
+    );
 
-    const cleared = await runtime.runPromise(Effect.gen(function* () {
-      const store = yield* TaskListStore;
-      return yield* store.load;
-    }));
+    const cleared = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskListStore;
+        return yield* store.load;
+      }),
+    );
     expect(Option.isNone(cleared)).toBe(true);
   });
 
@@ -82,19 +92,23 @@ describe("TaskListStore", () => {
     const runtime = TaskListStore.runtime({ cwd, scope: "project" });
     const tasks = createTaskList(["Audit", "Ship"]);
 
-    const saved = await runtime.runPromise(Effect.gen(function* () {
-      const store = yield* TaskListStore;
-      return yield* store.save(tasks);
-    }));
+    const saved = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskListStore;
+        return yield* store.save(tasks);
+      }),
+    );
 
     const filePath = path.join(cwd, ".pi", "modes", "tasks.json");
     expect(fs.existsSync(filePath)).toBe(true);
     expect(saved.tasks).toEqual(tasks);
 
-    const loaded = await runtime.runPromise(Effect.gen(function* () {
-      const store = yield* TaskListStore;
-      return yield* store.load;
-    }));
+    const loaded = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskListStore;
+        return yield* store.load;
+      }),
+    );
     expect(Option.isSome(loaded)).toBe(true);
     if (Option.isSome(loaded)) {
       expect(loaded.value.tasks).toEqual(tasks);
@@ -105,7 +119,11 @@ describe("TaskListStore", () => {
     const cwd = makeTempDir();
     const filePath = path.join(cwd, ".pi", "modes", "tasks.json");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify({ version: 1, updatedAt: "bad", tasks: [] }), "utf-8");
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({ version: 1, updatedAt: "bad", tasks: [] }),
+      "utf-8",
+    );
 
     const runtime = TaskListStore.runtime({ cwd, scope: "project" });
     await expect(

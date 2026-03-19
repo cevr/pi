@@ -104,7 +104,11 @@ describe("skill mentions extension", () => {
           customCalls += 1;
           const component = factory(
             { requestRender() {} },
-            { fg: (_: string, s: string) => s, bg: (_: string, s: string) => s, bold: (s: string) => s },
+            {
+              fg: (_: string, s: string) => s,
+              bg: (_: string, s: string) => s,
+              bold: (s: string) => s,
+            },
             undefined,
             () => {},
           );
@@ -153,7 +157,11 @@ describe("skill mentions extension", () => {
         custom: async (factory: any) => {
           const component = factory(
             { requestRender() {} },
-            { fg: (_: string, s: string) => s, bg: (_: string, s: string) => s, bold: (s: string) => s },
+            {
+              fg: (_: string, s: string) => s,
+              bg: (_: string, s: string) => s,
+              bold: (s: string) => s,
+            },
             undefined,
             () => {},
           );

@@ -1,7 +1,16 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { Mutex, type MutexError } from "@cvr/pi-mutex";
 import type { TaskListItem } from "@cvr/pi-task-list";
-import { Effect, FileSystem, Layer, ManagedRuntime, Option, Path, Schema, ServiceMap } from "effect";
+import {
+  Effect,
+  FileSystem,
+  Layer,
+  ManagedRuntime,
+  Option,
+  Path,
+  Schema,
+  ServiceMap,
+} from "effect";
 import { TaskListStoreDecodeError, TaskListStoreIoError } from "./errors";
 import { resolveTaskListStorePath, type TaskListScope } from "./paths";
 import { PersistedTaskListFromJson, type PersistedTaskList } from "./schema";
@@ -53,7 +62,9 @@ const createMemoryStore = Effect.sync(() => {
   let snapshot: TaskListSnapshot | undefined;
 
   return {
-    load: Effect.sync(() => (snapshot ? Option.some({ ...snapshot, tasks: cloneTasks(snapshot.tasks) }) : Option.none())),
+    load: Effect.sync(() =>
+      snapshot ? Option.some({ ...snapshot, tasks: cloneTasks(snapshot.tasks) }) : Option.none(),
+    ),
     save: (tasks: readonly TaskListItem[]) =>
       Effect.sync(() => {
         snapshot = {
@@ -78,16 +89,16 @@ const createFileStore = Effect.fn("@cvr/pi-task-list-store/service/createFileSto
   const load = mutex.withLock(
     filePath,
     Effect.gen(function* () {
-      const exists = yield* fs.exists(filePath).pipe(
-        Effect.mapError((error) => toIoError(String(error), filePath)),
-      );
+      const exists = yield* fs
+        .exists(filePath)
+        .pipe(Effect.mapError((error) => toIoError(String(error), filePath)));
       if (!exists) {
         return Option.none<TaskListSnapshot>();
       }
 
-      const text = yield* fs.readFileString(filePath).pipe(
-        Effect.mapError((error) => toIoError(String(error), filePath)),
-      );
+      const text = yield* fs
+        .readFileString(filePath)
+        .pipe(Effect.mapError((error) => toIoError(String(error), filePath)));
       const persisted = yield* decodePersistedTaskList(text).pipe(
         Effect.mapError((error) => toDecodeError(String(error), filePath)),
       );
@@ -106,15 +117,15 @@ const createFileStore = Effect.fn("@cvr/pi-task-list-store/service/createFileSto
           Effect.mapError((error) => toDecodeError(String(error), filePath)),
         );
 
-        yield* fs.makeDirectory(dirPath, { recursive: true }).pipe(
-          Effect.mapError((error) => toIoError(String(error), dirPath)),
-        );
-        yield* fs.writeFileString(tempPath, text).pipe(
-          Effect.mapError((error) => toIoError(String(error), tempPath)),
-        );
-        yield* fs.rename(tempPath, filePath).pipe(
-          Effect.mapError((error) => toIoError(String(error), filePath)),
-        );
+        yield* fs
+          .makeDirectory(dirPath, { recursive: true })
+          .pipe(Effect.mapError((error) => toIoError(String(error), dirPath)));
+        yield* fs
+          .writeFileString(tempPath, text)
+          .pipe(Effect.mapError((error) => toIoError(String(error), tempPath)));
+        yield* fs
+          .rename(tempPath, filePath)
+          .pipe(Effect.mapError((error) => toIoError(String(error), filePath)));
 
         return toSnapshot(persisted);
       }),
@@ -123,11 +134,13 @@ const createFileStore = Effect.fn("@cvr/pi-task-list-store/service/createFileSto
   const clear = mutex.withLock(
     filePath,
     Effect.gen(function* () {
-      const exists = yield* fs.exists(filePath).pipe(
-        Effect.mapError((error) => toIoError(String(error), filePath)),
-      );
+      const exists = yield* fs
+        .exists(filePath)
+        .pipe(Effect.mapError((error) => toIoError(String(error), filePath)));
       if (!exists) return;
-      yield* fs.remove(filePath).pipe(Effect.mapError((error) => toIoError(String(error), filePath)));
+      yield* fs
+        .remove(filePath)
+        .pipe(Effect.mapError((error) => toIoError(String(error), filePath)));
     }),
   );
 
@@ -149,7 +162,10 @@ export class TaskListStore extends ServiceMap.Service<
     >;
     readonly save: (
       tasks: readonly TaskListItem[],
-    ) => Effect.Effect<TaskListSnapshot, TaskListStoreIoError | TaskListStoreDecodeError | MutexError>;
+    ) => Effect.Effect<
+      TaskListSnapshot,
+      TaskListStoreIoError | TaskListStoreDecodeError | MutexError
+    >;
     readonly clear: Effect.Effect<void, TaskListStoreIoError | MutexError>;
   }
 >()("@cvr/pi/task-list-store/service/TaskListStore") {

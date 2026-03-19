@@ -189,7 +189,9 @@ describe("auditReducer — Start", () => {
     const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
     expect(turns).toHaveLength(1);
     expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
-    expect(getEffect<AuditEffect & { type: "runDetection" }>(r.effects, "runDetection")?.state).toMatchObject({
+    expect(
+      getEffect<AuditEffect & { type: "runDetection" }>(r.effects, "runDetection")?.state,
+    ).toMatchObject({
       _tag: "Detecting",
       userPrompt: "check react",
     });
@@ -294,12 +296,17 @@ describe("auditReducer — concern approval", () => {
     if (r.state._tag === "Detecting") {
       expect(r.state.detectionFeedback).toBe("merge correctness into architecture");
     }
-    expect(getEffect<AuditEffect & { type: "runDetection" }>(r.effects, "runDetection")?.state).toMatchObject({
+    expect(
+      getEffect<AuditEffect & { type: "runDetection" }>(r.effects, "runDetection")?.state,
+    ).toMatchObject({
       _tag: "Detecting",
       detectionFeedback: "merge correctness into architecture",
     });
     const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
-    expect(turns.at(0)?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
+    expect(turns.at(0)?.request).toMatchObject({
+      customType: "audit-progress",
+      triggerTurn: false,
+    });
   });
 });
 
@@ -391,7 +398,9 @@ describe("auditReducer — ConcernAudited", () => {
     const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
     expect(turns).toHaveLength(1);
     expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
-    expect(getEffect<AuditEffect & { type: "runSynthesis" }>(r.effects, "runSynthesis")?.state).toMatchObject({
+    expect(
+      getEffect<AuditEffect & { type: "runSynthesis" }>(r.effects, "runSynthesis")?.state,
+    ).toMatchObject({
       _tag: "Synthesizing",
     });
   });
@@ -502,7 +511,9 @@ describe("auditReducer — Hydrate", () => {
       previousConcernSessionPaths: [],
       previousExecutionSessionPaths: [],
     });
-    expect(getEffect<AuditEffect & { type: "runDetection" }>(result.effects, "runDetection")?.state).toMatchObject({
+    expect(
+      getEffect<AuditEffect & { type: "runDetection" }>(result.effects, "runDetection")?.state,
+    ).toMatchObject({
       _tag: "Detecting",
       userPrompt: "focus on correctness",
     });
@@ -562,11 +573,12 @@ describe("auditReducer — Hydrate", () => {
       iteration: 1,
       maxIterations: 5,
     });
-    expect(getEffect<AuditEffect & { type: "runSynthesis" }>(result.effects, "runSynthesis")?.state).toMatchObject({
+    expect(
+      getEffect<AuditEffect & { type: "runSynthesis" }>(result.effects, "runSynthesis")?.state,
+    ).toMatchObject({
       _tag: "Synthesizing",
     });
   });
-
 });
 
 // ---------------------------------------------------------------------------
@@ -602,7 +614,9 @@ describe("auditReducer — self-healing loop", () => {
       sessionPath: "/tmp/audit-2.jsonl",
     });
     expect(r.state._tag).toBe("Synthesizing");
-    expect(getEffect<AuditEffect & { type: "runSynthesis" }>(r.effects, "runSynthesis")?.state).toMatchObject({
+    expect(
+      getEffect<AuditEffect & { type: "runSynthesis" }>(r.effects, "runSynthesis")?.state,
+    ).toMatchObject({
       _tag: "Synthesizing",
     });
   });
@@ -613,7 +627,10 @@ describe("auditReducer — self-healing loop", () => {
       _tag: "Executing",
       findings: FINDINGS,
     } as any;
-    const r = auditReducer(executing, { _tag: "ExecutionComplete", sessionPath: "/tmp/exec-1.jsonl" });
+    const r = auditReducer(executing, {
+      _tag: "ExecutionComplete",
+      sessionPath: "/tmp/exec-1.jsonl",
+    });
     expect(r.state._tag).toBe("Auditing");
     if (r.state._tag === "Auditing") {
       expect(r.state.iteration).toBe(2);
@@ -657,7 +674,9 @@ describe("auditReducer — self-healing loop", () => {
     });
 
     expect(result.state._tag).toBe("Executing");
-    expect(getEffect<AuditEffect & { type: "runExecution" }>(result.effects, "runExecution")?.state).toMatchObject({
+    expect(
+      getEffect<AuditEffect & { type: "runExecution" }>(result.effects, "runExecution")?.state,
+    ).toMatchObject({
       _tag: "Executing",
       iteration: 2,
     });
@@ -695,8 +714,12 @@ describe("auditReducer — self-healing loop", () => {
     if (afterExecution.state._tag === "Auditing") {
       expect(afterExecution.state.iteration).toBe(2);
       expect(afterExecution.state.previousExecutionSessionPaths).toEqual(["/tmp/exec-1.jsonl"]);
-      expect(afterExecution.state.concerns.every((concern) => concern.metadata.notes === undefined)).toBe(true);
-      expect(afterExecution.state.concerns.some((concern) => concern.status === "in_progress")).toBe(true);
+      expect(
+        afterExecution.state.concerns.every((concern) => concern.metadata.notes === undefined),
+      ).toBe(true);
+      expect(
+        afterExecution.state.concerns.some((concern) => concern.status === "in_progress"),
+      ).toBe(true);
     }
 
     const secondPassState = afterExecution.state;

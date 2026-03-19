@@ -48,7 +48,10 @@ function makeAssistantResult(text: string): PiSpawnResult {
   };
 }
 
-function makeFailedResult(errorMessage: string, overrides: Partial<PiSpawnResult> = {}): PiSpawnResult {
+function makeFailedResult(
+  errorMessage: string,
+  overrides: Partial<PiSpawnResult> = {},
+): PiSpawnResult {
   return {
     exitCode: 1,
     messages: [{ role: "assistant", content: [{ type: "text", text: errorMessage }] } as any],
@@ -597,7 +600,9 @@ describe("createCounselTool", () => {
 
       expect(calls).toHaveLength(2);
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("request-shaping failure in the spawned counsel call");
+      expect(result.content[0].text).toContain(
+        "request-shaping failure in the spawned counsel call",
+      );
       expect(result.content[0].text).toContain("Do not skip counsel");
     } finally {
       await runtime.dispose();

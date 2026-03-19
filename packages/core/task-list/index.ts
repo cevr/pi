@@ -49,7 +49,7 @@ export const TaskGraphValidationIssueSchema = Schema.Union([
     type: Schema.Literal("cycle"),
     taskIds: Schema.optional(Schema.Array(Schema.String)),
   }),
-]); 
+]);
 
 export function createTaskList(subjects: readonly string[]): TaskListItem[] {
   return subjects.map((subject, index) => ({

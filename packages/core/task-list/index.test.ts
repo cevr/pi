@@ -19,9 +19,9 @@ import {
 
 describe("schemas", () => {
   it("decodes task statuses and task items", async () => {
-    await expect(Effect.runPromise(Schema.decodeUnknownEffect(TaskListStatusSchema)("pending"))).resolves.toBe(
-      "pending",
-    );
+    await expect(
+      Effect.runPromise(Schema.decodeUnknownEffect(TaskListStatusSchema)("pending")),
+    ).resolves.toBe("pending");
     await expect(
       Effect.runPromise(
         Schema.decodeUnknownEffect(TaskListItemSchema)({
