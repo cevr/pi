@@ -11,3 +11,5 @@ pre-commit:
       run: bun run typecheck
     - name: test
       run: bun run test
+    - name: build
+      run: bun run build
