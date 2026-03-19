@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it, mock } from "bun:test";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Effect, Layer, ManagedRuntime } from "effect";
@@ -43,6 +46,27 @@ function makeAssistantResult(text: string): PiSpawnResult {
     usage: zeroUsage(),
     stopReason: "stop",
   };
+}
+
+function makeFailedResult(errorMessage: string, overrides: Partial<PiSpawnResult> = {}): PiSpawnResult {
+  return {
+    exitCode: 1,
+    messages: [{ role: "assistant", content: [{ type: "text", text: errorMessage }] } as any],
+    stderr: "",
+    usage: zeroUsage(),
+    stopReason: "error",
+    errorMessage,
+    ...overrides,
+  };
+}
+
+async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "counsel-test-"));
+  try {
+    return await run(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function makeCtx(overrides: Record<string, unknown> = {}) {
@@ -353,6 +377,120 @@ describe("createCounselTool", () => {
       expect(result.isError).toBeUndefined();
       expect(result.content[0].text).toContain("Session: ");
       expect(result.content[0].text).not.toContain("Detailed review body.");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("rejects empty prompts with an actionable retry message", async () => {
+    const runtime = createRuntime(() => {
+      throw new Error("should not spawn when prompt is empty");
+    });
+
+    try {
+      const tool = createCounselTool({}, runtime, () => "");
+      const result = await (tool as any).execute(
+        "call-1",
+        { prompt: "   " },
+        undefined,
+        undefined,
+        makeCtx(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Counsel prompt must be non-empty");
+      expect(result.content[0].text).toContain("Do not skip counsel");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("retries once with a reduced prompt when the first attempt fails with malformed input", async () => {
+    await withTempDir(async (dir) => {
+      const relativeFile = "review-target.ts";
+      fs.writeFileSync(path.join(dir, relativeFile), "export const answer = 42;\n", "utf-8");
+      const calls: PiSpawnConfig[] = [];
+      const runtime = createRuntime((config) => {
+        calls.push(config);
+        return calls.length === 1
+          ? makeFailedResult("invalid input: malformed request body")
+          : makeAssistantResult("Approve");
+      });
+
+      try {
+        const tool = createCounselTool({}, runtime, () => "");
+        const result = await (tool as any).execute(
+          "call-1",
+          { prompt: "Review this change.", files: [relativeFile] },
+          undefined,
+          undefined,
+          makeCtx({ cwd: dir }),
+        );
+
+        expect(calls).toHaveLength(2);
+        expect(calls[0]!.task).toContain("## Inline File Context");
+        expect(calls[0]!.task).toContain("export const answer = 42;");
+        expect(calls[1]!.task).toContain("## Reliability Mode");
+        expect(calls[1]!.task).not.toContain("export const answer = 42;");
+        expect(result.isError).toBeUndefined();
+        expect(result.content[0].text).toBe(`Session: ${calls[1]!.sessionPath}`);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+  });
+
+  it("does not retry config failures and returns an agent-usable next step", async () => {
+    const calls: PiSpawnConfig[] = [];
+    const runtime = createRuntime((config) => {
+      calls.push(config);
+      return makeFailedResult("unauthorized: invalid api key");
+    });
+
+    try {
+      const tool = createCounselTool({}, runtime, () => "");
+      const result = await (tool as any).execute(
+        "call-1",
+        { prompt: "Review this change." },
+        undefined,
+        undefined,
+        makeCtx(),
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Counsel failed after 1 attempt");
+      expect(result.content[0].text).toContain("Fix the counsel model or provider configuration");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("returns a retry-oriented failure message after both attempts fail", async () => {
+    const calls: PiSpawnConfig[] = [];
+    const runtime = createRuntime((config) => {
+      calls.push(config);
+      return makeFailedResult(
+        calls.length === 1 ? "invalid input: malformed request body" : "still malformed",
+      );
+    });
+
+    try {
+      const tool = createCounselTool({}, runtime, () => "");
+      const result = await (tool as any).execute(
+        "call-1",
+        { prompt: "Review this change." },
+        undefined,
+        undefined,
+        makeCtx(),
+      );
+
+      expect(calls).toHaveLength(2);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Counsel failed after 2 attempts");
+      expect(result.content[0].text).toContain("Do not skip counsel");
+      expect(result.content[0].text).toContain(String(calls[0]!.sessionPath));
+      expect(result.content[0].text).toContain(String(calls[1]!.sessionPath));
     } finally {
       await runtime.dispose();
     }

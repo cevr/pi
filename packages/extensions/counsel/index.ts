@@ -19,7 +19,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 // @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+  ToolExecutionResult,
+} from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
@@ -218,6 +223,61 @@ function getSpawnErrorText(result: PiSpawnResult): string {
   return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "";
 }
 
+function classifyCounselFailure(text: string): "input" | "transient" | "config" | "other" {
+  if (COUNSEL_INPUT_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return "input";
+  if (COUNSEL_TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return "transient";
+  if (COUNSEL_CONFIG_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return "config";
+  return "other";
+}
+
+function shouldRetryCounsel(result: PiSpawnResult, mode: CounselAttempt["mode"]): boolean {
+  if (mode !== "full") return false;
+  if (result.stopReason === "aborted") return false;
+  const failureText = getSpawnErrorText(result);
+  const classification = classifyCounselFailure(failureText);
+  return classification === "input" || classification === "transient";
+}
+
+function summarizeCounselFailure(result: PiSpawnResult): string {
+  const text = getSpawnErrorText(result).trim() || "(no error details)";
+  const firstLine = text.split(/\r?\n/).find((line) => line.trim().length > 0) ?? text;
+  return firstLine.length > 240 ? `${firstLine.slice(0, 240)}…` : firstLine;
+}
+
+function buildCounselFailureResult(
+  singleResult: SingleResult,
+  attempts: readonly CounselAttemptResult[],
+): ToolExecutionResult {
+  const latestAttempt = attempts.at(-1);
+  const latestResult = latestAttempt?.result;
+  const latestText = latestResult ? getSpawnErrorText(latestResult) : "";
+  const classification = classifyCounselFailure(latestText);
+  const nextStep =
+    classification === "config"
+      ? "Fix the counsel model or provider configuration, then call counsel again."
+      : classification === "input"
+        ? "Do not skip counsel. Retry the counsel tool with a narrower prompt/context and fewer files. Prefer file paths the reviewer can read directly over large pasted content."
+        : classification === "transient"
+          ? "Do not skip counsel. Retry the counsel tool once more. If it still fails, narrow the request and try again."
+          : "Do not skip counsel. Retry the counsel tool with a narrower prompt or fewer files, then inspect the failed session if it still breaks.";
+
+  const attemptLines = attempts.map(
+    (attempt, index) =>
+      `- attempt ${index + 1} (${attempt.mode}) — ${summarizeCounselFailure(attempt.result)}\n  session: ${attempt.sessionPath}`,
+  );
+
+  return subAgentResult(
+    [
+      `Counsel failed after ${attempts.length} attempt${attempts.length === 1 ? "" : "s"}.`,
+      ...attemptLines,
+      "",
+      `Next step: ${nextStep}`,
+    ].join("\n"),
+    singleResult,
+    true,
+  );
+}
+
 // --- tool ---
 
 interface CounselParams {
@@ -227,25 +287,149 @@ interface CounselParams {
   principles?: boolean;
 }
 
-function inlineFileForPrompt(filePath: string, cwd: string): string {
-  const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+interface NormalizedCounselParams {
+  prompt: string;
+  context?: string;
+  files: string[];
+  principles?: boolean;
+}
+
+interface CounselAttempt {
+  sessionPath: string;
+  task: string;
+  mode: "full" | "fallback";
+}
+
+interface CounselAttemptResult extends CounselAttempt {
+  result: PiSpawnResult;
+}
+
+const MAX_FILES = 12;
+const MAX_INLINE_FILE_COUNT = 3;
+const MAX_INLINE_FILE_BYTES = 12_000;
+const MAX_CONTEXT_LENGTH = 8_000;
+const MAX_PROMPT_LENGTH = 8_000;
+
+const COUNSEL_INPUT_ERROR_PATTERNS = [
+  /malformed/i,
+  /invalid input/i,
+  /invalid request/i,
+  /request body/i,
+  /json/i,
+  /parse/i,
+  /messages?\[/i,
+  /content\[/i,
+  /expected .*string/i,
+  /context length/i,
+  /context window/i,
+  /too large/i,
+  /too many tokens/i,
+  /maximum context/i,
+  /prompt is too long/i,
+];
+
+const COUNSEL_TRANSIENT_ERROR_PATTERNS = [
+  /timeout/i,
+  /timed out/i,
+  /rate limit/i,
+  /temporar/i,
+  /try again/i,
+  /overloaded/i,
+  /unavailable/i,
+  /gateway/i,
+  /connection reset/i,
+  /econnreset/i,
+  /socket hang up/i,
+  /network/i,
+];
+
+const COUNSEL_CONFIG_ERROR_PATTERNS = [
+  /api key/i,
+  /unauthorized/i,
+  /forbidden/i,
+  /authentication/i,
+  /auth/i,
+  /permission/i,
+  /model .* not found/i,
+  /unknown model/i,
+];
+
+function trimToLength(text: string | undefined, maxLength: number): string | undefined {
+  const value = text?.trim();
+  if (!value) return undefined;
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength).trimEnd()}\n\n[truncated for counsel reliability]`;
+}
+
+function normalizeCounselParams(params: CounselParams): NormalizedCounselParams {
+  const prompt = trimToLength(params.prompt, MAX_PROMPT_LENGTH) ?? "";
+  const files = [...new Set((params.files ?? []).map((file) => file.trim()).filter(Boolean))].slice(
+    0,
+    MAX_FILES,
+  );
+  return {
+    prompt,
+    context: trimToLength(params.context, MAX_CONTEXT_LENGTH),
+    files,
+    principles: params.principles,
+  };
+}
+
+function resolveCounselFilePath(filePath: string, cwd: string): string {
+  return path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+}
+
+function buildInlineFileSection(filePath: string, cwd: string): string | null {
+  const resolved = resolveCounselFilePath(filePath, cwd);
   try {
     const content = fs.readFileSync(resolved, "utf-8");
-    return `\nFile: ${filePath}\n\`\`\`\n${content}\n\`\`\``;
+    if (content.includes("\u0000")) {
+      return `### File: ${filePath}\n(binary or unsupported text — read directly if needed)`;
+    }
+    if (Buffer.byteLength(content, "utf-8") > MAX_INLINE_FILE_BYTES) {
+      return `### File: ${filePath}\n(not inlined — file is too large; read it directly if needed)`;
+    }
+    return `### File: ${filePath}\n\`\`\`\n${content}\n\`\`\``;
   } catch {
-    return `\nFile: ${filePath} (could not read)`;
+    return `### File: ${filePath}\n(could not read — verify the path before retrying counsel)`;
   }
 }
 
-function buildCounselTask(params: CounselParams, cwd: string): string {
-  const parts: string[] = [params.prompt];
-  if (params.context) parts.push(`\nContext: ${params.context}`);
-  if (params.files && params.files.length > 0) {
-    for (const filePath of params.files) {
-      parts.push(inlineFileForPrompt(filePath, cwd));
+function buildCounselTask(
+  params: NormalizedCounselParams,
+  cwd: string,
+  mode: CounselAttempt["mode"],
+): string {
+  const parts = [`## Review Request\n${params.prompt}`];
+
+  if (params.context) {
+    parts.push(`## Context\n${params.context}`);
+  }
+
+  if (params.files.length > 0) {
+    parts.push(`## Files to Inspect\n${params.files.map((filePath) => `- ${filePath}`).join("\n")}`);
+  }
+
+  if (mode === "full" && params.files.length > 0) {
+    const inlineSections = params.files
+      .slice(0, MAX_INLINE_FILE_COUNT)
+      .map((filePath) => buildInlineFileSection(filePath, cwd))
+      .filter((section): section is string => Boolean(section));
+    if (inlineSections.length > 0) {
+      parts.push(
+        "## Inline File Context\nSmall files are inlined below. For anything omitted or too large, read the files directly.\n\n" +
+          inlineSections.join("\n\n"),
+      );
     }
   }
-  return parts.join("\n");
+
+  if (mode === "fallback") {
+    parts.push(
+      "## Reliability Mode\nThe previous counsel attempt failed. Read the listed files directly instead of relying on inlined file contents. Keep the review concise and grounded in explicit file references.",
+    );
+  }
+
+  return parts.join("\n\n");
 }
 
 function buildCounselSystemPrompt(
@@ -321,7 +505,8 @@ export function createCounselTool(
       ),
       files: Type.Optional(
         Type.Array(Type.String(), {
-          description: "File paths to inline in the review request.",
+          description:
+            "File paths to prioritize in the review request. Small files may be inlined; larger files are listed for the reviewer to read directly.",
         }),
       ),
       principles: Type.Optional(
@@ -333,7 +518,23 @@ export function createCounselTool(
     }),
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const p = params as CounselParams;
+      const p = normalizeCounselParams(params as CounselParams);
+
+      const singleResult: SingleResult = {
+        agent: "counsel",
+        task: p.prompt || "(empty counsel prompt)",
+        exitCode: -1,
+        messages: [],
+        usage: zeroUsage(),
+      };
+
+      if (!p.prompt) {
+        return subAgentResult(
+          "Counsel prompt must be non-empty. Do not skip counsel — call the counsel tool again with a specific review request.",
+          singleResult,
+          true,
+        );
+      }
 
       const oppositeModel = resolveOppositeModel(ctx, {
         model: config.model ?? "",
@@ -345,7 +546,7 @@ export function createCounselTool(
           "Could not determine the opposite model. Current model metadata was ambiguous: " +
             `${formatParentModelMetadata(ctx.model)}. ` +
             "Configure @cvr/pi-counsel.model or oppositeModels in settings.",
-          { agent: "counsel", task: p.prompt, exitCode: 1, messages: [], usage: zeroUsage() },
+          { ...singleResult, task: p.prompt, exitCode: 1 },
           true,
         );
       }
@@ -357,72 +558,81 @@ export function createCounselTool(
         /* graceful */
       }
 
-      const fullTask = buildCounselTask(p, ctx.cwd);
       const systemPrompt = buildCounselSystemPrompt(config, p.principles, readPrinciplesFn);
-
-      const singleResult: SingleResult = {
-        agent: "counsel",
-        task: p.prompt,
-        exitCode: -1,
-        messages: [],
-        usage: zeroUsage(),
-      };
-
-      const counselSessionPath = generateCounselSessionPath();
+      const attempts: CounselAttempt[] = [
+        {
+          mode: "full",
+          task: buildCounselTask(p, ctx.cwd, "full"),
+          sessionPath: generateCounselSessionPath(),
+        },
+        {
+          mode: "fallback",
+          task: buildCounselTask(p, ctx.cwd, "fallback"),
+          sessionPath: generateCounselSessionPath(),
+        },
+      ];
 
       return runtime.runPromise(
         Effect.gen(function* () {
           const svc = yield* PiSpawnService;
-          // keep counsel single-shot + token-efficient: persist the full transcript,
-          // return only the session path, let the caller read the session if needed.
-          const result = yield* svc.spawn({
-            cwd: ctx.cwd,
-            task: fullTask,
-            model: oppositeModel,
-            builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
-            extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
-            systemPromptBody: systemPrompt,
-            signal,
-            sessionId,
-            sessionPath: counselSessionPath,
-            onUpdate: (partial) => {
-              singleResult.messages = partial.messages;
-              singleResult.usage = partial.usage;
-              singleResult.model = partial.model;
-              singleResult.stopReason = partial.stopReason;
-              singleResult.errorMessage = partial.errorMessage;
-              if (onUpdate) {
-                onUpdate({
-                  content: [
-                    {
-                      type: "text",
-                      text: `Session: ${counselSessionPath}`,
-                    },
-                  ],
-                  details: singleResult,
-                } as any);
-              }
-            },
-          });
+          const attemptResults: CounselAttemptResult[] = [];
 
-          singleResult.exitCode = result.exitCode;
-          singleResult.messages = result.messages;
-          singleResult.usage = result.usage;
-          singleResult.model = result.model;
-          singleResult.stopReason = result.stopReason;
-          singleResult.errorMessage = result.errorMessage;
+          for (const attempt of attempts) {
+            const result = yield* svc.spawn({
+              cwd: ctx.cwd,
+              task: attempt.task,
+              model: oppositeModel,
+              builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
+              extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
+              systemPromptBody: systemPrompt,
+              signal,
+              sessionId,
+              sessionPath: attempt.sessionPath,
+              onUpdate: (partial) => {
+                singleResult.messages = partial.messages;
+                singleResult.usage = partial.usage;
+                singleResult.model = partial.model;
+                singleResult.stopReason = partial.stopReason;
+                singleResult.errorMessage = partial.errorMessage;
+                if (onUpdate) {
+                  onUpdate({
+                    content: [
+                      {
+                        type: "text",
+                        text:
+                          attempt.mode === "full"
+                            ? `Session: ${attempt.sessionPath}`
+                            : `Retrying counsel with reduced prompt. Session: ${attempt.sessionPath}`,
+                      },
+                    ],
+                    details: singleResult,
+                  } as any);
+                }
+              },
+            });
 
-          const isError =
-            result.exitCode !== 0 ||
-            result.stopReason === "error" ||
-            result.stopReason === "aborted";
-          const output = getFinalOutput(result.messages) || "(no output)";
+            singleResult.exitCode = result.exitCode;
+            singleResult.messages = result.messages;
+            singleResult.usage = result.usage;
+            singleResult.model = result.model;
+            singleResult.stopReason = result.stopReason;
+            singleResult.errorMessage = result.errorMessage;
+            attemptResults.push({ ...attempt, result });
 
-          if (isError) {
-            return subAgentResult(getSpawnErrorText(result) || output, singleResult, true);
+            const isError =
+              result.exitCode !== 0 ||
+              result.stopReason === "error" ||
+              result.stopReason === "aborted";
+            if (!isError) {
+              return subAgentResult(`Session: ${attempt.sessionPath}`, singleResult);
+            }
+
+            if (!shouldRetryCounsel(result, attempt.mode)) {
+              return buildCounselFailureResult(singleResult, attemptResults);
+            }
           }
 
-          return subAgentResult(`Session: ${counselSessionPath}`, singleResult);
+          return buildCounselFailureResult(singleResult, attemptResults);
         }),
       );
     },
