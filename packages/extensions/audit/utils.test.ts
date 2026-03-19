@@ -4,9 +4,7 @@ import {
   AUDIT_SIGNAL_TOOLS,
   hasToolCall,
   parseConcernCompletion,
-  parseCounselResult,
-  parseFindingResult,
-  parseGateResult,
+  parseExecutionResult,
   parseSynthesisComplete,
 } from "./utils";
 
@@ -87,36 +85,18 @@ describe("audit transcript signal parsing", () => {
     expect(parseSynthesisComplete(messages)).toBeNull();
   });
 
-  it("parses finding, gate, and counsel outcomes", () => {
+  it("parses execution outcomes", () => {
     const messages: Message[] = [
-      assistantMessage(
-        {
-          type: "toolCall",
-          id: "tc-5",
-          name: AUDIT_SIGNAL_TOOLS.findingResult,
-          arguments: { outcome: "skip" },
-        } as any,
-        {
-          type: "toolCall",
-          id: "tc-6",
-          name: AUDIT_SIGNAL_TOOLS.fixGateResult,
-          arguments: { status: "pass" },
-        } as any,
-        {
-          type: "toolCall",
-          id: "tc-7",
-          name: AUDIT_SIGNAL_TOOLS.fixCounselResult,
-          arguments: { status: "fail" },
-        } as any,
-      ),
+      assistantMessage({
+        type: "toolCall",
+        id: "tc-5",
+        name: AUDIT_SIGNAL_TOOLS.executionResult,
+        arguments: { outcome: "skip" },
+      } as any),
       toolResult("tc-5"),
-      toolResult("tc-6"),
-      toolResult("tc-7"),
     ];
 
-    expect(parseFindingResult(messages)).toBe("skip");
-    expect(parseGateResult(messages)).toBe("pass");
-    expect(parseCounselResult(messages)).toBe("fail");
+    expect(parseExecutionResult(messages)).toBe("skip");
   });
 
   it("ignores tool calls whose result errored", () => {
@@ -124,13 +104,13 @@ describe("audit transcript signal parsing", () => {
       assistantMessage({
         type: "toolCall",
         id: "tc-8",
-        name: AUDIT_SIGNAL_TOOLS.findingResult,
-        arguments: { outcome: "fixed" },
+        name: AUDIT_SIGNAL_TOOLS.executionResult,
+        arguments: { outcome: "completed" },
       } as any),
       toolResult("tc-8", true),
     ];
 
-    expect(hasToolCall(messages, AUDIT_SIGNAL_TOOLS.findingResult)).toBe(false);
-    expect(parseFindingResult(messages)).toBeNull();
+    expect(hasToolCall(messages, AUDIT_SIGNAL_TOOLS.executionResult)).toBe(false);
+    expect(parseExecutionResult(messages)).toBeNull();
   });
 });

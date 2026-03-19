@@ -1,14 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import type { ExecutionEffect } from "@cvr/pi-execution";
 import {
-  MAX_CONCERNS,
   auditReducer,
   type AuditConcern,
   type AuditConcernTask,
   type AuditEffect,
   type AuditFinding,
   type AuditState,
-  type FixPhase,
   type PersistPayload,
   type SkillCatalogEntry,
 } from "./machine";
@@ -49,7 +47,12 @@ function detecting(userPrompt = "", scope: "diff" | "paths" = "diff"): AuditStat
     targetPaths: ["src/app.tsx", "src/lib.ts"],
     skillCatalog: CATALOG,
     userPrompt,
+    detectionFeedback: undefined,
     previousThinkingLevel: "medium",
+    iteration: 1,
+    maxIterations: 5,
+    previousConcernSessionPaths: [],
+    previousExecutionSessionPaths: [],
   };
 }
 
@@ -90,7 +93,12 @@ function awaitingConcernApproval(
     targetPaths: ["src/app.tsx", "src/lib.ts"],
     skillCatalog: CATALOG,
     userPrompt: "",
+    detectionFeedback: undefined,
     previousThinkingLevel: "medium",
+    iteration: 1,
+    maxIterations: 5,
+    previousConcernSessionPaths: [],
+    previousExecutionSessionPaths: [],
   };
 }
 
@@ -107,20 +115,33 @@ function auditing(
     targetPaths: ["src/app.tsx", "src/lib.ts"],
     userPrompt: "",
     cursor: createConcernCursor(currentConcern, concerns.length),
+    iteration: 1,
+    maxIterations: 5,
+    previousConcernSessionPaths: [],
+    previousExecutionSessionPaths: [],
   };
 }
 
 function synthesizing(concerns = createConcernTasks(CONCERNS, CONCERNS.length)): AuditState {
-  return { _tag: "Synthesizing", concerns, userPrompt: "" };
+  return {
+    _tag: "Synthesizing",
+    concerns,
+    scope: "diff",
+    diffStat: " 3 files changed",
+    targetPaths: ["src/app.tsx", "src/lib.ts"],
+    userPrompt: "",
+    iteration: 1,
+    maxIterations: 5,
+    previousConcernSessionPaths: [],
+    previousExecutionSessionPaths: [],
+  };
 }
 
-function fixing(findings = FINDINGS, currentFinding = 0, phase: FixPhase = "running"): AuditState {
+function fixing(findings = FINDINGS): any {
   return {
-    _tag: "Fixing",
-    concerns: createConcernTasks(CONCERNS, CONCERNS.length),
+    _tag: "Executing",
+    ...auditing(),
     findings,
-    currentFinding,
-    phase,
   };
 }
 
@@ -148,7 +169,7 @@ function getPersistPayload(effects: readonly Effect[] | undefined): PersistPaylo
 // ---------------------------------------------------------------------------
 
 describe("auditReducer — Start", () => {
-  it("Idle → Detecting with trigger + status + UI", () => {
+  it("Idle → Detecting with runDetection + status + UI", () => {
     const r = auditReducer(idle(), {
       _tag: "Start",
       scope: "diff",
@@ -164,14 +185,14 @@ describe("auditReducer — Start", () => {
       expect(r.state.targetPaths).toEqual(["a.ts", "b.tsx"]);
       expect(r.state.userPrompt).toBe("check react");
     }
-    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
-      level: "xhigh",
-    });
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
     const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
-    expect(turns).toHaveLength(2);
+    expect(turns).toHaveLength(1);
     expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
-    expect(turns[1]?.request).toMatchObject({ customType: "audit-trigger", triggerTurn: true });
+    expect(getEffect<AuditEffect & { type: "runDetection" }>(r.effects, "runDetection")?.state).toMatchObject({
+      _tag: "Detecting",
+      userPrompt: "check react",
+    });
     expect(hasEffect(r.effects, "updateUI")).toBe(true);
     expect(getPersistPayload(r.effects)).toMatchObject({
       mode: "Detecting",
@@ -211,9 +232,6 @@ describe("auditReducer — ConcernsProposed", () => {
       expect(r.state.concerns).toEqual(CONCERNS);
       expect(r.state.userPrompt).toBe("check react");
     }
-    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
-      level: "medium",
-    });
     const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
     expect(turns).toHaveLength(1);
     expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
@@ -228,9 +246,6 @@ describe("auditReducer — ConcernsProposed", () => {
   it("Detecting + empty concerns → Idle with notify", () => {
     const r = auditReducer(detecting(), { _tag: "ConcernsProposed", concerns: [] });
     expect(r.state._tag).toBe("Idle");
-    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
-      level: "medium",
-    });
     const notify = getEffect<BuiltinEffect>(r.effects, "notify");
     expect(notify).toMatchObject({ message: expect.stringContaining("no audit concerns") });
   });
@@ -270,65 +285,21 @@ describe("auditReducer — concern approval", () => {
     });
   });
 
-  it("AwaitingConcernApproval + ConcernsEdited → Detecting with follow-up", () => {
+  it("AwaitingConcernApproval + ConcernsEdited → Detecting with runDetection", () => {
     const r = auditReducer(awaitingConcernApproval(), {
       _tag: "ConcernsEdited",
       feedback: "merge correctness into architecture",
     });
     expect(r.state._tag).toBe("Detecting");
-    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
-      level: "xhigh",
-    });
-    expect(getEffect<BuiltinEffect>(r.effects, "sendUserMessage")).toMatchObject({
-      content: "merge correctness into architecture",
-      deliverAs: "followUp",
+    if (r.state._tag === "Detecting") {
+      expect(r.state.detectionFeedback).toBe("merge correctness into architecture");
+    }
+    expect(getEffect<AuditEffect & { type: "runDetection" }>(r.effects, "runDetection")?.state).toMatchObject({
+      _tag: "Detecting",
+      detectionFeedback: "merge correctness into architecture",
     });
     const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
-    expect(turns.at(-1)?.request).toMatchObject({ customType: "audit-trigger", triggerTurn: true });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// ConcernsDetected
-// ---------------------------------------------------------------------------
-
-describe("auditReducer — ConcernsDetected", () => {
-  it("Detecting + concerns → Auditing", () => {
-    const r = auditReducer(detecting("check react"), {
-      _tag: "ConcernsDetected",
-      concerns: CONCERNS,
-    });
-    expect(r.state._tag).toBe("Auditing");
-    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
-      level: "medium",
-    });
-  });
-
-  it("AwaitingConcernApproval + concerns → Auditing", () => {
-    const r = auditReducer(awaitingConcernApproval(CONCERNS), {
-      _tag: "ConcernsDetected",
-      concerns: CONCERNS,
-    });
-    expect(r.state._tag).toBe("Auditing");
-  });
-
-  it("caps concerns at MAX_CONCERNS", () => {
-    const many: AuditConcern[] = Array.from({ length: 10 }, (_, i) => ({
-      name: `concern-${i}`,
-      description: `desc ${i}`,
-      skills: [],
-    }));
-    const r = auditReducer(detecting(), { _tag: "ConcernsDetected", concerns: many });
-    expect(r.state._tag).toBe("Auditing");
-    if (r.state._tag === "Auditing") {
-      expect(r.state.concerns).toHaveLength(MAX_CONCERNS);
-    }
-  });
-
-  it("non-detection states + ConcernsDetected is no-op", () => {
-    const state = auditing();
-    const r = auditReducer(state, { _tag: "ConcernsDetected", concerns: CONCERNS });
-    expect(r.state).toBe(state);
+    expect(turns.at(0)?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
   });
 });
 
@@ -340,9 +311,6 @@ describe("auditReducer — DetectionFailed", () => {
   it("Detecting → Idle with error notify", () => {
     const r = auditReducer(detecting(), { _tag: "DetectionFailed" });
     expect(r.state._tag).toBe("Idle");
-    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
-      level: "medium",
-    });
     const notify = getEffect<BuiltinEffect>(r.effects, "notify");
     expect(notify).toMatchObject({ level: "error" });
   });
@@ -359,7 +327,7 @@ describe("auditReducer — DetectionFailed", () => {
 // ---------------------------------------------------------------------------
 
 describe("auditReducer — ConcernSessionsPrepared", () => {
-  it("stores per-concern session paths and emits a visible transcript message", () => {
+  it("stores per-concern session paths without emitting extra transcript chatter", () => {
     const r = auditReducer(auditing(), {
       _tag: "ConcernSessionsPrepared",
       sessions: [
@@ -373,9 +341,7 @@ describe("auditReducer — ConcernSessionsPrepared", () => {
       expect(r.state.concerns[1]?.metadata.sessionPath).toBe("/tmp/audit-2.jsonl");
     }
     const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
-    expect(turns).toHaveLength(1);
-    expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
-    expect(turns[0]?.request.content).toContain("Concern audit transcripts");
+    expect(turns).toHaveLength(0);
   });
 });
 
@@ -423,9 +389,11 @@ describe("auditReducer — ConcernAudited", () => {
       expect(r.state.concerns[1]!.metadata.notes).toBe("frontend looks fine");
     }
     const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
-    expect(turns).toHaveLength(2);
+    expect(turns).toHaveLength(1);
     expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
-    expect(turns[1]?.request).toMatchObject({ customType: "audit-trigger", triggerTurn: true });
+    expect(getEffect<AuditEffect & { type: "runSynthesis" }>(r.effects, "runSynthesis")?.state).toMatchObject({
+      _tag: "Synthesizing",
+    });
   });
 
   it("non-Auditing + ConcernAudited is no-op", () => {
@@ -441,24 +409,22 @@ describe("auditReducer — ConcernAudited", () => {
 });
 
 describe("auditReducer — ConcernAuditFailed", () => {
-  it("Auditing → Failed with visible error details", () => {
+  it("Auditing self-heals into the next loop with prior session paths", () => {
     const r = auditReducer(auditing(), {
       _tag: "ConcernAuditFailed",
       message: "audit: concern batch failed\n\nConcern transcript: /tmp/audit-1.jsonl",
+      sessionPaths: ["/tmp/audit-1.jsonl"],
     });
-    expect(r.state._tag).toBe("Failed");
-    if (r.state._tag === "Failed") {
-      expect(r.state.failedPhase).toBe("auditing");
-      expect(r.state.message).toContain("Concern transcript: /tmp/audit-1.jsonl");
+    expect(r.state._tag).toBe("Auditing");
+    if (r.state._tag === "Auditing") {
+      expect(r.state.iteration).toBe(2);
+      expect(r.state.previousConcernSessionPaths).toContain("/tmp/audit-1.jsonl");
     }
     const notify = getEffect<BuiltinEffect>(r.effects, "notify");
     expect(notify).toMatchObject({
-      level: "error",
+      level: "warning",
       message: "audit: concern batch failed\n\nConcern transcript: /tmp/audit-1.jsonl",
     });
-    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
-    expect(turns).toHaveLength(1);
-    expect(turns[0]?.request).toMatchObject({ customType: "audit-error", triggerTurn: false });
   });
 
   it("non-Auditing + ConcernAuditFailed is no-op", () => {
@@ -466,185 +432,9 @@ describe("auditReducer — ConcernAuditFailed", () => {
     const r = auditReducer(state, {
       _tag: "ConcernAuditFailed",
       message: "ignored",
+      sessionPaths: [],
     });
     expect(r.state).toBe(state);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// SynthesisComplete
-// ---------------------------------------------------------------------------
-
-describe("auditReducer — SynthesisComplete", () => {
-  it("Synthesizing + findings → Fixing first finding", () => {
-    const r = auditReducer(synthesizing(), { _tag: "SynthesisComplete", findings: FINDINGS });
-    expect(r.state._tag).toBe("Fixing");
-    if (r.state._tag === "Fixing") {
-      expect(r.state.currentFinding).toBe(0);
-      expect(r.state.phase).toBe("running");
-      expect(r.state.findings).toEqual(FINDINGS);
-    }
-    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
-    expect(turns).toHaveLength(2);
-    expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
-    expect(turns[1]?.request).toMatchObject({ customType: "audit-fix", triggerTurn: true });
-    expect(hasEffect(r.effects, "setStatus")).toBe(true);
-    expect(getPersistPayload(r.effects)).toMatchObject({
-      mode: "Fixing",
-      currentFinding: 0,
-      phase: "running",
-    });
-  });
-
-  it("Synthesizing + empty findings → Idle", () => {
-    const r = auditReducer(synthesizing(), { _tag: "SynthesisComplete", findings: [] });
-    expect(r.state._tag).toBe("Idle");
-    const notify = getEffect<BuiltinEffect>(r.effects, "notify");
-    expect(notify).toMatchObject({ message: expect.stringContaining("no findings") });
-  });
-
-  it("Synthesizing + missing tool signal → Failed", () => {
-    const r = auditReducer(synthesizing(), { _tag: "SynthesisFailed" });
-    expect(r.state._tag).toBe("Failed");
-    if (r.state._tag === "Failed") {
-      expect(r.state.failedPhase).toBe("synthesizing");
-      expect(r.state.message).toContain("audit_synthesis_complete");
-    }
-  });
-
-  it("non-Synthesizing + SynthesisComplete is no-op", () => {
-    const state = auditing();
-    const r = auditReducer(state, { _tag: "SynthesisComplete", findings: FINDINGS });
-    expect(r.state).toBe(state);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Fixing — gated loop
-// ---------------------------------------------------------------------------
-
-describe("auditReducer — FindingFixed", () => {
-  it("Fixing(running) → Fixing(gating)", () => {
-    const r = auditReducer(fixing(), { _tag: "FindingFixed" });
-    expect(r.state._tag).toBe("Fixing");
-    if (r.state._tag === "Fixing") {
-      expect(r.state.phase).toBe("gating");
-    }
-    expect(hasEffect(r.effects, "executeTurn")).toBe(true);
-    expect(getPersistPayload(r.effects)).toMatchObject({ mode: "Fixing", phase: "gating" });
-  });
-
-  it("wrong phase → no-op", () => {
-    const state = fixing(FINDINGS, 0, "gating");
-    const r = auditReducer(state, { _tag: "FindingFixed" });
-    expect(r.state).toBe(state);
-  });
-});
-
-describe("auditReducer — FixSkip", () => {
-  it("skips to next finding", () => {
-    const r = auditReducer(fixing(), { _tag: "FixSkip" });
-    expect(r.state._tag).toBe("Fixing");
-    if (r.state._tag === "Fixing") {
-      expect(r.state.currentFinding).toBe(1);
-      expect(r.state.phase).toBe("running");
-    }
-    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
-    expect(send).toMatchObject({ request: { customType: "audit-fix" } });
-    expect(send?.request.content).toContain("Commit the fix for src/app.tsx, then proceed.");
-    expect(send?.request.content).toContain("Fix finding 2/3: [warning] src/lib.ts");
-  });
-
-  it("skipping last finding → Idle", () => {
-    const r = auditReducer(fixing(FINDINGS, 2), { _tag: "FixSkip" });
-    expect(r.state._tag).toBe("Idle");
-    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
-    expect(send).toMatchObject({ request: { customType: "audit-commit" } });
-    expect(send?.request.content).toContain(
-      'Commit the fix for src/utils.ts, then say "AUDIT_LOOP_DONE".',
-    );
-  });
-});
-
-describe("auditReducer — FixGatePass", () => {
-  it("gating → counseling", () => {
-    const r = auditReducer(fixing(FINDINGS, 0, "gating"), { _tag: "FixGatePass" });
-    expect(r.state._tag).toBe("Fixing");
-    if (r.state._tag === "Fixing") {
-      expect(r.state.phase).toBe("counseling");
-    }
-  });
-
-  it("missing running signal → Failed", () => {
-    const r = auditReducer(fixing(FINDINGS, 0, "running"), {
-      _tag: "FixSignalMissing",
-      phase: "running",
-    });
-    expect(r.state._tag).toBe("Failed");
-    if (r.state._tag === "Failed") {
-      expect(r.state.failedPhase).toBe("fixing");
-      expect(r.state.message).toContain("audit_finding_result");
-    }
-  });
-
-  it("wrong phase → no-op", () => {
-    const state = fixing(FINDINGS, 0, "running");
-    const r = auditReducer(state, { _tag: "FixGatePass" });
-    expect(r.state).toBe(state);
-  });
-});
-
-describe("auditReducer — FixGateFail", () => {
-  it("gating → back to running", () => {
-    const r = auditReducer(fixing(FINDINGS, 0, "gating"), { _tag: "FixGateFail" });
-    expect(r.state._tag).toBe("Fixing");
-    if (r.state._tag === "Fixing") {
-      expect(r.state.phase).toBe("running");
-    }
-    expect(hasEffect(r.effects, "notify")).toBe(true);
-  });
-});
-
-describe("auditReducer — FixCounselPass", () => {
-  it("counseling → advances to next finding", () => {
-    const r = auditReducer(fixing(FINDINGS, 0, "counseling"), { _tag: "FixCounselPass" });
-    expect(r.state._tag).toBe("Fixing");
-    if (r.state._tag === "Fixing") {
-      expect(r.state.currentFinding).toBe(1);
-      expect(r.state.phase).toBe("running");
-    }
-    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
-    expect(send).toMatchObject({ request: { customType: "audit-fix" } });
-    expect(send?.request.content).toContain("Commit the fix for src/app.tsx, then proceed.");
-    expect(send?.request.content).toContain("Fix finding 2/3: [warning] src/lib.ts");
-  });
-
-  it("counseling last finding → Idle", () => {
-    const r = auditReducer(fixing(FINDINGS, 2, "counseling"), { _tag: "FixCounselPass" });
-    expect(r.state._tag).toBe("Idle");
-    expect(hasEffect(r.effects, "notify")).toBe(true);
-    const send = getEffect<ExecutionEffect>(r.effects, "executeTurn");
-    expect(send).toMatchObject({ request: { customType: "audit-commit" } });
-    expect(send?.request.content).toContain(
-      'Commit the fix for src/utils.ts, then say "AUDIT_LOOP_DONE".',
-    );
-  });
-
-  it("wrong phase → no-op", () => {
-    const state = fixing(FINDINGS, 0, "running");
-    const r = auditReducer(state, { _tag: "FixCounselPass" });
-    expect(r.state).toBe(state);
-  });
-});
-
-describe("auditReducer — FixCounselFail", () => {
-  it("counseling → back to running", () => {
-    const r = auditReducer(fixing(FINDINGS, 0, "counseling"), { _tag: "FixCounselFail" });
-    expect(r.state._tag).toBe("Fixing");
-    if (r.state._tag === "Fixing") {
-      expect(r.state.phase).toBe("running");
-    }
-    expect(hasEffect(r.effects, "notify")).toBe(true);
   });
 });
 
@@ -656,9 +446,6 @@ describe("auditReducer — Cancel", () => {
   it("Detecting → Idle", () => {
     const r = auditReducer(detecting(), { _tag: "Cancel" });
     expect(r.state._tag).toBe("Idle");
-    expect(getEffect<BuiltinEffect>(r.effects, "setThinkingLevel")).toMatchObject({
-      level: "medium",
-    });
     expect(hasEffect(r.effects, "notify")).toBe(true);
   });
 
@@ -689,7 +476,7 @@ describe("auditReducer — Cancel", () => {
 // ---------------------------------------------------------------------------
 
 describe("auditReducer — Hydrate", () => {
-  it("restores Detecting with xhigh thinking", () => {
+  it("restores Detecting and reruns background detection", () => {
     const result = auditReducer(idle(), {
       _tag: "Hydrate",
       mode: "Detecting",
@@ -701,17 +488,23 @@ describe("auditReducer — Hydrate", () => {
       previousThinkingLevel: "medium",
     });
 
-    expect(result.state).toEqual({
+    expect(result.state).toMatchObject({
       _tag: "Detecting",
       scope: "diff",
       diffStat: " 3 files changed",
       targetPaths: ["src/app.tsx", "src/lib.ts"],
       skillCatalog: CATALOG,
       userPrompt: "focus on correctness",
+      detectionFeedback: undefined,
       previousThinkingLevel: "medium",
+      iteration: 1,
+      maxIterations: 5,
+      previousConcernSessionPaths: [],
+      previousExecutionSessionPaths: [],
     });
-    expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
-      level: "xhigh",
+    expect(getEffect<AuditEffect & { type: "runDetection" }>(result.effects, "runDetection")?.state).toMatchObject({
+      _tag: "Detecting",
+      userPrompt: "focus on correctness",
     });
   });
 
@@ -754,41 +547,26 @@ describe("auditReducer — Hydrate", () => {
     const result = auditReducer(idle(), {
       _tag: "Hydrate",
       mode: "Synthesizing",
+      scope: "diff",
       concerns,
+      diffStat: " 3 files changed",
+      targetPaths: ["src/app.tsx", "src/lib.ts"],
       userPrompt: "keep it tight",
     });
 
-    expect(result.state).toEqual({
+    expect(result.state).toMatchObject({
       _tag: "Synthesizing",
       concerns,
+      scope: "diff",
       userPrompt: "keep it tight",
+      iteration: 1,
+      maxIterations: 5,
     });
-    expect(hasEffect(result.effects, "setStatus")).toBe(true);
-    expect(hasEffect(result.effects, "updateUI")).toBe(true);
+    expect(getEffect<AuditEffect & { type: "runSynthesis" }>(result.effects, "runSynthesis")?.state).toMatchObject({
+      _tag: "Synthesizing",
+    });
   });
 
-  it("restores Fixing with persisted gate phase", () => {
-    const result = auditReducer(idle(), {
-      _tag: "Hydrate",
-      mode: "Fixing",
-      concerns: createConcernTasks(CONCERNS, 2).map((concern) => ({
-        ...concern,
-        status: "completed" as const,
-      })),
-      findings: FINDINGS,
-      currentFinding: 1,
-      phase: "gating",
-    });
-
-    expect(result.state._tag).toBe("Fixing");
-    if (result.state._tag === "Fixing") {
-      expect(result.state.currentFinding).toBe(1);
-      expect(result.state.phase).toBe("gating");
-      expect(result.state.findings).toEqual(FINDINGS);
-    }
-    expect(hasEffect(result.effects, "setStatus")).toBe(true);
-    expect(hasEffect(result.effects, "updateUI")).toBe(true);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -797,11 +575,156 @@ describe("auditReducer — Hydrate", () => {
 
 describe("auditReducer — Reset", () => {
   it("any state → Idle", () => {
-    for (const state of [detecting(), auditing(), synthesizing(), fixing()]) {
+    for (const state of [
+      detecting(),
+      auditing(),
+      synthesizing(),
+      { _tag: "Executing", ...auditing(), findings: FINDINGS } as any,
+    ]) {
       const r = auditReducer(state, { _tag: "Reset" });
       expect(r.state).toEqual({ _tag: "Idle" });
       expect(hasEffect(r.effects, "setStatus")).toBe(true);
       expect(hasEffect(r.effects, "updateUI")).toBe(true);
     }
+  });
+});
+
+describe("auditReducer — self-healing loop", () => {
+  it("last concern completion moves into spawned synthesis", () => {
+    const concerns = createConcernTasks(CONCERNS, 2).map((concern, index) => ({
+      ...concern,
+      status: index === 0 ? "completed" : concern.status,
+    }));
+    const r = auditReducer(auditing(concerns, "diff", 2), {
+      _tag: "ConcernAudited",
+      taskId: "2",
+      notes: "frontend looks fine",
+      sessionPath: "/tmp/audit-2.jsonl",
+    });
+    expect(r.state._tag).toBe("Synthesizing");
+    expect(getEffect<AuditEffect & { type: "runSynthesis" }>(r.effects, "runSynthesis")?.state).toMatchObject({
+      _tag: "Synthesizing",
+    });
+  });
+
+  it("execution completion loops back into auditing with execution history", () => {
+    const executing: AuditState = {
+      ...auditing(),
+      _tag: "Executing",
+      findings: FINDINGS,
+    } as any;
+    const r = auditReducer(executing, { _tag: "ExecutionComplete", sessionPath: "/tmp/exec-1.jsonl" });
+    expect(r.state._tag).toBe("Auditing");
+    if (r.state._tag === "Auditing") {
+      expect(r.state.iteration).toBe(2);
+      expect(r.state.previousExecutionSessionPaths).toContain("/tmp/exec-1.jsonl");
+    }
+  });
+
+  it("execution failure also loops back into auditing", () => {
+    const executing: AuditState = {
+      ...auditing(),
+      _tag: "Executing",
+      findings: FINDINGS,
+    } as any;
+    const r = auditReducer(executing, {
+      _tag: "ExecutionFailed",
+      sessionPath: "/tmp/exec-1.jsonl",
+      message: "ran out of context",
+    });
+    expect(r.state._tag).toBe("Auditing");
+    if (r.state._tag === "Auditing") {
+      expect(r.state.iteration).toBe(2);
+      expect(r.state.previousExecutionSessionPaths).toContain("/tmp/exec-1.jsonl");
+    }
+  });
+
+  it("hydrate restores Executing and reruns spawned execution", () => {
+    const result = auditReducer(idle(), {
+      _tag: "Hydrate",
+      mode: "Executing",
+      scope: "diff",
+      concerns: createConcernTasks(CONCERNS, 2).map((concern) => ({
+        ...concern,
+        status: "completed" as const,
+      })),
+      findings: FINDINGS,
+      diffStat: " 3 files changed",
+      targetPaths: ["src/app.tsx", "src/lib.ts"],
+      userPrompt: "keep it tight",
+      iteration: 2,
+      maxIterations: 5,
+    });
+
+    expect(result.state._tag).toBe("Executing");
+    expect(getEffect<AuditEffect & { type: "runExecution" }>(result.effects, "runExecution")?.state).toMatchObject({
+      _tag: "Executing",
+      iteration: 2,
+    });
+  });
+
+  it("walks a full two-iteration self-healing loop", () => {
+    const firstPassConcerns = createConcernTasks(CONCERNS, 2).map((concern, index) => ({
+      ...concern,
+      status: index === 0 ? "completed" : concern.status,
+      metadata: {
+        ...concern.metadata,
+        notes: index === 0 ? "found issue in src/app.tsx" : undefined,
+      },
+    }));
+
+    const afterConcern2 = auditReducer(auditing(firstPassConcerns, "diff", 2), {
+      _tag: "ConcernAudited",
+      taskId: "2",
+      notes: "frontend issue tied to app fix",
+      sessionPath: "/tmp/audit-2.jsonl",
+    });
+    expect(afterConcern2.state._tag).toBe("Synthesizing");
+
+    const afterSynthesis = auditReducer(afterConcern2.state, {
+      _tag: "SynthesisComplete",
+      findings: FINDINGS.slice(0, 2),
+    });
+    expect(afterSynthesis.state._tag).toBe("Executing");
+
+    const afterExecution = auditReducer(afterSynthesis.state, {
+      _tag: "ExecutionComplete",
+      sessionPath: "/tmp/exec-1.jsonl",
+    });
+    expect(afterExecution.state._tag).toBe("Auditing");
+    if (afterExecution.state._tag === "Auditing") {
+      expect(afterExecution.state.iteration).toBe(2);
+      expect(afterExecution.state.previousExecutionSessionPaths).toEqual(["/tmp/exec-1.jsonl"]);
+      expect(afterExecution.state.concerns.every((concern) => concern.metadata.notes === undefined)).toBe(true);
+      expect(afterExecution.state.concerns.some((concern) => concern.status === "in_progress")).toBe(true);
+    }
+
+    const secondPassState = afterExecution.state;
+    if (secondPassState._tag !== "Auditing") throw new Error("expected auditing state");
+    const cleanSynthesis: AuditState = {
+      _tag: "Synthesizing",
+      concerns: secondPassState.concerns.map((concern) => ({
+        ...concern,
+        status: "completed" as const,
+        metadata: {
+          ...concern.metadata,
+          notes: "clean",
+        },
+      })),
+      scope: secondPassState.scope,
+      diffStat: secondPassState.diffStat,
+      targetPaths: secondPassState.targetPaths,
+      userPrompt: secondPassState.userPrompt,
+      iteration: secondPassState.iteration,
+      maxIterations: secondPassState.maxIterations,
+      previousConcernSessionPaths: secondPassState.previousConcernSessionPaths,
+      previousExecutionSessionPaths: secondPassState.previousExecutionSessionPaths,
+    };
+
+    const done = auditReducer(cleanSynthesis, {
+      _tag: "SynthesisComplete",
+      findings: [],
+    });
+    expect(done.state).toEqual({ _tag: "Idle" });
   });
 });

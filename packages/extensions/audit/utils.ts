@@ -4,16 +4,13 @@
 
 import type { Message } from "@mariozechner/pi-ai";
 import { getDisplayItems } from "@cvr/pi-sub-agent-render";
-import type { AuditFinding } from "./machine";
+import type { AuditConcern, AuditFinding } from "./machine";
 
 export const AUDIT_SIGNAL_TOOLS = {
   proposeConcerns: "audit_proposed_concerns",
-  detectConcerns: "audit_detected_concerns",
   concernComplete: "audit_concern_complete",
   synthesisComplete: "audit_synthesis_complete",
-  findingResult: "audit_finding_result",
-  fixGateResult: "audit_fix_gate_result",
-  fixCounselResult: "audit_fix_counsel_result",
+  executionResult: "audit_execution_result",
 } as const;
 
 function getLastToolCallArgs(
@@ -35,25 +32,50 @@ export function parseConcernCompletion(messages: readonly Message[]): boolean {
   return hasToolCall(messages, AUDIT_SIGNAL_TOOLS.concernComplete);
 }
 
+export function parseProposedConcerns(messages: readonly Message[]): AuditConcern[] | null {
+  const args = getLastToolCallArgs(messages, AUDIT_SIGNAL_TOOLS.proposeConcerns);
+  if (!args) return null;
+  return normalizeConcerns(args.concerns);
+}
+
 export function parseSynthesisComplete(messages: readonly Message[]): AuditFinding[] | null {
   const args = getLastToolCallArgs(messages, AUDIT_SIGNAL_TOOLS.synthesisComplete);
   if (!args) return null;
   return normalizeFindings(args.findings);
 }
 
-export function parseFindingResult(messages: readonly Message[]): "fixed" | "skip" | null {
-  const args = getLastToolCallArgs(messages, AUDIT_SIGNAL_TOOLS.findingResult);
-  return args?.outcome === "fixed" || args?.outcome === "skip" ? args.outcome : null;
+export function parseExecutionResult(messages: readonly Message[]): "completed" | "skip" | null {
+  const args = getLastToolCallArgs(messages, AUDIT_SIGNAL_TOOLS.executionResult);
+  return args?.outcome === "completed" || args?.outcome === "skip" ? args.outcome : null;
 }
 
-export function parseGateResult(messages: readonly Message[]): "pass" | "fail" | null {
-  const args = getLastToolCallArgs(messages, AUDIT_SIGNAL_TOOLS.fixGateResult);
-  return args?.status === "pass" || args?.status === "fail" ? args.status : null;
-}
+function normalizeConcerns(value: unknown): AuditConcern[] | null {
+  if (!Array.isArray(value)) return null;
 
-export function parseCounselResult(messages: readonly Message[]): "pass" | "fail" | null {
-  const args = getLastToolCallArgs(messages, AUDIT_SIGNAL_TOOLS.fixCounselResult);
-  return args?.status === "pass" || args?.status === "fail" ? args.status : null;
+  const concerns: AuditConcern[] = [];
+
+  for (const concern of value) {
+    if (
+      typeof concern !== "object" ||
+      concern === null ||
+      typeof (concern as { name?: unknown }).name !== "string" ||
+      typeof (concern as { description?: unknown }).description !== "string"
+    ) {
+      return null;
+    }
+
+    concerns.push({
+      name: (concern as { name: string }).name,
+      description: (concern as { description: string }).description,
+      skills: Array.isArray((concern as { skills?: unknown }).skills)
+        ? (concern as { skills: unknown[] }).skills.filter(
+            (skill): skill is string => typeof skill === "string" && skill.length > 0,
+          )
+        : [],
+    });
+  }
+
+  return concerns;
 }
 
 function normalizeFindings(value: unknown): AuditFinding[] | null {

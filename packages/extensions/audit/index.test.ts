@@ -7,7 +7,13 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { GraphRuntime } from "@cvr/pi-graph-runtime";
 import { PiSpawnService, zeroUsage, type PiSpawnConfig, type PiSpawnResult } from "@cvr/pi-spawn";
-import auditExtension, { ConcernBatchError, runConcernBatch } from "./index";
+import auditExtension, {
+  ConcernBatchError,
+  runConcernBatch,
+  runDetection,
+  runExecution,
+  runSynthesis,
+} from "./index";
 
 function withFakePi<T>(run: () => T): T {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "audit-test-pi-"));
@@ -41,30 +47,51 @@ function toolResultMessage(toolCallId: string, isError = false): ToolResultMessa
   } as ToolResultMessage;
 }
 
+function createDetectingState() {
+  return {
+    _tag: "Detecting" as const,
+    scope: "paths" as const,
+    diffStat: "",
+    targetPaths: ["packages/extensions/audit"],
+    skillCatalog: [{ name: "code-review", description: "Systematic code audit and cleanup" }],
+    userPrompt: "check the audit flow",
+    detectionFeedback: undefined,
+    previousThinkingLevel: "medium" as const,
+    iteration: 1,
+    maxIterations: 5,
+    previousConcernSessionPaths: [],
+    previousExecutionSessionPaths: [],
+  };
+}
+
+function createConcernTasks() {
+  return [
+    {
+      id: "1",
+      order: 1,
+      subject: "correctness",
+      activeForm: "Auditing correctness",
+      status: "in_progress" as const,
+      blockedBy: [],
+      metadata: { description: "Bugs and soundness", skills: ["code-review"] },
+    },
+    {
+      id: "2",
+      order: 2,
+      subject: "frontend",
+      activeForm: "Auditing frontend",
+      status: "in_progress" as const,
+      blockedBy: [],
+      metadata: { description: "React patterns", skills: ["react", "ui"] },
+    },
+  ];
+}
+
 function createAuditingState(frontierTaskIds: string[] = ["1", "2"]) {
   return {
     _tag: "Auditing" as const,
     scope: "diff" as const,
-    concerns: [
-      {
-        id: "1",
-        order: 1,
-        subject: "correctness",
-        activeForm: "Auditing correctness",
-        status: "in_progress" as const,
-        blockedBy: [],
-        metadata: { description: "Bugs and soundness", skills: ["code-review"] },
-      },
-      {
-        id: "2",
-        order: 2,
-        subject: "frontend",
-        activeForm: "Auditing frontend",
-        status: "in_progress" as const,
-        blockedBy: [],
-        metadata: { description: "React patterns", skills: ["react", "ui"] },
-      },
-    ],
+    concerns: createConcernTasks(),
     diffStat: " 2 files changed",
     targetPaths: ["src/app.tsx", "src/lib.ts"],
     userPrompt: "check react",
@@ -74,6 +101,47 @@ function createAuditingState(frontierTaskIds: string[] = ["1", "2"]) {
       activeTaskIds: [...frontierTaskIds],
       total: 2,
     },
+    iteration: 1,
+    maxIterations: 5,
+    previousConcernSessionPaths: [],
+    previousExecutionSessionPaths: [],
+  };
+}
+
+function createSynthesizingState() {
+  return {
+    _tag: "Synthesizing" as const,
+    scope: "diff" as const,
+    concerns: createConcernTasks(),
+    diffStat: " 2 files changed",
+    targetPaths: ["src/app.tsx", "src/lib.ts"],
+    userPrompt: "check react",
+    iteration: 1,
+    maxIterations: 5,
+    previousConcernSessionPaths: ["/tmp/audit-concern-1.jsonl"],
+    previousExecutionSessionPaths: ["/tmp/audit-execution-0.jsonl"],
+  };
+}
+
+function createExecutingState() {
+  return {
+    _tag: "Executing" as const,
+    scope: "diff" as const,
+    concerns: createConcernTasks(),
+    findings: [
+      {
+        file: "src/app.tsx",
+        description: "Null access in render path",
+        severity: "critical" as const,
+      },
+    ],
+    diffStat: " 2 files changed",
+    targetPaths: ["src/app.tsx", "src/lib.ts"],
+    userPrompt: "check react",
+    iteration: 1,
+    maxIterations: 5,
+    previousConcernSessionPaths: ["/tmp/audit-concern-1.jsonl"],
+    previousExecutionSessionPaths: ["/tmp/audit-execution-0.jsonl"],
   };
 }
 
@@ -97,10 +165,28 @@ async function runConcernBatchWithSpawn<A>(
   }
 }
 
+async function runSpawnWithSpawn<A>(
+  effect: Effect.Effect<A, ConcernBatchError, PiSpawnService>,
+  spawnImpl: (config: PiSpawnConfig) => Effect.Effect<PiSpawnResult, never>,
+): Promise<A> {
+  const runtime = ManagedRuntime.make(
+    Layer.succeed(PiSpawnService, {
+      spawn: spawnImpl,
+    }),
+  );
+
+  try {
+    return await runtime.runPromise(effect);
+  } finally {
+    await runtime.dispose();
+  }
+}
+
 function createMockExtensionApiHarness() {
   const tools: Array<{ name: string; tool: any }> = [];
   const commands: Array<{ name: string; command: any }> = [];
   const listeners: Array<{ event: string; handler: Function }> = [];
+  const messageRenderers: Array<{ customType: string; renderer: Function }> = [];
   const sentMessages: Array<{ message: any; options?: unknown }> = [];
   const sentUserMessages: Array<{ message: string; options?: unknown }> = [];
   const appendedEntries: Array<{ customType: string; data: unknown }> = [];
@@ -116,6 +202,9 @@ function createMockExtensionApiHarness() {
     },
     on(event: string, handler: Function) {
       listeners.push({ event, handler });
+    },
+    registerMessageRenderer(customType: string, renderer: Function) {
+      messageRenderers.push({ customType, renderer });
     },
     sendMessage(message: any, options?: unknown) {
       sentMessages.push({ message, options });
@@ -139,6 +228,7 @@ function createMockExtensionApiHarness() {
     tools,
     commands,
     listeners,
+    messageRenderers,
     sentMessages,
     sentUserMessages,
     appendedEntries,
@@ -174,6 +264,164 @@ function createMockExtensionApiHarness() {
   };
 }
 
+describe("runDetection", () => {
+  it("uses the mini model and parses proposed concerns from the detection subagent", async () => {
+    const state = createDetectingState();
+    let seenConfig: PiSpawnConfig | undefined;
+
+    const concerns = await runSpawnWithSpawn(
+      runDetection(state, "/tmp", "session-123"),
+      (config) => {
+        seenConfig = config;
+        return Effect.succeed({
+          exitCode: 0,
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: "Proposed concerns ready" },
+                {
+                  type: "toolCall",
+                  id: "tc-detect",
+                  name: "audit_proposed_concerns",
+                  arguments: {
+                    concerns: [
+                      {
+                        name: "correctness",
+                        description: "Bugs and soundness",
+                        skills: ["code-review"],
+                      },
+                    ],
+                  },
+                } as any,
+              ],
+            } as AssistantMessage,
+            toolResultMessage("tc-detect"),
+          ],
+          stderr: "",
+          usage: zeroUsage(),
+          stopReason: "end_turn",
+          model: "openai-codex/gpt-5.4-mini",
+        });
+      },
+    );
+
+    expect(seenConfig?.model).toBe("openai-codex/gpt-5.4-mini");
+    expect(seenConfig?.builtinTools).toEqual([]);
+    expect(seenConfig?.extensionTools).toEqual(["audit_proposed_concerns"]);
+    expect(concerns).toEqual([
+      {
+        name: "correctness",
+        description: "Bugs and soundness",
+        skills: ["code-review"],
+      },
+    ]);
+  });
+
+  it("fails when detection exits without audit_proposed_concerns", async () => {
+    const state = createDetectingState();
+
+    const error = await runSpawnWithSpawn(
+      runDetection(state, "/tmp", "session-123").pipe(Effect.flip),
+      () =>
+        Effect.succeed({
+          exitCode: 0,
+          messages: [assistantTextMessage("No tool call")],
+          stderr: "",
+          usage: zeroUsage(),
+          stopReason: "end_turn",
+        }),
+    );
+
+    expect(error).toBeInstanceOf(ConcernBatchError);
+    expect(error.message).toContain("No tool call");
+  });
+});
+
+describe("runSynthesis", () => {
+  it("returns parsed findings alongside the render result", async () => {
+    const state = createSynthesizingState();
+
+    const result = await runSpawnWithSpawn(
+      runSynthesis(state, "/tmp", "session-123", undefined, "/tmp/synth.jsonl"),
+      () =>
+        Effect.succeed({
+          exitCode: 0,
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: "Synthesis complete" },
+                {
+                  type: "toolCall",
+                  id: "tc-synth",
+                  name: "audit_synthesis_complete",
+                  arguments: {
+                    findings: [
+                      {
+                        file: "src/app.tsx",
+                        description: "Null access in render path",
+                        severity: "critical",
+                      },
+                    ],
+                  },
+                } as any,
+              ],
+            } as AssistantMessage,
+            toolResultMessage("tc-synth"),
+          ],
+          stderr: "",
+          usage: zeroUsage(),
+          stopReason: "end_turn",
+        }),
+    );
+
+    expect(result.sessionPath).toBe("/tmp/synth.jsonl");
+    expect(result.findings).toEqual([
+      {
+        file: "src/app.tsx",
+        description: "Null access in render path",
+        severity: "critical",
+      },
+    ]);
+  });
+});
+
+describe("runExecution", () => {
+  it("returns the parsed execution outcome alongside the render result", async () => {
+    const state = createExecutingState();
+
+    const result = await runSpawnWithSpawn(
+      runExecution(state, "/tmp", "session-123", undefined, "/tmp/exec.jsonl"),
+      () =>
+        Effect.succeed({
+          exitCode: 0,
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: "Execution complete" },
+                {
+                  type: "toolCall",
+                  id: "tc-exec",
+                  name: "audit_execution_result",
+                  arguments: { outcome: "completed" },
+                } as any,
+              ],
+            } as AssistantMessage,
+            toolResultMessage("tc-exec"),
+          ],
+          stderr: "",
+          usage: zeroUsage(),
+          stopReason: "end_turn",
+        }),
+    );
+
+    expect(result.sessionPath).toBe("/tmp/exec.jsonl");
+    expect(result.outcome).toBe("completed");
+  });
+});
+
 describe("runConcernBatch", () => {
   it("strips the completion marker from concern notes and preserves frontier order", async () => {
     const state = createAuditingState(["1", "2"]);
@@ -183,7 +431,7 @@ describe("runConcernBatch", () => {
       runConcernBatch(state, "/tmp", "session-123", "Follow principles", new Map()),
       (config) => {
         seenTasks.push(config.task);
-        expect(config.sessionPath).toEqual(expect.stringContaining("_audit-"));
+        expect(config.sessionPath).toEqual(expect.stringContaining("audit-"));
         const toolCallId = config.task.includes("correctness") ? "tc-correctness" : "tc-frontend";
         const text = config.task.includes("correctness")
           ? "Found a null bug in src/app.tsx"
@@ -218,12 +466,20 @@ describe("runConcernBatch", () => {
       {
         taskId: "1",
         notes: "Found a null bug in src/app.tsx",
-        sessionPath: expect.stringContaining("_audit-1-correctness-"),
+        sessionPath: expect.stringContaining("audit-1-correctness"),
+        renderResult: expect.objectContaining({
+          agent: "audit concern 1/2",
+          model: undefined,
+        }),
       },
       {
         taskId: "2",
         notes: "Frontend looks clean",
-        sessionPath: expect.stringContaining("_audit-2-frontend-"),
+        sessionPath: expect.stringContaining("audit-2-frontend"),
+        renderResult: expect.objectContaining({
+          agent: "audit concern 2/2",
+          model: undefined,
+        }),
       },
     ]);
   });
@@ -320,87 +576,58 @@ describe("runConcernBatch", () => {
 });
 
 describe("audit extension", () => {
-  it("registers /audit, audit helper commands, and the audit signal tools", () => {
+  it("registers /audit, audit helper commands, the concern renderer, and the audit signal tools", () => {
     const harness = createMockExtensionApiHarness();
     auditExtension(harness.pi);
 
     expect(harness.tools.map((tool) => tool.name)).toEqual([
       "audit_proposed_concerns",
-      "audit_detected_concerns",
       "audit_concern_complete",
       "audit_synthesis_complete",
-      "audit_finding_result",
-      "audit_fix_gate_result",
-      "audit_fix_counsel_result",
+      "audit_execution_result",
+    ]);
+    expect(harness.messageRenderers.map((entry) => entry.customType)).toEqual([
+      "audit-phase-result",
     ]);
     expect(harness.commands.map((command) => command.name)).toEqual([
       "audit-cancel",
-      "audit-skip",
       "audit-status",
       "audit",
     ]);
   });
 
-  it("raises thinking to xhigh during concern detection and restores it after proposal", async () => {
-    const harness = createMockExtensionApiHarness();
-    auditExtension(harness.pi);
-
-    const ctx = harness.createContext({ cwd: "/Users/cvr/Developer/personal/dotfiles/pi" });
-    harness.getListener("session_start")!.handler({}, ctx);
-    await harness.commands.find((command) => command.name === "audit")!.command.handler(
-      "packages/extensions/audit",
-      ctx,
-    );
-
-    expect(harness.getThinkingLevel()).toBe("xhigh");
-
-    const proposeTool = harness.getTool("audit_proposed_concerns");
-    await proposeTool.execute("tc-1", {
-      concerns: [
-        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
-      ],
-    });
-
-    expect(harness.getThinkingLevel()).toBe("medium");
-  });
-
-  it("accepts proposed concerns and waits for UI approval", async () => {
+  it("restores awaiting approval and prompts the user", async () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
       {
         type: "custom",
         customType: "audit",
         data: {
-          mode: "Detecting",
+          mode: "AwaitingConcernApproval",
           scope: "diff",
           diffStat: " 2 files changed",
           targetPaths: ["src/app.tsx"],
           skillCatalog: [],
           userPrompt: "check react",
           previousThinkingLevel: "medium",
+          proposedConcerns: [
+            {
+              name: "correctness",
+              description: "Bugs and soundness",
+              skills: ["code-review"],
+            },
+          ],
         },
       },
     ]);
     auditExtension(harness.pi);
 
     const ctx = harness.createContext();
-    harness.getListener("session_start")!.handler({}, ctx);
+    await harness.getListener("session_start")!.handler({}, ctx);
 
-    const proposeTool = harness.getTool("audit_proposed_concerns");
-    const result = await proposeTool.execute("tc-1", {
-      concerns: [
-        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
-      ],
-    });
-
-    expect(result.isError).toBeUndefined();
-    expect(result.content[0]?.text).toContain("Captured 1 proposed audit concern");
     expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: approve concerns");
-    expect(ctx.ui.notify).toHaveBeenCalledWith(
-      "Proposed 1 audit concern:\n1. correctness — Bugs and soundness [skills: code-review]",
-      "info",
-    );
-    expect(ctx.ui.select).toHaveBeenCalledWith("Audit concerns ready — approve, reject, or edit?", [
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("1. correctness"), "info");
+    expect(ctx.ui.select).toHaveBeenCalledWith(expect.stringContaining("Audit concerns ready"), [
       "Approve concerns",
       "Reject concerns",
       "Edit concerns",
@@ -408,156 +635,109 @@ describe("audit extension", () => {
   });
 
   it("launches audits after UI approval", async () => {
-    const harness = createMockExtensionApiHarness();
-    harness.setSessionEntries([
-      {
-        type: "custom",
-        customType: "audit",
-        data: {
-          mode: "Detecting",
-          scope: "diff",
-          diffStat: " 2 files changed",
-          targetPaths: ["src/app.tsx"],
-          skillCatalog: [],
-          userPrompt: "check react",
-          previousThinkingLevel: "medium",
+    await withFakePi(async () => {
+      const harness = createMockExtensionApiHarness();
+      harness.setSessionEntries([
+        {
+          type: "custom",
+          customType: "audit",
+          data: {
+            mode: "AwaitingConcernApproval",
+            scope: "diff",
+            diffStat: " 2 files changed",
+            targetPaths: ["src/app.tsx"],
+            skillCatalog: [],
+            userPrompt: "check react",
+            previousThinkingLevel: "medium",
+            proposedConcerns: [
+              {
+                name: "correctness",
+                description: "Bugs and soundness",
+                skills: ["code-review"],
+              },
+            ],
+          },
         },
-      },
-    ]);
-    auditExtension(harness.pi);
+      ]);
+      auditExtension(harness.pi);
 
-    const ctx = harness.createContext();
-    ctx.ui.select = mock(async () => "Approve concerns");
-    harness.getListener("session_start")!.handler({}, ctx);
+      const ctx = harness.createContext();
+      ctx.ui.select = mock(async () => "Approve concerns");
+      await harness.getListener("session_start")!.handler({}, ctx);
+      await Promise.resolve();
 
-    const proposeTool = harness.getTool("audit_proposed_concerns");
-    await proposeTool.execute("tc-1", {
-      concerns: [
-        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
-      ],
+      expect(harness.appendedEntries.some((entry) => entry.customType === "audit")).toBe(true);
+      expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: loop 1/5 0/1");
     });
-    await Promise.resolve();
-
-    expect(harness.appendedEntries.some((entry) => entry.customType === "audit")).toBe(true);
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: concern 1/1");
   });
 
   it("feeds edited concern feedback back into detection", async () => {
-    const harness = createMockExtensionApiHarness();
-    harness.setSessionEntries([
-      {
-        type: "custom",
-        customType: "audit",
-        data: {
-          mode: "Detecting",
-          scope: "diff",
-          diffStat: " 2 files changed",
-          targetPaths: ["src/app.tsx"],
-          skillCatalog: [],
-          userPrompt: "check react",
-          previousThinkingLevel: "medium",
+    await withFakePi(async () => {
+      const harness = createMockExtensionApiHarness();
+      harness.setSessionEntries([
+        {
+          type: "custom",
+          customType: "audit",
+          data: {
+            mode: "AwaitingConcernApproval",
+            scope: "diff",
+            diffStat: " 2 files changed",
+            targetPaths: ["src/app.tsx"],
+            skillCatalog: [],
+            userPrompt: "check react",
+            previousThinkingLevel: "medium",
+            proposedConcerns: [
+              {
+                name: "correctness",
+                description: "Bugs and soundness",
+                skills: ["code-review"],
+              },
+            ],
+          },
         },
-      },
-    ]);
-    auditExtension(harness.pi);
+      ]);
+      auditExtension(harness.pi);
 
-    const ctx = harness.createContext();
-    ctx.ui.select = mock(async () => "Edit concerns");
-    ctx.ui.editor = mock(async () => "Merge correctness into architecture and add duplication.");
-    harness.getListener("session_start")!.handler({}, ctx);
+      const ctx = harness.createContext();
+      ctx.ui.select = mock(async () => "Edit concerns");
+      ctx.ui.editor = mock(async () => "Merge correctness into architecture and add duplication.");
+      await harness.getListener("session_start")!.handler({}, ctx);
+      await Promise.resolve();
 
-    const proposeTool = harness.getTool("audit_proposed_concerns");
-    await proposeTool.execute("tc-1", {
-      concerns: [
-        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
-      ],
+      expect(ctx.ui.editor).toHaveBeenCalledWith(
+        expect.stringContaining("Edit audit concerns"),
+        expect.stringContaining("skills: code-review"),
+      );
+      expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: loop 1/5 detecting");
+      expect(harness.sentUserMessages).toEqual([]);
+      expect(harness.appendedEntries.at(-1)).toEqual(
+        expect.objectContaining({
+          customType: "audit",
+          data: expect.objectContaining({
+            mode: "Detecting",
+            detectionFeedback: "Merge correctness into architecture and add duplication.",
+          }),
+        }),
+      );
     });
-    await Promise.resolve();
-
-    expect(harness.sentUserMessages.at(-1)?.message).toBe(
-      "Merge correctness into architecture and add duplication.",
-    );
-    expect(ctx.ui.editor).toHaveBeenCalledWith(
-      "Edit audit concerns — describe what to change",
-      expect.stringContaining("skills: code-review"),
-    );
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: detecting concerns...");
   });
 
-  it("still accepts approved concerns through the fallback detection tool", async () => {
+  it("allows audit_proposed_concerns from spawned sessions without mutating idle parent state", async () => {
     const harness = createMockExtensionApiHarness();
-    harness.setSessionEntries([
-      {
-        type: "custom",
-        customType: "audit",
-        data: {
-          mode: "Detecting",
-          scope: "diff",
-          diffStat: " 2 files changed",
-          targetPaths: ["src/app.tsx"],
-          skillCatalog: [],
-          userPrompt: "check react",
-          previousThinkingLevel: "medium",
-        },
-      },
-    ]);
     auditExtension(harness.pi);
 
-    const ctx = harness.createContext();
-    harness.getListener("session_start")!.handler({}, ctx);
-
-    const detectionTool = harness.getTool("audit_detected_concerns");
-    const result = await detectionTool.execute("tc-1", {
+    const result = await harness.getTool("audit_proposed_concerns").execute("tc-1", {
       concerns: [
         { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
       ],
     });
 
     expect(result.isError).toBeUndefined();
-    expect(result.content[0]?.text).toContain("Captured 1 approved audit concern");
-    expect(harness.appendedEntries.some((entry) => entry.customType === "audit")).toBe(true);
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: concern 1/1");
+    expect(result.content[0]?.text).toContain("Captured 1 proposed audit concern");
+    expect(harness.appendedEntries).toEqual([]);
   });
 
-  it("does not allow the fallback detection tool after concerns are already awaiting approval", async () => {
-    const harness = createMockExtensionApiHarness();
-    harness.setSessionEntries([
-      {
-        type: "custom",
-        customType: "audit",
-        data: {
-          mode: "Detecting",
-          scope: "diff",
-          diffStat: " 2 files changed",
-          targetPaths: ["src/app.tsx"],
-          skillCatalog: [],
-          userPrompt: "check react",
-          previousThinkingLevel: "medium",
-        },
-      },
-    ]);
-    auditExtension(harness.pi);
-
-    const ctx = harness.createContext();
-    harness.getListener("session_start")!.handler({}, ctx);
-
-    await harness.getTool("audit_proposed_concerns").execute("tc-1", {
-      concerns: [
-        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
-      ],
-    });
-
-    const result = await harness.getTool("audit_detected_concerns").execute("tc-2", {
-      concerns: [
-        { name: "correctness", description: "Bugs and soundness", skills: ["code-review"] },
-      ],
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toBe("Audit detection is not currently active.");
-  });
-
-  it("restores persisted AwaitingConcernApproval state on session start", () => {
+  it("restores persisted AwaitingConcernApproval state on session start", async () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
       {
@@ -583,10 +763,10 @@ describe("audit extension", () => {
     auditExtension(harness.pi);
 
     const ctx = harness.createContext();
-    harness.getListener("session_start")!.handler({}, ctx);
+    await harness.getListener("session_start")!.handler({}, ctx);
 
     expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: approve concerns");
-    expect(ctx.ui.select).toHaveBeenCalledWith("Audit concerns ready — approve, reject, or edit?", [
+    expect(ctx.ui.select).toHaveBeenCalledWith(expect.stringContaining("Audit concerns ready"), [
       "Approve concerns",
       "Reject concerns",
       "Edit concerns",
@@ -643,74 +823,64 @@ describe("audit extension", () => {
 
       sessionStart!.handler({}, ctx);
 
-      expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: concern 2/2");
+      expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: loop 1/5 1/2");
       const widgetCalls = (ctx.ui.setWidget as ReturnType<typeof mock>).mock.calls;
       expect(widgetCalls.at(-1)?.[0]).toBe("audit-progress");
-      expect(widgetCalls.at(-1)?.[1]).toEqual([
-        "focus: check react",
-        "",
-        "✔ correctness",
-        "◼ Auditing frontend",
-        expect.stringContaining("session: /Users/cvr/.pi/agent/sessions/"),
-      ]);
+      expect(widgetCalls.at(-1)?.[1]).toEqual(["audit loop 1/5", "1/2 complete"]);
     });
   });
 
-  it("keeps Detecting active after agent_end without the approval signal", async () => {
-    const harness = createMockExtensionApiHarness();
-    harness.setSessionEntries([
-      {
-        type: "custom",
-        customType: "audit",
-        data: {
-          mode: "Detecting",
-          scope: "paths",
-          diffStat: "",
-          targetPaths: ["packages/extensions"],
-          skillCatalog: [],
-          userPrompt: "check architecture",
-          previousThinkingLevel: "medium",
-        },
-      },
-    ]);
-    auditExtension(harness.pi);
-
-    const ctx = harness.createContext();
-    harness.getListener("session_start")!.handler({}, ctx);
-    harness.getListener("agent_end")!.handler({ messages: [] }, ctx);
-
-    const detectionTool = harness.getTool("audit_detected_concerns");
-    const result = await detectionTool.execute("tc-1", {
-      concerns: [
+  it("keeps Detecting active after agent_end without surfacing a missing main-session signal", async () => {
+    withFakePi(() => {
+      const harness = createMockExtensionApiHarness();
+      harness.setSessionEntries([
         {
-          name: "architecture",
-          description: "Check extension architecture consistency",
-          skills: ["architecture"],
+          type: "custom",
+          customType: "audit",
+          data: {
+            mode: "Detecting",
+            scope: "paths",
+            diffStat: "",
+            targetPaths: ["packages/extensions"],
+            skillCatalog: [],
+            userPrompt: "check architecture",
+            previousThinkingLevel: "medium",
+          },
         },
-      ],
-    });
+      ]);
+      auditExtension(harness.pi);
 
-    expect(result.isError).toBeUndefined();
-    expect(ctx.ui.notify).not.toHaveBeenCalledWith(
-      "audit: concern detection ended before audit_detected_concerns was called",
-      "error",
-    );
+      const ctx = harness.createContext();
+      harness.getListener("session_start")!.handler({}, ctx);
+      harness.getListener("agent_end")!.handler({ messages: [] }, ctx);
+
+      expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+        "audit: concern detection ended before audit_proposed_concerns was called",
+        "error",
+      );
+    });
   });
 
-  it("does not cancel Detecting on interactive input while waiting for approval", async () => {
+  it("does not cancel AwaitingConcernApproval on interactive input", async () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
       {
         type: "custom",
         customType: "audit",
         data: {
-          mode: "Detecting",
+          mode: "AwaitingConcernApproval",
           scope: "paths",
-          diffStat: "",
           targetPaths: ["packages/extensions"],
           skillCatalog: [],
           userPrompt: "check architecture",
           previousThinkingLevel: "medium",
+          proposedConcerns: [
+            {
+              name: "architecture",
+              description: "Check extension architecture consistency",
+              skills: ["architecture"],
+            },
+          ],
         },
       },
     ]);
@@ -719,20 +889,8 @@ describe("audit extension", () => {
     const ctx = harness.createContext();
     harness.getListener("session_start")!.handler({}, ctx);
     harness.getListener("input")!.handler({ source: "interactive", text: "approve" }, ctx);
-    await Promise.resolve();
 
-    const detectionTool = harness.getTool("audit_detected_concerns");
-    const result = await detectionTool.execute("tc-1", {
-      concerns: [
-        {
-          name: "architecture",
-          description: "Check extension architecture consistency",
-          skills: ["architecture"],
-        },
-      ],
-    });
-
-    expect(result.isError).toBeUndefined();
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: approve concerns");
   });
 
   it("does not inject main-agent audit context while concern subagents are running", () => {
@@ -815,14 +973,15 @@ describe("audit extension", () => {
     ]);
   });
 
-  it("restores persisted Fixing gate phase on session start", () => {
+  it("restores persisted Executing state on session start", () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
       {
         type: "custom",
         customType: "audit",
         data: {
-          mode: "Fixing",
+          mode: "Executing",
+          scope: "diff",
           concerns: [
             {
               id: "1",
@@ -838,8 +997,12 @@ describe("audit extension", () => {
             { file: "src/app.tsx", description: "Missing null check", severity: "critical" },
             { file: "src/lib.ts", description: "Unused import", severity: "warning" },
           ],
-          currentFinding: 1,
-          phase: "gating",
+          diffStat: " 2 files changed",
+          targetPaths: ["src/app.tsx", "src/lib.ts"],
+          userPrompt: "check react",
+          iteration: 2,
+          maxIterations: 5,
+          previousExecutionSessionPaths: ["/tmp/exec-1.jsonl"],
         },
       },
     ]);
@@ -851,58 +1014,67 @@ describe("audit extension", () => {
 
     sessionStart!.handler({}, ctx);
 
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: gating fix 2/2");
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: loop 2/5 executing");
     expect(ctx.ui.setWidget).toHaveBeenCalledWith("audit-progress", [
-      "  ✓ [critical] src/app.tsx",
-      "  ▸ [warning] src/lib.ts (gating)",
+      "audit loop 2/5",
+      "executing plan",
     ]);
   });
 
-  it("restores persisted Failed state on session start with concern transcript paths", () => {
+  it("keeps previous session paths when restoring later-loop auditing state", () => {
     const harness = createMockExtensionApiHarness();
     harness.setSessionEntries([
       {
         type: "custom",
         customType: "audit",
         data: {
-          mode: "Failed",
-          failedPhase: "auditing",
-          message: "spawn failure\n\nConcern transcript: /tmp/audit-1.jsonl",
+          mode: "Auditing",
+          scope: "diff",
           concerns: [
             {
               id: "1",
               order: 1,
               subject: "correctness",
               activeForm: "Auditing correctness",
-              status: "in_progress",
+              status: "completed",
               blockedBy: [],
-              metadata: {
-                description: "Bugs and soundness",
-                skills: ["code-review"],
-                sessionPath: "/tmp/audit-1.jsonl",
-              },
+              metadata: { description: "Bugs and soundness", skills: ["code-review"] },
+            },
+            {
+              id: "2",
+              order: 2,
+              subject: "frontend",
+              activeForm: "Auditing frontend",
+              status: "pending",
+              blockedBy: [],
+              metadata: { description: "React patterns", skills: ["react", "ui"] },
             },
           ],
+          diffStat: " 2 files changed",
+          targetPaths: ["src/app.tsx", "src/lib.ts"],
+          userPrompt: "check react",
+          concernCursor: {
+            phase: "running",
+            frontierTaskIds: ["2"],
+            activeTaskIds: ["2"],
+            total: 2,
+          },
+          iteration: 3,
+          maxIterations: 5,
+          previousConcernSessionPaths: ["/tmp/audit-1.jsonl"],
+          previousExecutionSessionPaths: ["/tmp/exec-1.jsonl"],
         },
       },
     ]);
     auditExtension(harness.pi);
 
     const ctx = harness.createContext();
-    const sessionStart = harness.getListener("session_start");
-    expect(sessionStart).toBeDefined();
+    harness.getListener("session_start")!.handler({}, ctx);
 
-    sessionStart!.handler({}, ctx);
-
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: failed (auditing)");
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("audit", "audit: loop 3/5 1/2");
     expect(ctx.ui.setWidget).toHaveBeenCalledWith("audit-progress", [
-      "✖ audit failed",
-      "  phase: auditing",
-      "  spawn failure",
-      "  ",
-      "  Concern transcript: /tmp/audit-1.jsonl",
-      "◼ Auditing correctness",
-      "  session: /tmp/audit-1.jsonl",
+      "audit loop 3/5",
+      "1/2 complete",
     ]);
   });
 });
