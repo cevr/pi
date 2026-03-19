@@ -11,7 +11,7 @@ function quote(value: string): string {
 function summarizeResolvedMention(
   mention: Extract<ResolvedMention, { status: "resolved" }>,
 ): string {
-  if (mention.kind === "commit") {
+  if ("commit" in mention) {
     return [
       mention.token.raw,
       "commit",

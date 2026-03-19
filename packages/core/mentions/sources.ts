@@ -9,11 +9,7 @@ import { type MentionKind, type MentionToken, type ResolvedMention } from "./typ
 // ---------------------------------------------------------------------------
 
 const _state = {
-  kindDescriptions: new Map<MentionKind, string>([
-    ["commit", "git commit"],
-    ["session", "previous pi session"],
-    ["handoff", "forked session with resumable context"],
-  ]),
+  kindDescriptions: new Map<MentionKind, string>([["commit", "git commit"]]),
   sources: new Map<MentionKind, MentionSource>(),
 };
 
@@ -26,7 +22,7 @@ export interface MentionSourceContext {
 }
 
 export interface MentionSource {
-  kind: MentionKind;
+  kind: string;
   description: string;
   isEnabled?(context: MentionSourceContext): boolean;
   getSuggestions(query: string, context: MentionSourceContext): AutocompleteItem[];
@@ -104,15 +100,14 @@ export function listMentionSources(): MentionSource[] {
     .filter((source): source is MentionSource => source !== undefined);
 }
 
-export function getMentionSource(kind: MentionKind): MentionSource | null {
+export function getMentionSource(kind: string): MentionSource | null {
   return _state.sources.get(kind) ?? null;
 }
 
 export function registerMentionSource(source: MentionSource): () => void {
-  _state.kindDescriptions.set(
-    source.kind,
-    _state.kindDescriptions.get(source.kind) ?? source.description,
-  );
+  const hadDescription = _state.kindDescriptions.has(source.kind);
+  const previousDescription = _state.kindDescriptions.get(source.kind);
+  _state.kindDescriptions.set(source.kind, previousDescription ?? source.description);
 
   const previous = _state.sources.get(source.kind);
   _state.sources.set(source.kind, source);
@@ -123,7 +118,15 @@ export function registerMentionSource(source: MentionSource): () => void {
       _state.sources.set(previous.kind, previous);
       return;
     }
+
     _state.sources.delete(source.kind);
+    if (hadDescription) {
+      if (previousDescription !== undefined) {
+        _state.kindDescriptions.set(source.kind, previousDescription);
+      }
+      return;
+    }
+    _state.kindDescriptions.delete(source.kind);
   };
 }
 

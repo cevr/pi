@@ -22,30 +22,14 @@ import {
 import { getMentionSource, registerMentionSource, type MentionSource } from "./sources";
 
 describe("parseMentions", () => {
-  it("parses canonical mention tokens", () => {
-    expect(
-      parseMentions("use @commit/abc1234 then check @session/123e4567-e89b and @handoff/run-42"),
-    ).toEqual([
+  it("parses built-in mention tokens", () => {
+    expect(parseMentions("use @commit/abc1234")).toEqual([
       {
         kind: "commit",
         raw: "@commit/abc1234",
         value: "abc1234",
         start: 4,
         end: 19,
-      },
-      {
-        kind: "session",
-        raw: "@session/123e4567-e89b",
-        value: "123e4567-e89b",
-        start: 31,
-        end: 53,
-      },
-      {
-        kind: "handoff",
-        raw: "@handoff/run-42",
-        value: "run-42",
-        start: 58,
-        end: 73,
       },
     ]);
   });
@@ -54,18 +38,43 @@ describe("parseMentions", () => {
     expect(parseMentions("foo@commit/abc1234 bar")).toEqual([]);
   });
 
-  it("keeps parsing registry-backed kinds when no source is registered", () => {
+  it("only parses extension mention kinds after they register", () => {
     expect(getMentionSource("session")).toBeNull();
+    expect(parseMentions("see @session/alpha1234")).toEqual([]);
 
-    expect(parseMentions("see @session/alpha1234")).toEqual([
-      {
-        kind: "session",
-        raw: "@session/alpha1234",
-        value: "alpha1234",
-        start: 4,
-        end: 22,
-      },
-    ]);
+    const unregisterSession = registerMentionSource(createTestSessionMentionSource("session"));
+    const unregisterHandoff = registerMentionSource(createTestSessionMentionSource("handoff"));
+
+    try {
+      expect(
+        parseMentions("use @commit/abc1234 then check @session/123e4567-e89b and @handoff/run-42"),
+      ).toEqual([
+        {
+          kind: "commit",
+          raw: "@commit/abc1234",
+          value: "abc1234",
+          start: 4,
+          end: 19,
+        },
+        {
+          kind: "session",
+          raw: "@session/123e4567-e89b",
+          value: "123e4567-e89b",
+          start: 31,
+          end: 53,
+        },
+        {
+          kind: "handoff",
+          raw: "@handoff/run-42",
+          value: "run-42",
+          start: 58,
+          end: 73,
+        },
+      ]);
+    } finally {
+      unregisterHandoff();
+      unregisterSession();
+    }
   });
 });
 
@@ -94,18 +103,33 @@ describe("detectMentionPrefix", () => {
     });
   });
 
-  it("keeps registry-backed families available for prefix detection", () => {
+  it("only recognizes extension families after they register", () => {
     expect(getMentionSource("handoff")).toBeNull();
-
     expect(detectMentionPrefix("check @handoff/run-42", 22)).toEqual({
       raw: "@handoff/run-42",
       start: 6,
       end: 22,
       familyQuery: "handoff",
-      kind: "handoff",
+      kind: null,
       valueQuery: "run-42",
       hasSlash: true,
     });
+
+    const unregisterHandoff = registerMentionSource(createTestSessionMentionSource("handoff"));
+
+    try {
+      expect(detectMentionPrefix("check @handoff/run-42", 22)).toEqual({
+        raw: "@handoff/run-42",
+        start: 6,
+        end: 22,
+        familyQuery: "handoff",
+        kind: "handoff",
+        valueQuery: "run-42",
+        hasSlash: true,
+      });
+    } finally {
+      unregisterHandoff();
+    }
   });
 
   it("returns null outside mention context", () => {
@@ -361,25 +385,13 @@ describe("resolveMentions", () => {
     }
   });
 
-  it("quietly misses when a parsed mention kind has no registered source", async () => {
+  it("ignores extension mention syntax when the extension source is not registered", async () => {
     await expect(
       resolveMentions("see @session/alpha1234", {
         cwd: "/repo/app",
         sessions: [],
       }),
-    ).resolves.toEqual([
-      {
-        token: {
-          kind: "session",
-          raw: "@session/alpha1234",
-          value: "alpha1234",
-          start: 4,
-          end: 22,
-        },
-        status: "unresolved",
-        reason: "session_mentions_not_supported_yet",
-      },
-    ]);
+    ).resolves.toEqual([]);
   });
 });
 

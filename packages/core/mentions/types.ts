@@ -1,6 +1,6 @@
 import type { MentionableSession } from "./session-index";
 
-export type MentionKind = "commit" | "session" | "handoff";
+export type MentionKind = string;
 
 export interface MentionToken {
   kind: MentionKind;
@@ -47,7 +47,7 @@ export interface ResolvedCommitMentionResult {
 export interface ResolvedSessionMentionResult {
   token: MentionToken;
   status: "resolved";
-  kind: "session" | "handoff";
+  kind: string;
   session: ResolvedSessionMention;
 }
 
