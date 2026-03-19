@@ -3,17 +3,27 @@
   "defaultModel": "gpt-5.4",
   "defaultThinkingLevel": "medium",
   "theme": "cristian-nord",
-  "enabledModels": ["anthropic/claude-opus-4-6", "*/gpt-5.4"],
+  "enabledModels": [
+    "anthropic/claude-opus-4-6",
+    "*/gpt-5.4"
+  ],
   "compaction": {
     "enabled": false
   },
-  "extensions": ["~/Developer/personal/dotfiles/pi/dist/extensions"],
-  "skills": ["~/Developer/personal/dotfiles/skills"],
+  "extensions": [
+    "~/Developer/personal/dotfiles/pi/dist/extensions"
+  ],
+  "skills": [
+    "~/Developer/personal/dotfiles/skills"
+  ],
   "quietStartup": true,
   "hideThinkingBlock": true,
   "enableSkillCommands": false,
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
   "lastChangelogVersion": "0.60.0",
-  "packages": ["npm:pi-interview", "npm:glimpseui"]
+  "packages": [
+    "npm:pi-interview",
+    "npm:glimpseui"
+  ]
 }
