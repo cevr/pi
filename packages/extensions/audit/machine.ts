@@ -70,6 +70,7 @@ export interface AuditLoopContext {
   iteration: number;
   maxIterations: number;
   previousConcernSessionPaths: string[];
+  previousSynthesisSessionPaths: string[];
   previousExecutionSessionPaths: string[];
 }
 
@@ -130,7 +131,7 @@ export type AuditEvent =
     }
   | { _tag: "ConcernAudited"; taskId: string; notes: string; sessionPath: string }
   | { _tag: "ConcernAuditFailed"; message: string; sessionPaths: string[] }
-  | { _tag: "SynthesisComplete"; findings: AuditFinding[] }
+  | { _tag: "SynthesisComplete"; findings: AuditFinding[]; sessionPath?: string }
   | { _tag: "SynthesisFailed"; sessionPath?: string; message?: string }
   | { _tag: "ExecutionComplete"; sessionPath: string }
   | { _tag: "ExecutionFailed"; sessionPath?: string; message?: string }
@@ -152,6 +153,7 @@ export type AuditEvent =
       iteration?: number;
       maxIterations?: number;
       previousConcernSessionPaths?: string[];
+      previousSynthesisSessionPaths?: string[];
       previousExecutionSessionPaths?: string[];
     }
   | { _tag: "Reset" };
@@ -185,6 +187,7 @@ export interface PersistPayload {
   iteration?: number;
   maxIterations?: number;
   previousConcernSessionPaths?: string[];
+  previousSynthesisSessionPaths?: string[];
   previousExecutionSessionPaths?: string[];
 }
 
@@ -277,6 +280,10 @@ export function buildSynthesisPrompt(state: Extract<AuditState, { _tag: "Synthes
       return `## Concern ${concern.order}: ${concern.subject}\n${notes}`;
     })
     .join("\n\n");
+  const previousSynthesisSessions = formatSessionPathBlock(
+    "Previous Synthesis Sessions",
+    state.previousSynthesisSessionPaths,
+  );
   const previousExecutionSessions = formatSessionPathBlock(
     "Previous Execution Sessions",
     state.previousExecutionSessionPaths,
@@ -285,7 +292,8 @@ export function buildSynthesisPrompt(state: Extract<AuditState, { _tag: "Synthes
   return `Synthesize the ordered execution plan for audit loop ${state.iteration}/${state.maxIterations}.${userBlock}
 
 ## Concern Audit Notes
-${concernNotes}${previousExecutionSessions}
+${concernNotes}${previousSynthesisSessions}${previousExecutionSessions}Read previous synthesis and execution sessions only if needed to understand what was already tried and what remains.
+
 1. Deduplicate across concerns
 2. Group related findings so the execution pass can fix them coherently
 3. Order work to respect dependencies and minimize churn
@@ -404,6 +412,7 @@ function persist(state: AuditState): AuditEffect {
           iteration: state.iteration,
           maxIterations: state.maxIterations,
           previousConcernSessionPaths: state.previousConcernSessionPaths,
+          previousSynthesisSessionPaths: state.previousSynthesisSessionPaths,
           previousExecutionSessionPaths: state.previousExecutionSessionPaths,
         };
       case "AwaitingConcernApproval":
@@ -420,6 +429,7 @@ function persist(state: AuditState): AuditEffect {
           iteration: state.iteration,
           maxIterations: state.maxIterations,
           previousConcernSessionPaths: state.previousConcernSessionPaths,
+          previousSynthesisSessionPaths: state.previousSynthesisSessionPaths,
           previousExecutionSessionPaths: state.previousExecutionSessionPaths,
         };
       case "Auditing":
@@ -434,6 +444,7 @@ function persist(state: AuditState): AuditEffect {
           iteration: state.iteration,
           maxIterations: state.maxIterations,
           previousConcernSessionPaths: state.previousConcernSessionPaths,
+          previousSynthesisSessionPaths: state.previousSynthesisSessionPaths,
           previousExecutionSessionPaths: state.previousExecutionSessionPaths,
         };
       case "Synthesizing":
@@ -446,6 +457,7 @@ function persist(state: AuditState): AuditEffect {
           iteration: state.iteration,
           maxIterations: state.maxIterations,
           previousConcernSessionPaths: state.previousConcernSessionPaths,
+          previousSynthesisSessionPaths: state.previousSynthesisSessionPaths,
           previousExecutionSessionPaths: state.previousExecutionSessionPaths,
         };
       case "Executing":
@@ -459,6 +471,7 @@ function persist(state: AuditState): AuditEffect {
           iteration: state.iteration,
           maxIterations: state.maxIterations,
           previousConcernSessionPaths: state.previousConcernSessionPaths,
+          previousSynthesisSessionPaths: state.previousSynthesisSessionPaths,
           previousExecutionSessionPaths: state.previousExecutionSessionPaths,
         };
     }
@@ -716,6 +729,7 @@ function resetConcernIteration(concerns: readonly AuditConcernTask[]): AuditConc
 function continueAuditLoop(
   state: Extract<AuditState, { _tag: "Auditing" | "Synthesizing" | "Executing" }>,
   additionalConcernSessionPaths: readonly string[] = [],
+  additionalSynthesisSessionPaths: readonly string[] = [],
   additionalExecutionSessionPaths: readonly string[] = [],
 ): Result {
   if (state.iteration >= state.maxIterations) {
@@ -766,6 +780,10 @@ function continueAuditLoop(
       ...state.previousConcernSessionPaths,
       ...additionalConcernSessionPaths,
     ],
+    previousSynthesisSessionPaths: [
+      ...state.previousSynthesisSessionPaths,
+      ...additionalSynthesisSessionPaths,
+    ],
     previousExecutionSessionPaths: [
       ...state.previousExecutionSessionPaths,
       ...additionalExecutionSessionPaths,
@@ -807,6 +825,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         iteration: 1,
         maxIterations: event.maxIterations ?? DEFAULT_MAX_ITERATIONS,
         previousConcernSessionPaths: [],
+        previousSynthesisSessionPaths: [],
         previousExecutionSessionPaths: [],
       };
       return {
@@ -849,6 +868,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         iteration: state.iteration,
         maxIterations: state.maxIterations,
         previousConcernSessionPaths: state.previousConcernSessionPaths,
+        previousSynthesisSessionPaths: state.previousSynthesisSessionPaths,
         previousExecutionSessionPaths: state.previousExecutionSessionPaths,
       };
       return {
@@ -895,6 +915,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         iteration: state.iteration,
         maxIterations: state.maxIterations,
         previousConcernSessionPaths: state.previousConcernSessionPaths,
+        previousSynthesisSessionPaths: state.previousSynthesisSessionPaths,
         previousExecutionSessionPaths: state.previousExecutionSessionPaths,
       };
       return {
@@ -974,6 +995,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           iteration: state.iteration,
           maxIterations: state.maxIterations,
           previousConcernSessionPaths: state.previousConcernSessionPaths,
+          previousSynthesisSessionPaths: state.previousSynthesisSessionPaths,
           previousExecutionSessionPaths: state.previousExecutionSessionPaths,
         };
         return {
@@ -1010,6 +1032,9 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
 
     case "SynthesisComplete": {
       if (state._tag !== "Synthesizing") return { state };
+      const previousSynthesisSessionPaths = event.sessionPath
+        ? [...state.previousSynthesisSessionPaths, event.sessionPath]
+        : state.previousSynthesisSessionPaths;
       if (event.findings.length === 0) {
         const next: AuditState = { _tag: "Idle" };
         return {
@@ -1039,6 +1064,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         iteration: state.iteration,
         maxIterations: state.maxIterations,
         previousConcernSessionPaths: state.previousConcernSessionPaths,
+        previousSynthesisSessionPaths,
         previousExecutionSessionPaths: state.previousExecutionSessionPaths,
       };
       return {
@@ -1055,7 +1081,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
 
     case "SynthesisFailed": {
       if (state._tag !== "Synthesizing") return { state };
-      const loop = continueAuditLoop(state);
+      const loop = continueAuditLoop(state, [], event.sessionPath ? [event.sessionPath] : []);
       return {
         state: loop.state,
         effects: [
@@ -1072,7 +1098,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
 
     case "ExecutionComplete": {
       if (state._tag !== "Executing") return { state };
-      const loop = continueAuditLoop(state, [], [event.sessionPath]);
+      const loop = continueAuditLoop(state, [], [], [event.sessionPath]);
       return {
         state: loop.state,
         effects: [
@@ -1084,7 +1110,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
 
     case "ExecutionFailed": {
       if (state._tag !== "Executing") return { state };
-      const loop = continueAuditLoop(state, [], event.sessionPath ? [event.sessionPath] : []);
+      const loop = continueAuditLoop(state, [], [], event.sessionPath ? [event.sessionPath] : []);
       return {
         state: loop.state,
         effects: [
@@ -1117,6 +1143,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       const iteration = event.iteration ?? 1;
       const maxIterations = event.maxIterations ?? DEFAULT_MAX_ITERATIONS;
       const previousConcernSessionPaths = event.previousConcernSessionPaths ?? [];
+      const previousSynthesisSessionPaths = event.previousSynthesisSessionPaths ?? [];
       const previousExecutionSessionPaths = event.previousExecutionSessionPaths ?? [];
 
       if (event.mode === "Detecting" && event.scope && event.previousThinkingLevel) {
@@ -1132,6 +1159,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           iteration,
           maxIterations,
           previousConcernSessionPaths,
+          previousSynthesisSessionPaths,
           previousExecutionSessionPaths,
         };
         return { state: next, effects: [statusEffectForState(next), runDetection(next), UI] };
@@ -1156,6 +1184,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           iteration,
           maxIterations,
           previousConcernSessionPaths,
+          previousSynthesisSessionPaths,
           previousExecutionSessionPaths,
         };
         return { state: next, effects: [statusEffectForState(next), UI] };
@@ -1182,6 +1211,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           iteration,
           maxIterations,
           previousConcernSessionPaths,
+          previousSynthesisSessionPaths,
           previousExecutionSessionPaths,
         };
         return { state: next, effects: [statusEffectForState(next), runConcernBatch(next), UI] };
@@ -1198,6 +1228,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           iteration,
           maxIterations,
           previousConcernSessionPaths,
+          previousSynthesisSessionPaths,
           previousExecutionSessionPaths,
         };
         return { state: next, effects: [statusEffectForState(next), runSynthesis(next), UI] };
@@ -1215,6 +1246,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           iteration,
           maxIterations,
           previousConcernSessionPaths,
+          previousSynthesisSessionPaths,
           previousExecutionSessionPaths,
         };
         return { state: next, effects: [statusEffectForState(next), runExecution(next), UI] };

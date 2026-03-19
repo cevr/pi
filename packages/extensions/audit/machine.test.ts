@@ -52,6 +52,7 @@ function detecting(userPrompt = "", scope: "diff" | "paths" = "diff"): AuditStat
     iteration: 1,
     maxIterations: 5,
     previousConcernSessionPaths: [],
+    previousSynthesisSessionPaths: [],
     previousExecutionSessionPaths: [],
   };
 }
@@ -98,6 +99,7 @@ function awaitingConcernApproval(
     iteration: 1,
     maxIterations: 5,
     previousConcernSessionPaths: [],
+    previousSynthesisSessionPaths: [],
     previousExecutionSessionPaths: [],
   };
 }
@@ -118,6 +120,7 @@ function auditing(
     iteration: 1,
     maxIterations: 5,
     previousConcernSessionPaths: [],
+    previousSynthesisSessionPaths: [],
     previousExecutionSessionPaths: [],
   };
 }
@@ -133,6 +136,7 @@ function synthesizing(concerns = createConcernTasks(CONCERNS, CONCERNS.length)):
     iteration: 1,
     maxIterations: 5,
     previousConcernSessionPaths: [],
+    previousSynthesisSessionPaths: [],
     previousExecutionSessionPaths: [],
   };
 }
@@ -509,6 +513,7 @@ describe("auditReducer — Hydrate", () => {
       iteration: 1,
       maxIterations: 5,
       previousConcernSessionPaths: [],
+      previousSynthesisSessionPaths: [],
       previousExecutionSessionPaths: [],
     });
     expect(
@@ -635,6 +640,7 @@ describe("auditReducer — self-healing loop", () => {
     if (r.state._tag === "Auditing") {
       expect(r.state.iteration).toBe(2);
       expect(r.state.previousExecutionSessionPaths).toContain("/tmp/exec-1.jsonl");
+      expect(r.state.previousSynthesisSessionPaths).toEqual([]);
     }
   });
 
@@ -714,6 +720,7 @@ describe("auditReducer — self-healing loop", () => {
     if (afterExecution.state._tag === "Auditing") {
       expect(afterExecution.state.iteration).toBe(2);
       expect(afterExecution.state.previousExecutionSessionPaths).toEqual(["/tmp/exec-1.jsonl"]);
+      expect(afterExecution.state.previousSynthesisSessionPaths).toEqual([]);
       expect(
         afterExecution.state.concerns.every((concern) => concern.metadata.notes === undefined),
       ).toBe(true);
@@ -741,6 +748,7 @@ describe("auditReducer — self-healing loop", () => {
       iteration: secondPassState.iteration,
       maxIterations: secondPassState.maxIterations,
       previousConcernSessionPaths: secondPassState.previousConcernSessionPaths,
+      previousSynthesisSessionPaths: secondPassState.previousSynthesisSessionPaths,
       previousExecutionSessionPaths: secondPassState.previousExecutionSessionPaths,
     };
 

@@ -60,6 +60,7 @@ function createDetectingState() {
     iteration: 1,
     maxIterations: 5,
     previousConcernSessionPaths: [],
+    previousSynthesisSessionPaths: [],
     previousExecutionSessionPaths: [],
   };
 }
@@ -104,6 +105,7 @@ function createAuditingState(frontierTaskIds: string[] = ["1", "2"]) {
     iteration: 1,
     maxIterations: 5,
     previousConcernSessionPaths: [],
+    previousSynthesisSessionPaths: [],
     previousExecutionSessionPaths: [],
   };
 }
@@ -119,6 +121,7 @@ function createSynthesizingState() {
     iteration: 1,
     maxIterations: 5,
     previousConcernSessionPaths: ["/tmp/audit-concern-1.jsonl"],
+    previousSynthesisSessionPaths: ["/tmp/audit-synthesis-0.jsonl"],
     previousExecutionSessionPaths: ["/tmp/audit-execution-0.jsonl"],
   };
 }
@@ -141,6 +144,7 @@ function createExecutingState() {
     iteration: 1,
     maxIterations: 5,
     previousConcernSessionPaths: ["/tmp/audit-concern-1.jsonl"],
+    previousSynthesisSessionPaths: ["/tmp/audit-synthesis-0.jsonl"],
     previousExecutionSessionPaths: ["/tmp/audit-execution-0.jsonl"],
   };
 }
@@ -270,7 +274,7 @@ describe("runDetection", () => {
     let seenConfig: PiSpawnConfig | undefined;
 
     const concerns = await runSpawnWithSpawn(
-      runDetection(state, "/tmp", "session-123"),
+      runDetection(state, "/tmp", "session-123", "/tmp/detect.jsonl"),
       (config) => {
         seenConfig = config;
         return Effect.succeed({
@@ -309,20 +313,28 @@ describe("runDetection", () => {
     expect(seenConfig?.model).toBe("openai-codex/gpt-5.4-mini");
     expect(seenConfig?.builtinTools).toEqual([]);
     expect(seenConfig?.extensionTools).toEqual(["audit_proposed_concerns"]);
-    expect(concerns).toEqual([
-      {
-        name: "correctness",
-        description: "Bugs and soundness",
-        skills: ["code-review"],
-      },
-    ]);
+    expect(seenConfig?.sessionPath).toBe("/tmp/detect.jsonl");
+    expect(concerns).toEqual({
+      concerns: [
+        {
+          name: "correctness",
+          description: "Bugs and soundness",
+          skills: ["code-review"],
+        },
+      ],
+      sessionPath: "/tmp/detect.jsonl",
+      renderResult: expect.objectContaining({
+        agent: "audit detection 1/5",
+        stopReason: "end_turn",
+      }),
+    });
   });
 
   it("fails when detection exits without audit_proposed_concerns", async () => {
     const state = createDetectingState();
 
     const error = await runSpawnWithSpawn(
-      runDetection(state, "/tmp", "session-123").pipe(Effect.flip),
+      runDetection(state, "/tmp", "session-123", "/tmp/detect.jsonl").pipe(Effect.flip),
       () =>
         Effect.succeed({
           exitCode: 0,
@@ -341,11 +353,13 @@ describe("runDetection", () => {
 describe("runSynthesis", () => {
   it("returns parsed findings alongside the render result", async () => {
     const state = createSynthesizingState();
+    let seenConfig: PiSpawnConfig | undefined;
 
     const result = await runSpawnWithSpawn(
       runSynthesis(state, "/tmp", "session-123", undefined, "/tmp/synth.jsonl"),
-      () =>
-        Effect.succeed({
+      (config) => {
+        seenConfig = config;
+        return Effect.succeed({
           exitCode: 0,
           messages: [
             {
@@ -373,9 +387,11 @@ describe("runSynthesis", () => {
           stderr: "",
           usage: zeroUsage(),
           stopReason: "end_turn",
-        }),
+        });
+      },
     );
 
+    expect(seenConfig?.model).toBe("openai-codex/gpt-5.4-mini");
     expect(result.sessionPath).toBe("/tmp/synth.jsonl");
     expect(result.findings).toEqual([
       {
@@ -390,11 +406,13 @@ describe("runSynthesis", () => {
 describe("runExecution", () => {
   it("returns the parsed execution outcome alongside the render result", async () => {
     const state = createExecutingState();
+    let seenConfig: PiSpawnConfig | undefined;
 
     const result = await runSpawnWithSpawn(
       runExecution(state, "/tmp", "session-123", undefined, "/tmp/exec.jsonl"),
-      () =>
-        Effect.succeed({
+      (config) => {
+        seenConfig = config;
+        return Effect.succeed({
           exitCode: 0,
           messages: [
             {
@@ -414,9 +432,11 @@ describe("runExecution", () => {
           stderr: "",
           usage: zeroUsage(),
           stopReason: "end_turn",
-        }),
+        });
+      },
     );
 
+    expect(seenConfig?.thinking).toBe("xhigh");
     expect(result.sessionPath).toBe("/tmp/exec.jsonl");
     expect(result.outcome).toBe("completed");
   });
@@ -426,11 +446,13 @@ describe("runConcernBatch", () => {
   it("strips the completion marker from concern notes and preserves frontier order", async () => {
     const state = createAuditingState(["1", "2"]);
     const seenTasks: string[] = [];
+    const seenThinking: string[] = [];
 
     const results = await runConcernBatchWithSpawn(
       runConcernBatch(state, "/tmp", "session-123", "Follow principles", new Map()),
       (config) => {
         seenTasks.push(config.task);
+        seenThinking.push(config.thinking ?? "");
         expect(config.sessionPath).toEqual(expect.stringContaining("audit-"));
         const toolCallId = config.task.includes("correctness") ? "tc-correctness" : "tc-frontend";
         const text = config.task.includes("correctness")
@@ -462,6 +484,7 @@ describe("runConcernBatch", () => {
 
     expect(seenTasks[0]).toContain("Audit concern 1/2: correctness");
     expect(seenTasks[1]).toContain("Audit concern 2/2: frontend");
+    expect(seenThinking).toEqual(["xhigh", "xhigh"]);
     expect(results).toEqual([
       {
         taskId: "1",
@@ -1002,6 +1025,7 @@ describe("audit extension", () => {
           userPrompt: "check react",
           iteration: 2,
           maxIterations: 5,
+          previousSynthesisSessionPaths: ["/tmp/synth-1.jsonl"],
           previousExecutionSessionPaths: ["/tmp/exec-1.jsonl"],
         },
       },
@@ -1062,6 +1086,7 @@ describe("audit extension", () => {
           iteration: 3,
           maxIterations: 5,
           previousConcernSessionPaths: ["/tmp/audit-1.jsonl"],
+          previousSynthesisSessionPaths: ["/tmp/synth-1.jsonl"],
           previousExecutionSessionPaths: ["/tmp/exec-1.jsonl"],
         },
       },
