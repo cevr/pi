@@ -78,6 +78,7 @@ export type ModesEvent =
   | { _tag: "SpecWithPrompt"; prompt: string; currentTools: string[]; diffContext?: DiffContext }
   | { _tag: "SpecReady"; spec: SpecDraft }
   | { _tag: "TaskListReady"; pending: PendingTaskList; currentTools: string[] }
+  | { _tag: "RestoreTaskList"; todoItems: TaskListItem[]; currentTools: string[] }
   | { _tag: "ChooseExecute" }
   | { _tag: "ChooseStay" }
   | { _tag: "ChooseRefine"; refinement: string }
@@ -110,6 +111,8 @@ export type ModesEffect =
   | { type: "writePlanFile"; planFilePath: string; planText: string; todoItems: TaskListItem[] }
   | { type: "writeSpecFile"; specFilePath: string; specText: string }
   | { type: "updatePlanFile"; planFilePath: string; todoItems: TaskListItem[] }
+  | { type: "persistTaskList"; todoItems: TaskListItem[] }
+  | { type: "clearTaskList" }
   | { type: "persistState"; state: PersistPayload }
   | { type: "updateUI" };
 
@@ -195,6 +198,10 @@ function getModeThinkingLevel(
   state: ModesState,
 ): typeof AUTO_DEFAULT_THINKING | typeof SPEC_DEFAULT_THINKING {
   return state._tag === "Spec" ? SPEC_DEFAULT_THINKING : AUTO_DEFAULT_THINKING;
+}
+
+function formatRestoredPlanText(todoItems: readonly TaskListItem[]): string {
+  return `# Task List\n${todoItems.map((task) => `${task.order}. ${task.subject}`).join("\n")}`;
 }
 
 function setModeThinking(state: ModesState): BuiltinEffect {
@@ -353,8 +360,8 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           : state._tag === "Spec" || state._tag === "AwaitingChoice"
             ? state.savedTools
             : event.currentTools;
-      const pending = state._tag === "Executing" ? undefined : state.pending;
-      const spec = state._tag === "Executing" ? state.spec : state.spec;
+      const pending = state.pending;
+      const spec = state.spec;
       const diffContext =
         event.diffContext ?? (state._tag === "Spec" ? state.diffContext : undefined);
       const next: ModesState = { _tag: "Spec", savedTools, spec, pending, diffContext };
@@ -426,6 +433,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           content: `**Task List (${event.pending.todoItems.length}):**\n\n${todoListText}${pathInfo}`,
           display: true,
         },
+        { type: "persistTaskList", todoItems: event.pending.todoItems },
         persist(next),
       ];
       if (event.pending.planFilePath) {
@@ -441,6 +449,53 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
         state: next,
         effects,
       };
+    }
+
+    // ----- RestoreTaskList -----
+    case "RestoreTaskList": {
+      if (event.todoItems.length === 0) return { state };
+
+      const pending: PendingTaskList = {
+        todoItems: event.todoItems.map((task) => ({ ...task, blockedBy: [...task.blockedBy] })),
+        planFilePath: null,
+        planText: formatRestoredPlanText(event.todoItems),
+      };
+
+      if (state._tag === "Auto" && !state.pending) {
+        const next: ModesState = {
+          _tag: "AwaitingChoice",
+          savedTools: event.currentTools,
+          pending,
+          spec: state.spec,
+        };
+        return {
+          state: next,
+          effects: [
+            setModeThinking(next),
+            {
+              type: "notify",
+              message: "Restored executable task list from session storage.",
+            },
+            persist(next),
+          ],
+        };
+      }
+
+      if (state._tag === "Spec" && !state.pending) {
+        const next: ModesState = { ...state, pending };
+        return {
+          state: next,
+          effects: [
+            {
+              type: "notify",
+              message: "Restored executable task list from session storage.",
+            },
+            persist(next),
+          ],
+        };
+      }
+
+      return { state };
     }
 
     // ----- ChooseExecute -----
@@ -476,6 +531,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
             display: true,
             triggerTurn: true,
           }),
+          { type: "persistTaskList", todoItems },
           persist(next),
         ],
       };
@@ -695,6 +751,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
             triggerTurn: true,
           }),
           UI,
+          { type: "persistTaskList", todoItems },
           persist(next),
         ],
       };
@@ -714,6 +771,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           display: true,
         },
         { type: "setActiveTools", tools: getAutoModeTools(state.savedTools) },
+        { type: "clearTaskList" },
       ];
       if (state.planFilePath) {
         effects.push({

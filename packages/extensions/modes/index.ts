@@ -14,15 +14,17 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Key } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { readPrinciples } from "@cvr/pi-brain-principles";
+import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
 import { gatherDiffContext, type DiffContext } from "@cvr/pi-diff-context";
 import { createInlineExecutionExecutor, isExecutionEffect } from "@cvr/pi-execution";
-import { createTaskList, type TaskListItem, type TaskListStatus } from "@cvr/pi-task-list";
+import { createTaskList, TaskListItemSchema, type TaskListItem, type TaskListStatus } from "@cvr/pi-task-list";
+import { TaskListStore, type TaskListScope } from "@cvr/pi-task-list-store";
 import { renderTaskWidget } from "@cvr/pi-task-widget";
 import { GitClient } from "@cvr/pi-git-client";
 import { ProcessRunner } from "@cvr/pi-process-runner";
 import { register } from "@cvr/pi-state-machine";
 import type { Command, StateObserver } from "@cvr/pi-state-machine";
-import { Layer, ManagedRuntime } from "effect";
+import { Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import {
   AUTO_SIGNAL_TOOLS,
   EXECUTION_SIGNAL_TOOLS,
@@ -46,6 +48,34 @@ const PLANS_DIR = path.join(os.homedir(), ".pi", "plans");
 const SPECS_DIR = path.join(os.homedir(), ".pi", "specs");
 
 type EditorMode = "auto" | "spec";
+
+type ModesExtConfig = {
+  taskListScope: TaskListScope;
+};
+
+type ModesExtensionDeps = {
+  getEnabledExtensionConfig: typeof getEnabledExtensionConfig;
+};
+
+export const CONFIG_DEFAULTS: ModesExtConfig = {
+  taskListScope: "session",
+};
+
+export const DEFAULT_DEPS: ModesExtensionDeps = {
+  getEnabledExtensionConfig,
+};
+
+function isTaskListScope(value: unknown): value is TaskListScope {
+  return value === "memory" || value === "session" || value === "project";
+}
+
+function isModesConfig(value: Record<string, unknown>): value is ModesExtConfig {
+  return isTaskListScope(value.taskListScope);
+}
+
+export const MODES_CONFIG_SCHEMA: ExtensionConfigSchema<ModesExtConfig> = {
+  validate: isModesConfig,
+};
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -126,51 +156,41 @@ function buildTaskListFromSteps(steps: readonly string[]): TaskListItem[] {
   return createTaskList(steps.map((step) => cleanStepText(step)).filter((step) => step.length > 3));
 }
 
-function normalizeHydratedTaskList(items: readonly Record<string, unknown>[]): TaskListItem[] {
-  return items.flatMap((item) => {
-    if (
-      typeof item.id === "string" &&
-      typeof item.order === "number" &&
-      typeof item.subject === "string" &&
-      (item.status === "pending" || item.status === "in_progress" || item.status === "completed")
-    ) {
-      return [
-        {
-          id: item.id,
-          order: item.order,
-          subject: item.subject,
-          status: item.status,
-          blockedBy: Array.isArray(item.blockedBy)
-            ? item.blockedBy.filter((value): value is string => typeof value === "string")
-            : [],
-          activeForm: typeof item.activeForm === "string" ? item.activeForm : undefined,
-          owner: typeof item.owner === "string" ? item.owner : undefined,
-          metadata:
-            typeof item.metadata === "object" && item.metadata !== null
-              ? (item.metadata as Record<string, unknown>)
-              : undefined,
-        },
-      ];
+const decodeTaskListItem = Schema.decodeUnknownOption(TaskListItemSchema);
+
+function normalizeHydratedTaskList(items: readonly unknown[]): TaskListItem[] {
+  const normalized: TaskListItem[] = [];
+
+  for (const item of items) {
+    if (typeof item !== "object" || item === null) continue;
+
+    const decoded = decodeTaskListItem(item);
+    if (Option.isSome(decoded)) {
+      normalized.push({
+        ...decoded.value,
+        blockedBy: [...decoded.value.blockedBy],
+        metadata: decoded.value.metadata ? { ...decoded.value.metadata } : undefined,
+      });
+      continue;
     }
 
+    const legacy = item as Record<string, unknown>;
     if (
-      typeof item.step === "number" &&
-      typeof item.text === "string" &&
-      typeof item.completed === "boolean"
+      typeof legacy.step === "number" &&
+      typeof legacy.text === "string" &&
+      typeof legacy.completed === "boolean"
     ) {
-      return [
-        {
-          id: String(item.step),
-          order: item.step,
-          subject: item.text,
-          status: item.completed ? "completed" : "pending",
-          blockedBy: [],
-        },
-      ];
+      normalized.push({
+        id: String(legacy.step),
+        order: legacy.step,
+        subject: legacy.text,
+        status: legacy.completed ? "completed" : "pending",
+        blockedBy: [],
+      });
     }
+  }
 
-    return [];
-  });
+  return normalized;
 }
 
 function normalizeHydratedSpec(value: unknown): SpecDraft | undefined {
@@ -186,6 +206,52 @@ function normalizeHydratedSpec(value: unknown): SpecDraft | undefined {
     };
   }
   return undefined;
+}
+
+function createTaskListStoreRuntime(ctx: ExtensionContext, scope: TaskListScope) {
+  return TaskListStore.runtime({
+    cwd: ctx.cwd,
+    scope,
+    sessionId: ctx.sessionManager.getSessionId(),
+  });
+}
+
+async function persistTaskListSnapshot(
+  ctx: ExtensionContext,
+  scope: TaskListScope,
+  todoItems: readonly TaskListItem[],
+) {
+  const runtime = createTaskListStoreRuntime(ctx, scope);
+  await runtime.runPromise(
+    Effect.gen(function* () {
+      const store = yield* TaskListStore;
+      yield* store.save(todoItems);
+    }),
+  );
+}
+
+async function clearTaskListSnapshot(ctx: ExtensionContext, scope: TaskListScope) {
+  const runtime = createTaskListStoreRuntime(ctx, scope);
+  await runtime.runPromise(
+    Effect.gen(function* () {
+      const store = yield* TaskListStore;
+      yield* store.clear;
+    }),
+  );
+}
+
+async function loadTaskListSnapshot(
+  ctx: ExtensionContext,
+  scope: TaskListScope,
+): Promise<TaskListItem[] | null> {
+  const runtime = createTaskListStoreRuntime(ctx, scope);
+  const snapshot = await runtime.runPromise(
+    Effect.gen(function* () {
+      const store = yield* TaskListStore;
+      return yield* store.load;
+    }),
+  );
+  return Option.isSome(snapshot) ? snapshot.value.tasks : null;
 }
 
 function getEditorMode(state: ModesState): EditorMode {
@@ -257,9 +323,21 @@ async function tryGatherDiffContext(
 // Extension factory
 // ---------------------------------------------------------------------------
 
-export default function modesExtension(pi: ExtensionAPI): void {
-  const gitRuntime = ManagedRuntime.make(GitClient.layer.pipe(Layer.provide(ProcessRunner.layer)));
-  const executor = createInlineExecutionExecutor(pi);
+export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
+  return function modesExtension(pi: ExtensionAPI): void {
+    const { enabled, config: cfg } = deps.getEnabledExtensionConfig(
+      "@cvr/pi-modes",
+      CONFIG_DEFAULTS,
+      {
+        schema: MODES_CONFIG_SCHEMA,
+        allowProjectConfig: true,
+        cwd: process.cwd(),
+      },
+    );
+    if (!enabled) return;
+
+    const gitRuntime = ManagedRuntime.make(GitClient.layer.pipe(Layer.provide(ProcessRunner.layer)));
+    const executor = createInlineExecutionExecutor(pi);
 
   pi.on("session_shutdown" as any, async () => {
     await gitRuntime.dispose();
@@ -281,6 +359,12 @@ export default function modesExtension(pi: ExtensionAPI): void {
         break;
       case "updatePlanFile":
         updatePlanFileToDisk(effect.planFilePath, effect.todoItems);
+        break;
+      case "persistTaskList":
+        void persistTaskListSnapshot(ctx, cfg.taskListScope, effect.todoItems).catch(() => undefined);
+        break;
+      case "clearTaskList":
+        void clearTaskListSnapshot(ctx, cfg.taskListScope).catch(() => undefined);
         break;
       case "persistState":
         pi.appendEntry("modes", effect.state);
@@ -812,11 +896,8 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
             const data = modesEntry?.data;
             const mode = data?.mode;
             const pendingData = data?.pending;
-            const todoItems = normalizeHydratedTaskList(
-              Array.isArray(pendingData?.todoItems ?? data?.todoItems)
-                ? ((pendingData?.todoItems ?? data?.todoItems) as Record<string, unknown>[])
-                : [],
-            );
+            const rawTodoItems = pendingData?.todoItems ?? data?.todoItems;
+            const todoItems = normalizeHydratedTaskList(Array.isArray(rawTodoItems) ? rawTodoItems : []);
             const pending = pendingData
               ? {
                   ...pendingData,
@@ -876,30 +957,51 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
     interpretEffect,
   );
 
-  // ----- /spec command (imperative — async diff context gathering) -----
-  pi.registerCommand("spec", {
-    description:
-      "Toggle SPEC mode. Shift+Tab also toggles it. /spec <prompt> enters SPEC mode and sends the prompt.",
-    handler: async (args, ctx) => {
-      const prompt = args.trim();
-      const currentTools = pi.getActiveTools();
+    pi.on("session_start", async (_event, ctx) => {
+      const restoredTodoItems = await loadTaskListSnapshot(ctx, cfg.taskListScope).catch(() => null);
+      if (!restoredTodoItems || restoredTodoItems.length === 0) return;
+
       const state = machine.getState();
+      const canRestore =
+        (state._tag === "Auto" && !state.pending) || (state._tag === "Spec" && !state.pending);
+      if (!canRestore) return;
 
-      if (
-        !prompt &&
-        (state._tag === "Spec" || state._tag === "AwaitingChoice" || state._tag === "Executing")
-      ) {
-        machine.send({ _tag: "Toggle", currentTools });
-        return;
-      }
+      machine.send({
+        _tag: "RestoreTaskList",
+        todoItems: restoredTodoItems,
+        currentTools: pi.getActiveTools(),
+      });
+    });
 
-      const diffContext = await tryGatherDiffContext(ctx.cwd, gitRuntime);
+    // ----- /spec command (imperative — async diff context gathering) -----
+    pi.registerCommand("spec", {
+      description:
+        "Toggle SPEC mode. Shift+Tab also toggles it. /spec <prompt> enters SPEC mode and sends the prompt.",
+      handler: async (args, ctx) => {
+        const prompt = args.trim();
+        const currentTools = pi.getActiveTools();
+        const state = machine.getState();
 
-      if (prompt) {
-        machine.send({ _tag: "SpecWithPrompt", prompt, currentTools, diffContext });
-      } else {
-        machine.send({ _tag: "Toggle", currentTools, diffContext });
-      }
-    },
-  });
+        if (
+          !prompt &&
+          (state._tag === "Spec" || state._tag === "AwaitingChoice" || state._tag === "Executing")
+        ) {
+          machine.send({ _tag: "Toggle", currentTools });
+          return;
+        }
+
+        const diffContext = await tryGatherDiffContext(ctx.cwd, gitRuntime);
+
+        if (prompt) {
+          machine.send({ _tag: "SpecWithPrompt", prompt, currentTools, diffContext });
+        } else {
+          machine.send({ _tag: "Toggle", currentTools, diffContext });
+        }
+      },
+    });
+  };
 }
+
+const modesExtension: (pi: ExtensionAPI) => void = createModesExtension();
+
+export default modesExtension;

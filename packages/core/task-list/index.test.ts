@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { Effect, Schema } from "effect";
 import {
   claimTasks,
   completeTasks,
@@ -10,8 +11,42 @@ import {
   getReadyTaskIds,
   setTaskStatus,
   setTaskStatuses,
+  TaskGraphValidationIssueSchema,
+  TaskListItemSchema,
+  TaskListStatusSchema,
   validateTaskGraph,
 } from "./index";
+
+describe("schemas", () => {
+  it("decodes task statuses and task items", async () => {
+    await expect(Effect.runPromise(Schema.decodeUnknownEffect(TaskListStatusSchema)("pending"))).resolves.toBe(
+      "pending",
+    );
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(TaskListItemSchema)({
+          id: "1",
+          order: 1,
+          subject: "First",
+          status: "pending",
+          blockedBy: [],
+          metadata: { owner: "pi" },
+        }),
+      ),
+    ).resolves.toMatchObject({ subject: "First", metadata: { owner: "pi" } });
+  });
+
+  it("decodes validation issues", async () => {
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(TaskGraphValidationIssueSchema)({
+          type: "cycle",
+          taskIds: ["1", "2", "1"],
+        }),
+      ),
+    ).resolves.toEqual({ type: "cycle", taskIds: ["1", "2", "1"] });
+  });
+});
 
 describe("createTaskList", () => {
   it("creates ordered pending tasks", () => {

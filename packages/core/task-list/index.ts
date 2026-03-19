@@ -1,3 +1,5 @@
+import { Schema } from "effect";
+
 export type TaskListStatus = "pending" | "in_progress" | "completed";
 
 export interface TaskListItem {
@@ -17,6 +19,37 @@ export interface TaskGraphValidationIssue {
   blockerId?: string;
   taskIds?: string[];
 }
+
+export const TaskListStatusSchema = Schema.Literals(["pending", "in_progress", "completed"]);
+export const TaskListMetadataSchema = Schema.optional(Schema.Record(Schema.String, Schema.Unknown));
+
+export const TaskListItemSchema = Schema.Struct({
+  id: Schema.String,
+  order: Schema.Number,
+  subject: Schema.String,
+  status: TaskListStatusSchema,
+  blockedBy: Schema.Array(Schema.String),
+  activeForm: Schema.optional(Schema.String),
+  owner: Schema.optional(Schema.String),
+  metadata: TaskListMetadataSchema,
+});
+
+export const TaskGraphValidationIssueSchema = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("missing_blocker"),
+    taskId: Schema.optional(Schema.String),
+    blockerId: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("self_block"),
+    taskId: Schema.optional(Schema.String),
+    blockerId: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("cycle"),
+    taskIds: Schema.optional(Schema.Array(Schema.String)),
+  }),
+]); 
 
 export function createTaskList(subjects: readonly string[]): TaskListItem[] {
   return subjects.map((subject, index) => ({

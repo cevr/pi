@@ -1,7 +1,17 @@
-import { describe, expect, it, mock } from "bun:test";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
-import modesExtension from "./index";
+import { Effect } from "effect";
+import { createTaskList } from "@cvr/pi-task-list";
+import { TaskListStore } from "@cvr/pi-task-list-store";
+import modesExtension, { createModesExtension } from "./index";
+
+afterEach(async () => {
+  await TaskListStore.clearRuntimeCache();
+});
 
 function createMockExtensionApiHarness() {
   const tools: Array<{ name: string; tool: any }> = [];
@@ -15,6 +25,7 @@ function createMockExtensionApiHarness() {
   const flagValues = new Map<string, unknown>();
   let activeTools: string[] = ["read", "bash", "edit", "write", "grep", "find", "ls", "skill"];
   let thinkingLevel = "off";
+  let sessionId = 0;
 
   const pi = {
     registerTool(tool: any) {
@@ -79,6 +90,7 @@ function createMockExtensionApiHarness() {
       sessionEntries.splice(0, sessionEntries.length, ...entries);
     },
     createContext: (overrides: Record<string, unknown> = {}) => {
+      const generatedSessionId = `test-session-${++sessionId}`;
       const theme = {
         fg: (_tone: string, text: string) => text,
         strikethrough: (text: string) => text,
@@ -97,6 +109,7 @@ function createMockExtensionApiHarness() {
         ui,
         sessionManager: {
           getEntries: () => sessionEntries,
+          getSessionId: () => generatedSessionId,
         },
         ...overrides,
       };
@@ -109,6 +122,21 @@ describe("modes extension", () => {
     const harness = createMockExtensionApiHarness();
     modesExtension(harness.pi);
     expect(harness.commands.map((command) => command.name)).toEqual(["todos", "spec"]);
+  });
+
+  it("registers nothing when disabled by config", () => {
+    const harness = createMockExtensionApiHarness();
+    const extension = createModesExtension({
+      getEnabledExtensionConfig: <T extends Record<string, unknown>>(_namespace: string, defaults: T) => ({
+        enabled: false,
+        config: defaults,
+      }),
+    });
+
+    extension(harness.pi);
+    expect(harness.commands).toHaveLength(0);
+    expect(harness.tools).toHaveLength(0);
+    expect(harness.listeners).toHaveLength(0);
   });
 
   it("registers auto, spec, task-list, and execution signal tools", () => {
@@ -205,6 +233,80 @@ describe("modes extension", () => {
     expect(
       harness.sentMessages.some((entry) => entry.message.customType === "modes-todo-list"),
     ).toBe(true);
+  });
+
+  it("restores a stored task list on session start when session entries are empty", async () => {
+    const harness = createMockExtensionApiHarness();
+    modesExtension(harness.pi);
+
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-modes-restore-"));
+    const runtime = TaskListStore.runtime({ cwd, scope: "session", sessionId: "test-session" });
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskListStore;
+        yield* store.save(createTaskList(["Recovered step"]));
+      }),
+    );
+
+    const ctx = harness.createContext({
+      cwd,
+      sessionManager: {
+        getEntries: () => [],
+        getSessionId: () => "test-session",
+      },
+    });
+    for (const listener of harness.listeners.filter((listener) => listener.event === "session_start")) {
+      await listener.handler({}, ctx);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(ctx.ui.select).toHaveBeenCalledWith("AUTO mode — what next?", [
+      "Execute the task list",
+      "Stay in AUTO mode",
+      "Refine the task list",
+    ]);
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("restores project-scoped task lists across session ids", async () => {
+    const harness = createMockExtensionApiHarness();
+    const extension = createModesExtension({
+      getEnabledExtensionConfig: <T extends Record<string, unknown>>(_namespace: string, defaults: T) => ({
+        enabled: true,
+        config: { ...defaults, taskListScope: "project" },
+      }),
+    });
+    extension(harness.pi);
+
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-modes-project-"));
+    const runtime = TaskListStore.runtime({ cwd, scope: "project", sessionId: "ignored" });
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* TaskListStore;
+        yield* store.save(createTaskList(["Project step"]));
+      }),
+    );
+
+    const ctx = harness.createContext({
+      cwd,
+      sessionManager: {
+        getEntries: () => [],
+        getSessionId: () => "another-session",
+      },
+    });
+    for (const listener of harness.listeners.filter((listener) => listener.event === "session_start")) {
+      await listener.handler({}, ctx);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(ctx.ui.select).toHaveBeenCalledWith("AUTO mode — what next?", [
+      "Execute the task list",
+      "Stay in AUTO mode",
+      "Refine the task list",
+    ]);
+
+    fs.rmSync(cwd, { recursive: true, force: true });
   });
 
   it("blocks further tool calls while awaiting a task-list choice", async () => {

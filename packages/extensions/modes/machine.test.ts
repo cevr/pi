@@ -26,7 +26,9 @@ function specMode(savedTools = ["read", "bash", "edit"], spec?: SpecDraft): Mode
   return { _tag: "Spec", savedTools, spec };
 }
 
-function awaitingChoice(savedTools = ["read", "bash", "edit"]): ModesState {
+function awaitingChoice(
+  savedTools = ["read", "bash", "edit"],
+): Extract<ModesState, { _tag: "AwaitingChoice" }> {
   return {
     _tag: "AwaitingChoice",
     savedTools,
@@ -151,6 +153,21 @@ describe("modesReducer", () => {
     });
     expect(hasEffect(result.effects, "writePlanFile")).toBe(true);
     expect(hasEffect(result.effects, "sendMessage")).toBe(true);
+    expect(hasEffect(result.effects, "persistTaskList")).toBe(true);
+  });
+
+  it("restores a stored task list into AwaitingChoice from Auto", () => {
+    const result = modesReducer(auto(), {
+      _tag: "RestoreTaskList",
+      todoItems: tasks("Recovered step"),
+      currentTools: ["read", "bash"],
+    });
+    expect(result.state._tag).toBe("AwaitingChoice");
+    if (result.state._tag === "AwaitingChoice") {
+      expect(result.state.pending.todoItems[0]?.subject).toBe("Recovered step");
+      expect(result.state.pending.planFilePath).toBeNull();
+    }
+    expect(hasEffect(result.effects, "persistState")).toBe(true);
   });
 
   it("ChooseExecute enters Executing with task-list signals enabled", () => {
@@ -166,15 +183,14 @@ describe("modesReducer", () => {
     expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
       level: "medium",
     });
+    expect(hasEffect(result.effects, "persistTaskList")).toBe(true);
   });
 
   it("ChooseStay and ChooseRefine return to Auto with pending tasks intact", () => {
     const state = awaitingChoice();
+    const expectedPending = state.pending;
     const stay = modesReducer(state, { _tag: "ChooseStay" });
-    expect(stay.state._tag).toBe("Auto");
-    if (stay.state._tag === "Auto") {
-      expect(stay.state.pending).toEqual(state.pending);
-    }
+    expect(stay.state).toMatchObject({ _tag: "Auto", pending: expectedPending });
     expect(getEffect<BuiltinEffect>(stay.effects, "setThinkingLevel")).toMatchObject({
       level: "medium",
     });
@@ -209,6 +225,7 @@ describe("modesReducer", () => {
       level: "medium",
     });
     expect(hasEffect(result.effects, "updatePlanFile")).toBe(true);
+    expect(hasEffect(result.effects, "clearTaskList")).toBe(true);
   });
 
   it("hydrates AwaitingChoice with auto-mode tools and preserved spec", () => {

@@ -21,7 +21,8 @@ What are you doing?
 | Local runtime fork           | `§2 Local Runtime Fork`     | API/runtime bugs, session control, handoff crashes |
 | Bun global link weirdness    | `§3 Global Install Gotchas` | `pi` missing, relinking, global install drift      |
 | Verification commands        | `§4 Verification`           | Before handoff, after runtime changes              |
-| Common pitfalls              | `§5 Gotchas`                | If behavior or git state smells wrong              |
+| Modes task-list scope        | `§5 Modes Task-List Scope`  | Working on modes persistence / restore behavior    |
+| Common pitfalls              | `§6 Gotchas`                | If behavior or git state smells wrong              |
 
 ## 1. Repo Shape
 
@@ -224,13 +225,60 @@ End-to-end sanity:
 - A successful build is not enough if `pi` no longer resolves from `$PATH`.
 - Runtime changes that touch session switching deserve a manual `/handoff` sanity pass.
 
-## 5. Gotchas
+## 5. Modes Task-List Scope
 
-### 5.1 Runtime vs extension bug
+How modes task-list persistence works and when to use each scope.
+
+### When to Use
+
+- Working in `packages/extensions/modes/*`
+- Touching executable task-list persistence or restore behavior
+- Debugging why a task list did or did not come back on session start
+
+### Quick Reference
+
+| Config                         | Meaning                                                    |
+| ------------------------------ | ---------------------------------------------------------- |
+| `taskListScope: "memory"`    | no disk persistence; task list dies with the process       |
+| `taskListScope: "session"`   | per-session persistence; default                           |
+| `taskListScope: "project"`   | shared per-project persistence across sessions in same cwd |
+
+Storage locations for `cwd=/repo`:
+
+- `memory` → no file
+- `session` → `/repo/.pi/modes/tasks-<sessionId>.json`
+- `project` → `/repo/.pi/modes/tasks.json`
+
+### Patterns / Examples
+
+GOOD:
+
+- `session` for normal work where a session restart should recover the plan
+- `project` when you explicitly want the same executable task list across multiple sessions in one repo
+- restore store-backed task lists only when session-entry hydration did not already restore stronger mode state
+
+BAD:
+
+- stash task-list serialization queues in the modes extension forever
+- let each store call build its own isolated runtime/mutex island
+- use `project` scope casually when you do not want cross-session stickiness
+
+### Gotchas
+
+- `scope` means where the executable task list lives and how far it follows you.
+- The modes extension config namespace is `@cvr/pi-modes`.
+- `taskListScope` currently defaults to `"session"`.
+- Runtime caching for `TaskListStore.runtime(...)` is structural, not an optimization nicety — without it, per-call runtimes do not share the same `Mutex` service instance.
+- Test cleanup should call `TaskListStore.clearRuntimeCache()` so cached runtimes do not leak between cases.
+- Read `packages/extensions/modes/README.md` before changing scope or restore semantics.
+
+## 6. Gotchas
+
+### 6.1 Runtime vs extension bug
 
 If the bug only reproduces inside the actual `pi` process, suspect the fork/runtime boundary first.
 
-### 5.2 Do not paper over runtime API gaps in the extension repo
+### 6.2 Do not paper over runtime API gaps in the extension repo
 
 BAD:
 
@@ -244,7 +292,7 @@ GOOD:
 - remove workaround from extension code
 - keep extension flow simple
 
-### 5.3 Build noise in the fork
+### 6.3 Build noise in the fork
 
 `npm run build` in `pi-mono` may regenerate:
 
@@ -252,17 +300,17 @@ GOOD:
 
 That file is often unrelated noise. Inspect before committing.
 
-### 5.4 Commit hygiene
+### 6.4 Commit hygiene
 
 - Fork commits: runtime/API only
 - `dotfiles/pi` commits: custom extension behavior only
 - Do not mix the two unless there is a very good reason
 
-### 5.5 Existing unrelated changes
+### 6.5 Existing unrelated changes
 
 This repo often has parallel work in flight. Check `git status` before edits. Do not sweep unrelated diffs into a “quick docs” commit.
 
-### 5.6 Signal tools over prose markers
+### 6.6 Signal tools over prose markers
 
 If an extension state machine needs to know that the agent is done, approved, skipped, passed gate, failed gate, or produced structured results, prefer a typed `pi.registerTool(...)` signal over scraping assistant prose.
 
