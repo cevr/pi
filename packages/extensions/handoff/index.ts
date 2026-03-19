@@ -640,20 +640,21 @@ export function createHandoffExtension(deps: HandoffExtensionDeps = DEFAULT_DEPS
 
       async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
         const p = params as { goal: string };
-        const outcome = await runHandoffFlow(_ctx, p.goal, _signal ?? undefined);
 
-        const text =
-          outcome === "handed-off"
-            ? `handed off to a new session for: "${p.goal}".`
-            : outcome === "dismissed"
-              ? `handoff dismissed for: "${p.goal}".`
-              : `handoff cancelled for: "${p.goal}".`;
+        // Fire-and-forget: the handoff flow calls ctx.newSession() which
+        // internally does agent.abort() + waitForIdle(). If we awaited
+        // that here, waitForIdle() would deadlock — it waits for the
+        // running agent loop to settle, but the loop is waiting for
+        // *this* tool execution to return. Same pattern as agent_end.
+        void runHandoffFlow(_ctx, p.goal, _signal ?? undefined).catch((err) => {
+          console.error("handoff failed:", err);
+        });
 
         return {
           content: [
             {
               type: "text",
-              text,
+              text: `initiating handoff for: "${p.goal}"...`,
             },
           ],
           details: undefined,
