@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Repo-local notes for `~/Developer/personal/dotfiles/pi`.
+Repo-local notes for `~/Developer/personal/pi`.
 
 ## Navigation
 
@@ -36,12 +36,12 @@ What lives here vs what belongs in the fork.
 
 ### Quick Reference
 
-| Area              | Path                                                    | When to Read                    |
-| ----------------- | ------------------------------------------------------- | ------------------------------- |
-| Custom extensions | `~/Developer/personal/dotfiles/pi/packages/extensions/` | Most feature work               |
-| Core helpers      | `~/Developer/personal/dotfiles/pi/packages/core/`       | Shared utilities                |
-| Build entry       | `~/Developer/personal/dotfiles/pi/package.json`         | Build/test scripts              |
-| Runtime fork      | `~/Developer/personal/pi-mono`                          | Upstream runtime or API changes |
+| Area              | Path                                           | When to Read                    |
+| ----------------- | ---------------------------------------------- | ------------------------------- |
+| Custom extensions | `~/Developer/personal/pi/packages/extensions/` | Most feature work               |
+| Core helpers      | `~/Developer/personal/pi/packages/core/`       | Shared utilities                |
+| Build entry       | `~/Developer/personal/pi/package.json`         | Build/test scripts              |
+| Runtime fork      | `~/Developer/personal/pi-mono`                 | Upstream runtime or API changes |
 
 ### Commands
 
@@ -78,7 +78,7 @@ Why the fork exists and when to leave this repo for runtime work.
 
 ### Patterns / Examples
 
-- `dotfiles/pi` = custom extension logic
+- `pi` = custom extension logic
 - `pi-mono` = runtime surfaces, extension context APIs, mode wiring
 
 BAD:
@@ -89,7 +89,7 @@ BAD:
 GOOD:
 
 - patch the runtime surface once in `pi-mono`
-- remove the workaround in `dotfiles/pi`
+- remove the workaround in `pi`
 - keep the fork diff minimal and upstreamable
 
 ### Why this fork exists
@@ -207,7 +207,7 @@ npm run check
 npm run build
 ```
 
-Extension repo, in `~/Developer/personal/dotfiles/pi`:
+Extension repo, in `~/Developer/personal/pi`:
 
 ```bash
 bun test "packages/extensions/handoff/machine.test.ts"
@@ -237,11 +237,11 @@ How modes task-list persistence works and when to use each scope.
 
 ### Quick Reference
 
-| Config                         | Meaning                                                    |
-| ------------------------------ | ---------------------------------------------------------- |
-| `taskListScope: "memory"`    | no disk persistence; task list dies with the process       |
-| `taskListScope: "session"`   | per-session persistence; default                           |
-| `taskListScope: "project"`   | shared per-project persistence across sessions in same cwd |
+| Config                     | Meaning                                                    |
+| -------------------------- | ---------------------------------------------------------- |
+| `taskListScope: "memory"`  | no disk persistence; task list dies with the process       |
+| `taskListScope: "session"` | per-session persistence; default                           |
+| `taskListScope: "project"` | shared per-project persistence across sessions in same cwd |
 
 Storage locations for `cwd=/repo`:
 
@@ -303,7 +303,7 @@ That file is often unrelated noise. Inspect before committing.
 ### 6.4 Commit hygiene
 
 - Fork commits: runtime/API only
-- `dotfiles/pi` commits: custom extension behavior only
+- `pi` commits: custom extension behavior only
 - Do not mix the two unless there is a very good reason
 
 ### 6.5 Existing unrelated changes

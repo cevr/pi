@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOTFILES_PI="$(cd "$(dirname "$0")" && pwd)"
+PI_REPO="$(cd "$(dirname "$0")" && pwd)"
 PI_AGENT="$HOME/.pi/agent"
 
 mkdir -p "$PI_AGENT"
@@ -28,19 +28,22 @@ symlink() {
   ln -s "$src" "$dst"
 }
 
-echo "Linking pi config from $DOTFILES_PI → $PI_AGENT"
+echo "Linking pi config from $PI_REPO → $PI_AGENT"
 echo ""
 
-symlink "$DOTFILES_PI/settings.json"    "$PI_AGENT/settings.json"    "settings.json"
-symlink "$DOTFILES_PI/permissions.json"  "$PI_AGENT/permissions.json"  "permissions.json"
-symlink "$DOTFILES_PI/keybindings.json"  "$PI_AGENT/keybindings.json"  "keybindings.json"
-symlink "$DOTFILES_PI/cvr-pi.json"       "$PI_AGENT/cvr-pi.json"       "cvr-pi.json"
+symlink "$PI_REPO/settings.json"    "$PI_AGENT/settings.json"    "settings.json"
+symlink "$PI_REPO/permissions.json"  "$PI_AGENT/permissions.json"  "permissions.json"
+symlink "$PI_REPO/keybindings.json"  "$PI_AGENT/keybindings.json"  "keybindings.json"
+symlink "$PI_REPO/cvr-pi.json"       "$PI_AGENT/cvr-pi.json"       "cvr-pi.json"
 
-if [ -d "$DOTFILES_PI/skills" ]; then
-  symlink "$DOTFILES_PI/skills" "$PI_AGENT/skills" "skills/"
+if [ -d "$PI_REPO/skills" ]; then
+  symlink "$PI_REPO/skills" "$PI_AGENT/skills" "skills/"
+elif [ -L "$PI_AGENT/skills" ]; then
+  echo "  → skills/ (removing stale link)"
+  rm "$PI_AGENT/skills"
 fi
 
 echo ""
 echo "Done. Preserved: auth.json, sessions/"
 echo ""
-echo "Install deps:  cd $DOTFILES_PI && bun install"
+echo "Install deps:  cd $PI_REPO && bun install"

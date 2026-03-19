@@ -8,7 +8,7 @@
     ".": "./index.ts"
   },
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "file:../../../../../pi-mono/packages/coding-agent",
-    "@mariozechner/pi-tui": "file:../../../../../pi-mono/packages/tui"
+    "@mariozechner/pi-coding-agent": "file:../../../../pi-mono/packages/coding-agent",
+    "@mariozechner/pi-tui": "file:../../../../pi-mono/packages/tui"
   }
 }

@@ -9,10 +9,10 @@
   "dependencies": {
     "@cvr/pi-box-chrome": "workspace:*",
     "@cvr/pi-show": "workspace:*",
-    "@mariozechner/pi-tui": "file:../../../../../pi-mono/packages/tui"
+    "@mariozechner/pi-tui": "file:../../../../pi-mono/packages/tui"
   },
   "devDependencies": {
-    "@mariozechner/pi-tui": "file:../../../../../pi-mono/packages/tui",
+    "@mariozechner/pi-tui": "file:../../../../pi-mono/packages/tui",
     "vitest": "^3.0.0"
   }
 }

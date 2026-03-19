@@ -1,9 +1,13 @@
 pre-commit:
   parallel: true
-  commands:
-    lint:
-      glob: "*.{ts,tsx}"
-      run: bunx oxlint --type-aware --format=stylish --type-check {staged_files}
-    format:
-      glob: "*.{ts,tsx,json,md}"
-      run: bunx oxfmt --check {staged_files}
+  jobs:
+    - name: fmt
+      run: bun run fmt
+      stage_fixed: true
+    - name: lint
+      run: bun run lint:fix
+      stage_fixed: true
+    - name: typecheck
+      run: bun run typecheck
+    - name: test
+      run: bun run test

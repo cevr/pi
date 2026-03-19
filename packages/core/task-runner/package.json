@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@cvr/pi-spawn": "workspace:*",
-    "@mariozechner/pi-coding-agent": "file:../../../../../pi-mono/packages/coding-agent"
+    "@mariozechner/pi-coding-agent": "file:../../../../pi-mono/packages/coding-agent"
   },
   "devDependencies": {
     "@cvr/pi-state-machine": "workspace:*"

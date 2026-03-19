@@ -6,7 +6,7 @@
     "@cvr/pi-show": "workspace:*"
   },
   "devDependencies": {
-    "@mariozechner/pi-tui": "file:../../../../../pi-mono/packages/tui",
+    "@mariozechner/pi-tui": "file:../../../../pi-mono/packages/tui",
     "vitest": "^3.0.0"
   }
 }

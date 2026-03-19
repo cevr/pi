@@ -29,12 +29,14 @@
     "build": "node ./scripts/sync-pi-extensions-manifest.mjs && tsdown && node ./scripts/sync-pi-extensions-manifest.mjs",
     "lint": "oxlint --format=stylish --report-unused-disable-directives",
     "lint:fix": "oxlint --format=stylish --fix --report-unused-disable-directives",
-    "format": "oxfmt --write",
-    "format:check": "oxfmt --check",
+    "fmt": "oxfmt --write",
+    "fmt:check": "oxfmt --check",
+    "format": "bun run fmt",
+    "format:check": "bun run fmt:check",
     "typecheck": "bun run --filter '@cvr/pi-mermaid' typecheck && bun run --filter '@cvr/pi-command-palette' typecheck && bun run --filter '@cvr/pi-editor' typecheck",
     "test": "bun test",
-    "gate": "concurrently -n type,lint,fmt,test,build -c blue,yellow,magenta,green,cyan \"bun run typecheck\" \"bun run lint\" \"bun run format:check\" \"bun run test\" \"bun run build\"",
-    "prepare": "effect-language-service patch"
+    "gate": "concurrently -n type,lint,fmt,test,build -c blue,yellow,magenta,green,cyan \"bun run typecheck\" \"bun run lint:fix\" \"bun run fmt\" \"bun run test\" \"bun run build\"",
+    "prepare": "effect-language-service patch && lefthook install"
   },
   "dependencies": {
     "beautiful-mermaid": "^1.1.3",
@@ -48,6 +50,7 @@
     "concurrently": "^9.2.1",
     "effect": "4.0.0-beta.34",
     "effect-bun-test": "^0.2.1",
+    "lefthook": "^2.1.4",
     "oxfmt": "^0.35.0",
     "oxlint": "^1.50.0",
     "tsdown": "^0.21.3",

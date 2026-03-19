@@ -16,8 +16,8 @@
     "@sinclair/typebox": "^0.34.0"
   },
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "file:../../../../../pi-mono/packages/coding-agent",
-    "@mariozechner/pi-tui": "file:../../../../../pi-mono/packages/tui",
+    "@mariozechner/pi-coding-agent": "file:../../../../pi-mono/packages/coding-agent",
+    "@mariozechner/pi-tui": "file:../../../../pi-mono/packages/tui",
     "vitest": "^3.0.0"
   },
   "pi": {
