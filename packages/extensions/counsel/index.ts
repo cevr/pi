@@ -223,18 +223,25 @@ function getSpawnErrorText(result: PiSpawnResult): string {
   return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "";
 }
 
-function classifyCounselFailure(text: string): "input" | "transient" | "config" | "other" {
-  if (COUNSEL_INPUT_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return "input";
-  if (COUNSEL_TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return "transient";
+type CounselFailureKind = "input" | "transient" | "config" | "aborted" | "other";
+
+function classifyCounselFailure(result: PiSpawnResult): CounselFailureKind {
+  if (result.stopReason === "aborted") return "aborted";
+
+  const text = getSpawnErrorText(result);
   if (COUNSEL_CONFIG_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return "config";
+  if (COUNSEL_INPUT_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return "input";
+
+  const looksTransientByShape = result.stopReason === "error" && result.exitCode !== 0 && !text.trim();
+  if (looksTransientByShape) return "transient";
+  if (COUNSEL_TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return "transient";
+
   return "other";
 }
 
 function shouldRetryCounsel(result: PiSpawnResult, mode: CounselAttempt["mode"]): boolean {
   if (mode !== "full") return false;
-  if (result.stopReason === "aborted") return false;
-  const failureText = getSpawnErrorText(result);
-  const classification = classifyCounselFailure(failureText);
+  const classification = classifyCounselFailure(result);
   return classification === "input" || classification === "transient";
 }
 
@@ -250,16 +257,17 @@ function buildCounselFailureResult(
 ): ToolExecutionResult {
   const latestAttempt = attempts.at(-1);
   const latestResult = latestAttempt?.result;
-  const latestText = latestResult ? getSpawnErrorText(latestResult) : "";
-  const classification = classifyCounselFailure(latestText);
+  const classification = latestResult ? classifyCounselFailure(latestResult) : "other";
   const nextStep =
     classification === "config"
       ? "Fix the counsel model or provider configuration, then call counsel again."
       : classification === "input"
         ? "Do not skip counsel. Retry the counsel tool with a narrower prompt/context and fewer files. Prefer file paths the reviewer can read directly over large pasted content."
         : classification === "transient"
-          ? "Do not skip counsel. Retry the counsel tool once more. If it still fails, narrow the request and try again."
-          : "Do not skip counsel. Retry the counsel tool with a narrower prompt or fewer files, then inspect the failed session if it still breaks.";
+          ? "Do not skip counsel. Retry the counsel tool once more. If it still fails, narrow the request and try again. If the error says the provider received no messages or no input, treat it as a request-shaping failure in the spawned counsel call, not as a reason to skip review."
+          : classification === "aborted"
+            ? "Counsel was aborted. Do not skip it — call the counsel tool again once the session is stable."
+            : "Do not skip counsel. Retry the counsel tool with a narrower prompt or fewer files, then inspect the failed session if it still breaks.";
 
   const attemptLines = attempts.map(
     (attempt, index) =>
@@ -333,14 +341,18 @@ const COUNSEL_TRANSIENT_ERROR_PATTERNS = [
   /timed out/i,
   /rate limit/i,
   /temporar/i,
-  /try again/i,
+  /please try again/i,
   /overloaded/i,
-  /unavailable/i,
-  /gateway/i,
+  /service unavailable/i,
   /connection reset/i,
   /econnreset/i,
   /socket hang up/i,
-  /network/i,
+  /connection failed/i,
+  /at least one message is required/i,
+  /messages?: .*required/i,
+  /missing .*messages?/i,
+  /missing .*input/i,
+  /empty .*messages?/i,
 ];
 
 const COUNSEL_CONFIG_ERROR_PATTERNS = [

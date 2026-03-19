@@ -495,4 +495,112 @@ describe("createCounselTool", () => {
       await runtime.dispose();
     }
   });
+
+  it("does not retry generic gateway wording without a stronger transient signal", async () => {
+    const calls: PiSpawnConfig[] = [];
+    const runtime = createRuntime((config) => {
+      calls.push(config);
+      return makeFailedResult("gateway review rejected the request");
+    });
+
+    try {
+      const tool = createCounselTool({}, runtime, () => "");
+      const result = await (tool as any).execute(
+        "call-1",
+        { prompt: "Review this change." },
+        undefined,
+        undefined,
+        makeCtx(),
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Counsel failed after 1 attempt");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("treats empty transport failures as transient and retries once", async () => {
+    const calls: PiSpawnConfig[] = [];
+    const runtime = createRuntime((config) => {
+      calls.push(config);
+      return calls.length === 1
+        ? { exitCode: 1, messages: [], stderr: "", usage: zeroUsage(), stopReason: "error" }
+        : makeAssistantResult("Approve");
+    });
+
+    try {
+      const tool = createCounselTool({}, runtime, () => "");
+      const result = await (tool as any).execute(
+        "call-1",
+        { prompt: "Review this change." },
+        undefined,
+        undefined,
+        makeCtx(),
+      );
+
+      expect(calls).toHaveLength(2);
+      expect(result.isError).toBeUndefined();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("retries provider errors that say no messages were sent", async () => {
+    const calls: PiSpawnConfig[] = [];
+    const runtime = createRuntime((config) => {
+      calls.push(config);
+      return calls.length === 1
+        ? makeFailedResult(
+            '{"type":"error","error":{"type":"invalid_request_error","message":"messages: at least one message is required"}}',
+          )
+        : makeAssistantResult("Approve");
+    });
+
+    try {
+      const tool = createCounselTool({}, runtime, () => "");
+      const result = await (tool as any).execute(
+        "call-1",
+        { prompt: "Review this change." },
+        undefined,
+        undefined,
+        makeCtx(),
+      );
+
+      expect(calls).toHaveLength(2);
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).toBe(`Session: ${calls[1]!.sessionPath}`);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("explains no-messages provider failures as request-shaping issues when retries are exhausted", async () => {
+    const calls: PiSpawnConfig[] = [];
+    const runtime = createRuntime((config) => {
+      calls.push(config);
+      return makeFailedResult(
+        '{"type":"error","error":{"type":"invalid_request_error","message":"messages: at least one message is required"}}',
+      );
+    });
+
+    try {
+      const tool = createCounselTool({}, runtime, () => "");
+      const result = await (tool as any).execute(
+        "call-1",
+        { prompt: "Review this change." },
+        undefined,
+        undefined,
+        makeCtx(),
+      );
+
+      expect(calls).toHaveLength(2);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("request-shaping failure in the spawned counsel call");
+      expect(result.content[0].text).toContain("Do not skip counsel");
+    } finally {
+      await runtime.dispose();
+    }
+  });
 });
