@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { ManagedRuntime } from "effect";
 import { GitClient } from "@cvr/pi-git-client";
-import { formatBackgroundTaskSegmentText, formatModelDisplay, getGitDiffStats } from "./index";
+import {
+  formatBackgroundTaskSegmentText,
+  formatModelDisplay,
+  getGitDiffStats,
+  renderEditorRuleLine,
+} from "./index";
 
 describe("editor extension", () => {
   describe("formatModelDisplay", () => {
@@ -15,6 +20,25 @@ describe("editor extension", () => {
       expect(formatModelDisplay("openrouter", "z-ai/glm-5")).toBe("(openrouter) z-ai/glm-5");
 
       expect(formatModelDisplay(undefined, "some-model")).toBe("some-model");
+    });
+  });
+
+  describe("renderEditorRuleLine", () => {
+    const identity = (text: string) => text;
+
+    it("renders a flat horizontal rule without corners", () => {
+      expect(renderEditorRuleLine({ width: 8, chrome: identity })).toBe("────────");
+    });
+
+    it("renders left and right labels into the rule", () => {
+      expect(
+        renderEditorRuleLine({
+          width: 16,
+          leftText: "AUTO",
+          rightText: "xhigh",
+          chrome: identity,
+        }),
+      ).toBe("─AUTO─────xhigh─");
     });
   });
 

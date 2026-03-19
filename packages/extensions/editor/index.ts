@@ -1,8 +1,9 @@
 /**
- * editor extension — composable custom editor with box-drawing borders and label slots.
+ * editor extension — composable custom editor with top/bottom rule lines and label slots.
  *
- * replaces pi's default editor with ╭╮╰╯ borders. other extensions can inject
- * labels into the top/bottom border lines via the shared EventBus:
+ * replaces pi's default editor chrome with horizontal rules above and below the
+ * content. other extensions can inject labels into those lines via the shared
+ * EventBus:
  *
  *   pi.events.emit("editor:set-label", { key: "handoff", text: "↳ handed off", position: "top", align: "left" })
  *   pi.events.emit("editor:remove-label", { key: "handoff" })
@@ -15,7 +16,7 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner
 import { CustomEditor, Theme, estimateTokens } from "@mariozechner/pi-coding-agent";
 import type { TUI, EditorTheme, AutocompleteProvider } from "@mariozechner/pi-tui";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { boxBorderLR, boxRow } from "@cvr/pi-box-chrome";
+import { boxBorderLR } from "@cvr/pi-box-chrome";
 import {
   composeEditorAutocompleteProvider,
   subscribeEditorAutocompleteContributors,
@@ -62,6 +63,22 @@ const SEPARATOR = " · ";
 const HORIZONTAL = "─";
 const BACKGROUND_TASK_SEGMENT_ID = "task-background";
 const BACKGROUND_TASK_SEGMENT_TTL_MS = 12_000;
+
+export function renderEditorRuleLine(args: {
+  width: number;
+  leftText?: string;
+  rightText?: string;
+  chrome: (text: string) => string;
+}): string {
+  const { width, leftText = "", rightText = "", chrome } = args;
+  return boxBorderLR({
+    corner: { left: "", right: "" },
+    style: { dim: chrome },
+    innerWidth: Math.max(0, width),
+    left: leftText ? { text: leftText, width: visibleWidth(leftText) } : undefined,
+    right: rightText ? { text: rightText, width: visibleWidth(rightText) } : undefined,
+  });
+}
 
 class LabeledEditor extends CustomEditor {
   private labels: Map<string, Label> = new Map();
@@ -148,38 +165,27 @@ class LabeledEditor extends CustomEditor {
   }
 
   /**
-   * build a border line like: ╭─ left label ─────── right label ─╮
+   * build a horizontal rule like: ─ left label ─────── right label ─
    *
    * inherits scroll indicator text from the original border line if present.
-   * delegates chrome layout to boxBorderLR; caching stays here.
+   * delegates rule layout to renderEditorRuleLine; caching stays here.
    */
-  private buildBorderLine(
-    outerWidth: number,
-    corner: { left: string; right: string },
-    position: "top" | "bottom",
-    originalLine: string,
-  ): string {
+  private buildBorderLine(width: number, position: "top" | "bottom", originalLine: string): string {
     const leftText = this.getLabelsFor(position, "left");
     const rightText = this.getLabelsFor(position, "right");
     const scrollIndicator = this.extractScrollIndicator(originalLine);
 
     const rightParts = [rightText, scrollIndicator].filter(Boolean);
     const rightCombined = rightParts.join(SEPARATOR);
-    const cacheKey = `${this.mode}|${outerWidth}|${position}|${leftText}|${rightCombined}`;
+    const cacheKey = `${this.mode}|${width}|${position}|${leftText}|${rightCombined}`;
     const cached = this.borderCache[position];
     if (cached?.key === cacheKey) return cached.line;
 
-    const chrome = { dim: (s: string) => this.chrome(s) };
-    const innerWidth = outerWidth - 2; // strip corner characters
-
-    const line = boxBorderLR({
-      corner,
-      style: chrome,
-      innerWidth,
-      left: leftText ? { text: leftText, width: visibleWidth(leftText) } : undefined,
-      right: rightCombined
-        ? { text: rightCombined, width: visibleWidth(rightCombined) }
-        : undefined,
+    const line = renderEditorRuleLine({
+      width,
+      leftText,
+      rightText: rightCombined,
+      chrome: (s) => this.chrome(s),
     });
 
     this.borderCache[position] = { key: cacheKey, line };
@@ -212,34 +218,28 @@ class LabeledEditor extends CustomEditor {
   }
 
   override render(width: number): string[] {
-    // render the base editor at (width - 2) to leave room for │ side rails
-    const innerWidth = width - 2;
-    if (innerWidth < 4) return super.render(width); // too narrow, bail
+    if (width < 2) return super.render(width);
 
-    const lines = super.render(innerWidth);
+    const lines = super.render(width);
     if (lines.length < 2) return lines;
 
     const bottomIdx = this.findBottomBorderIndex(lines);
     const result: string[] = [];
 
-    const chrome = { dim: (s: string) => this.chrome(s) };
+    // top rule — replace line 0
+    result.push(this.buildBorderLine(width, "top", lines[0]!));
 
-    // top border — replace line 0
-    result.push(this.buildBorderLine(width, { left: "╭", right: "╮" }, "top", lines[0]!));
-
-    // content lines — wrap with dim │ side rails
+    // content lines — pass through unchanged
     for (let i = 1; i < bottomIdx; i++) {
-      result.push(boxRow({ variant: "closed", style: chrome, inner: lines[i]! }));
+      result.push(lines[i]!);
     }
 
-    // bottom border
-    result.push(
-      this.buildBorderLine(width, { left: "╰", right: "╯" }, "bottom", lines[bottomIdx]!),
-    );
+    // bottom rule
+    result.push(this.buildBorderLine(width, "bottom", lines[bottomIdx]!));
 
-    // autocomplete lines (if any) — pass through, offset to align with inner content
+    // autocomplete lines (if any) — preserve base editor layout
     for (let i = bottomIdx + 1; i < lines.length; i++) {
-      result.push(" " + lines[i] + " ");
+      result.push(lines[i]!);
     }
 
     return result;
