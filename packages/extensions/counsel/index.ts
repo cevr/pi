@@ -597,6 +597,7 @@ export function createCounselTool(
               cwd: ctx.cwd,
               task: attempt.task,
               model: oppositeModel,
+              thinking: "xhigh",
               builtinTools: config.builtinTools ?? CONFIG_DEFAULTS.builtinTools,
               extensionTools: config.extensionTools ?? CONFIG_DEFAULTS.extensionTools,
               systemPromptBody: systemPrompt,

@@ -246,6 +246,7 @@ describe("createCounselTool", () => {
 
       expect(calls).toHaveLength(1);
       expect(calls[0]!.promptViaStdin).toBeUndefined();
+      expect(calls[0]!.thinking).toBe("xhigh");
       expect(typeof calls[0]!.sessionPath).toBe("string");
       expect(result.isError).toBeUndefined();
       expect(result.content[0].text).toBe(`Session: ${calls[0]!.sessionPath}`);
