@@ -7,9 +7,8 @@
 import type { DiffContext } from "@cvr/pi-diff-context";
 import { executeTurn, type ExecutionEffect } from "@cvr/pi-execution";
 import {
-  enterSequentialExecutionGate,
+  enterSequentialExecutionCounsel,
   resolveSequentialExecutionCounsel,
-  resolveSequentialExecutionGate,
   type SequentialExecutionPhase,
 } from "@cvr/pi-sequential-execution";
 import { findTaskByOrder, setTaskStatus, type TaskListItem } from "@cvr/pi-task-list";
@@ -23,11 +22,7 @@ export const SPEC_TOOLS = ["read", "bash", "grep", "find", "ls", "interview"];
 export const AUTO_SIGNAL_TOOLS = ["modes_enter_spec"] as const;
 export const SPEC_SIGNAL_TOOLS = ["modes_spec_ready"] as const;
 export const TASK_LIST_SIGNAL_TOOLS = ["modes_task_list_ready"] as const;
-export const EXECUTION_SIGNAL_TOOLS = [
-  "modes_step_done",
-  "modes_gate_result",
-  "modes_counsel_result",
-] as const;
+export const EXECUTION_SIGNAL_TOOLS = ["modes_step_done", "modes_counsel_result"] as const;
 export const SPEC_COUNSEL_TOOLS = [
   "read",
   "bash",
@@ -120,7 +115,6 @@ export type ModesEvent =
       phase?: ExecutionPhase;
     }
   | { _tag: "StepDone"; step: number }
-  | { _tag: "GateResult"; status: "pass" | "fail" }
   | { _tag: "CounselResult"; status: "pass" | "fail" }
   | { _tag: "ExecutionComplete" };
 
@@ -248,23 +242,6 @@ function getExecutionTools(savedTools: readonly string[]): string[] {
   return mergeTools(savedTools, TASK_LIST_SIGNAL_TOOLS, EXECUTION_SIGNAL_TOOLS);
 }
 
-function requestTaskListFromSpec(spec: SpecDraft): ExecutionEffect {
-  const specRef = spec.specFilePath
-    ? `Read the saved spec at: ${spec.specFilePath}`
-    : `Use this spec as the source of truth:\n\n${spec.specText}`;
-  return executeTurn({
-    customType: "modes-context:auto-task-list",
-    content:
-      `You are back in AUTO mode. ${specRef}\n\n` +
-      "Convert the spec into an executable task list, then call modes_task_list_ready with:\n" +
-      "- planText: the full executable task list markdown/text\n" +
-      "- steps: the ordered implementation steps\n\n" +
-      "After calling the tool, execution will begin through the modes state machine. Do not continue manually beyond that point.",
-    display: false,
-    triggerTurn: true,
-  });
-}
-
 function startTaskExecution(items: readonly TaskListItem[]): TaskListItem[] {
   const firstTask = items[0];
   return firstTask ? setTaskStatus(items, firstTask.order, "in_progress") : [...items];
@@ -338,9 +315,6 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
           UI,
           persist(next),
         ];
-        if (state.spec) {
-          effects.splice(3, 0, requestTaskListFromSpec(state.spec));
-        }
         return { state: next, effects };
       }
 
@@ -497,7 +471,6 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
             type: "notify",
             message: "Spec approved. AUTO mode restored; extracting the executable task list.",
           },
-          requestTaskListFromSpec(state.spec),
           UI,
           persist(next),
         ],
@@ -621,7 +594,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
         planText: formatRestoredPlanText(event.todoItems),
       };
 
-      if (state._tag === "Auto" && !state.pending) {
+      if (state._tag === "Auto") {
         const todoItems = startTaskExecution(pending.todoItems);
         const firstTask = todoItems[0];
         const next: ModesState = {
@@ -684,7 +657,7 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       }
 
       const currentIndex = state.todoItems.findIndex((task) => task.order === event.step);
-      const progress = enterSequentialExecutionGate(
+      const progress = enterSequentialExecutionCounsel(
         {
           phase: state.phase,
           currentIndex: state.currentStep === null ? null : state.currentStep - 1,
@@ -705,9 +678,11 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
       };
       const effects: Effect[] = [
         executeTurn({
-          customType: "modes-execution:gate",
+          customType: "modes-execution:counsel",
           content:
-            "Run the full gate (typecheck, lint, format, test) for the completed step. When finished, call modes_gate_result with status 'pass' or 'fail'.",
+            "Step complete. Run the project's checks (typecheck, lint, test) if applicable, " +
+            "then call the counsel tool for cross-vendor review of the changes for this step. " +
+            "When counsel finishes, call modes_counsel_result with pass or fail.",
           display: false,
           triggerTurn: true,
         }),
@@ -722,58 +697,6 @@ export const modesReducer: Reducer<ModesState, ModesEvent, ModesEffect> = (
         });
       }
       return { state: next, effects };
-    }
-
-    // ----- GateResult -----
-    case "GateResult": {
-      if (state._tag !== "Executing" || state.phase !== "gating") return { state };
-
-      const progress = resolveSequentialExecutionGate(
-        {
-          phase: state.phase,
-          currentIndex: state.currentStep === null ? null : state.currentStep - 1,
-          total: state.todoItems.length,
-        },
-        event.status,
-      );
-      if (!progress) return { state };
-
-      if (event.status === "pass") {
-        const next: ModesState = { ...state, phase: progress.phase };
-        return {
-          state: next,
-          effects: [
-            executeTurn({
-              customType: "modes-execution:counsel",
-              content:
-                "Gate passed. Run counsel for cross-vendor review of the changes for this step. When finished, call modes_counsel_result with status 'pass' or 'fail'.",
-              display: false,
-              triggerTurn: true,
-            }),
-            UI,
-            persist(next),
-          ],
-        };
-      }
-
-      const next: ModesState = { ...state, phase: progress.phase };
-      return {
-        state: next,
-        effects: [
-          { type: "notify", message: "Gate failed — fix and retry", level: "warning" },
-          executeTurn({
-            customType: "modes-execution:gate-fix",
-            content:
-              state.currentStep === null
-                ? "Gate failed. Fix the failures, rerun the gate, then call modes_step_done again when the step is truly complete."
-                : `Gate failed for step ${state.currentStep}. Fix the failures, rerun the gate, then call modes_step_done for step ${state.currentStep} again when it is truly complete.`,
-            display: false,
-            triggerTurn: true,
-          }),
-          UI,
-          persist(next),
-        ],
-      };
     }
 
     // ----- CounselResult -----

@@ -24,7 +24,7 @@ import {
   type TaskListStatus,
 } from "@cvr/pi-task-list";
 import { TaskListStore, type TaskListScope } from "@cvr/pi-task-list-store";
-import { renderTaskWidget } from "@cvr/pi-task-widget";
+import { TaskWidget, type WidgetUICtx } from "@cvr/pi-task-widget";
 import { GitClient } from "@cvr/pi-git-client";
 import { ProcessRunner } from "@cvr/pi-process-runner";
 import { register } from "@cvr/pi-state-machine";
@@ -45,6 +45,7 @@ import {
   type SpecDraft,
 } from "./machine";
 import { cleanStepText, isSafeCommand } from "./utils";
+import { openSettingsMenu } from "./settings-menu";
 
 // ---------------------------------------------------------------------------
 // File I/O
@@ -218,7 +219,8 @@ function buildHydrateEvent(
   data: PersistPayload | undefined,
   pi: ExtensionAPI,
 ): Extract<ModesEvent, { _tag: "Hydrate" }> {
-  const mode = data?.mode === "AwaitingSpecApproval" ? "SpecReview" : data?.mode;
+  const mode =
+    (data?.mode as string) === "AwaitingSpecApproval" ? ("SpecReview" as const) : data?.mode;
   const pendingData = data?.pending;
   const rawTodoItems = pendingData?.todoItems ?? data?.todoItems;
   const todoItems = normalizeHydratedTaskList(Array.isArray(rawTodoItems) ? rawTodoItems : []);
@@ -232,9 +234,11 @@ function buildHydrateEvent(
   const savedTools = data?.savedTools ?? null;
   const currentStep = typeof data?.currentStep === "number" ? data.currentStep : null;
   const phase =
-    data?.phase === "running" || data?.phase === "gating" || data?.phase === "counseling"
+    data?.phase === "running" || data?.phase === "counseling"
       ? data.phase
-      : undefined;
+      : (data?.phase as string | undefined) === "gating"
+        ? ("running" as const)
+        : undefined;
   const spec = normalizeHydratedSpec(data?.spec);
 
   return {
@@ -254,9 +258,10 @@ function buildHydrateEvent(
 }
 
 function getLatestPersistedModesState(entries: readonly unknown[]): PersistPayload | undefined {
-  return entries
+  const entry = entries
     .filter((entry: any) => entry.type === "custom" && entry.customType === "modes")
-    .pop()?.data as PersistPayload | undefined;
+    .pop() as { data?: PersistPayload } | undefined;
+  return entry?.data;
 }
 
 function createTaskListStoreRuntime(ctx: ExtensionContext, scope: TaskListScope) {
@@ -313,35 +318,49 @@ function getEditorMode(state: ModesState): EditorMode {
 // UI formatting (theme-dependent — can't live in pure reducer)
 // ---------------------------------------------------------------------------
 
-function formatUI(state: ModesState, pi: ExtensionAPI, ctx: ExtensionContext): void {
+function formatUI(
+  state: ModesState,
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  taskWidget: TaskWidget,
+): void {
   pi.events.emit("editor:set-mode", { mode: getEditorMode(state) });
   if (!ctx.hasUI) return;
 
+  taskWidget.setUICtx(ctx.ui as unknown as WidgetUICtx);
+
   switch (state._tag) {
     case "Executing": {
-      const widget = renderTaskWidget(state.todoItems, {
-        phase: state.phase,
-        theme: ctx.ui.theme,
-      });
-      ctx.ui.setStatus("modes", widget.statusText);
-      ctx.ui.setWidget("modes-todos", widget.lines);
+      taskWidget.setPhase(state.phase);
+
+      // Sync active task tracking with current step
+      const currentTask =
+        state.currentStep !== null
+          ? state.todoItems.find((t) => t.order === state.currentStep)
+          : undefined;
+      if (currentTask && currentTask.status === "in_progress") {
+        taskWidget.setActiveTask(currentTask.id);
+      }
+
+      ctx.ui.setStatus("modes", taskWidget.getStatusText(ctx.ui.theme));
+      taskWidget.update();
       break;
     }
     case "Spec":
       ctx.ui.setStatus("modes", ctx.ui.theme.fg("toolTitle", "⏸ spec"));
-      ctx.ui.setWidget("modes-todos", undefined);
+      taskWidget.dispose();
       break;
     case "SpecCounseling":
       ctx.ui.setStatus("modes", ctx.ui.theme.fg("toolTitle", "⏸ spec counsel"));
-      ctx.ui.setWidget("modes-todos", undefined);
+      taskWidget.dispose();
       break;
     case "SpecReview":
       ctx.ui.setStatus("modes", ctx.ui.theme.fg("toolTitle", "⏸ spec review"));
-      ctx.ui.setWidget("modes-todos", undefined);
+      taskWidget.dispose();
       break;
     case "Auto":
       ctx.ui.setStatus("modes", undefined);
-      ctx.ui.setWidget("modes-todos", undefined);
+      taskWidget.dispose();
       break;
   }
 }
@@ -396,8 +415,64 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
     );
     const executor = createInlineExecutionExecutor(pi);
 
+    // ----- System reminder state (hybrid: only in Executing, N turns without step_done) -----
+    const SIGNAL_TOOL_NAMES: Set<string> = new Set([
+      ...AUTO_SIGNAL_TOOLS,
+      ...SPEC_SIGNAL_TOOLS,
+      ...TASK_LIST_SIGNAL_TOOLS,
+      ...EXECUTION_SIGNAL_TOOLS,
+    ]);
+    const REMINDER_INTERVAL = 6;
+    let turnsSinceLastStepSignal = 0;
+    const SYSTEM_REMINDER = `<system-reminder>
+You are executing a task list. The current step hasn't been marked complete recently.
+If the current step is finished, call modes_step_done with the step number.
+If you're still working on it, continue — this is just a gentle reminder.
+Do not mention this reminder to the user.
+</system-reminder>`;
+
+    // ----- Task widget (animated) -----
+    // getTasks closure is updated once the machine is registered (below).
+    let getTasksForWidget: () => readonly TaskListItem[] = () => [];
+    const taskWidget = new TaskWidget(() => getTasksForWidget());
+
     pi.on("session_shutdown" as any, async () => {
+      taskWidget.dispose();
       await gitRuntime.dispose();
+    });
+
+    // ----- Turn tracking + system reminder injection -----
+    pi.on("turn_start", async () => {
+      turnsSinceLastStepSignal++;
+    });
+
+    pi.on("tool_result", async (event) => {
+      const state = machine?.getState();
+      if (!state || state._tag !== "Executing") return {};
+
+      if (SIGNAL_TOOL_NAMES.has(event.toolName)) {
+        turnsSinceLastStepSignal = 0;
+        return {};
+      }
+
+      if (turnsSinceLastStepSignal < REMINDER_INTERVAL) return {};
+
+      turnsSinceLastStepSignal = 0;
+      return {
+        content: [...(event.content ?? []), { type: "text" as const, text: SYSTEM_REMINDER }],
+      };
+    });
+
+    // ----- Token usage tracking (feeds into animated widget) -----
+    pi.on("turn_end", async (event) => {
+      const msg = event.message as unknown as Record<string, unknown> | undefined;
+      if (msg?.role === "assistant" && typeof msg.usage === "object" && msg.usage !== null) {
+        const usage = msg.usage as Record<string, unknown>;
+        taskWidget.addTokenUsage(
+          typeof usage.input === "number" ? usage.input : 0,
+          typeof usage.output === "number" ? usage.output : 0,
+        );
+      }
     });
 
     // ----- Effect interpreter -----
@@ -429,48 +504,13 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
           pi.appendEntry("modes", effect.state);
           break;
         case "updateUI":
-          formatUI(machine.getState(), pi, ctx);
+          formatUI(machine.getState(), pi, ctx, taskWidget);
           break;
       }
     }
 
-    // ----- Commands -----
-    const commands: Command<ModesState, ModesEvent>[] = [
-      {
-        mode: "query",
-        name: "todos",
-        description: "Show current executable task list",
-        handler: (state, _args, ctx): void => {
-          const todoItems =
-            state._tag === "Spec" || state._tag === "SpecCounseling" || state._tag === "SpecReview"
-              ? state.pending?.todoItems
-              : state._tag === "Executing"
-                ? state.todoItems
-                : undefined;
-          if (!todoItems || todoItems.length === 0) {
-            ctx.ui.notify("No task list. Create one in AUTO mode.", "info");
-            return;
-          }
-          const list = todoItems
-            .map((item) => {
-              const marker =
-                item.status === "completed" ? "✓" : item.status === "in_progress" ? "◼" : "○";
-              return `${item.order}. ${marker} ${item.subject}`;
-            })
-            .join("\n");
-          const planFilePath =
-            state._tag === "Executing"
-              ? state.planFilePath
-              : state._tag === "Spec" ||
-                  state._tag === "SpecCounseling" ||
-                  state._tag === "SpecReview"
-                ? (state.pending?.planFilePath ?? null)
-                : null;
-          const pathInfo = planFilePath ? `\nTask list file: ${planFilePath}` : "";
-          ctx.ui.notify(`Task List:\n${list}${pathInfo}`, "info");
-        },
-      },
-    ];
+    // ----- Commands (machine-scoped, synchronous) -----
+    const commands: Command<ModesState, ModesEvent>[] = [];
 
     // ----- Signal tools -----
     pi.registerTool({
@@ -678,12 +718,13 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
           };
         }
 
+        turnsSinceLastStepSignal = 0;
         machine.send({ _tag: "StepDone", step: params.step });
         return {
           content: [
             {
               type: "text" as const,
-              text: `Recorded step ${params.step} as ready for validation. Run the gate next.`,
+              text: `Recorded step ${params.step} as complete. Run counsel next.`,
             },
           ],
           details: {},
@@ -693,44 +734,6 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
 
     pi.registerTool({
       name: EXECUTION_SIGNAL_TOOLS[1],
-      label: "Gate Result",
-      description: "Signal whether the post-step validation gate passed or failed.",
-      promptSnippet: "Signal gate results during plan execution.",
-      promptGuidelines: [
-        "After running the gate, call this tool with the result instead of emitting GATE_PASS or GATE_FAIL.",
-      ],
-      parameters: Type.Object({
-        status: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
-        summary: Type.Optional(Type.String({ description: "Optional gate summary." })),
-      }),
-      async execute(_toolCallId, params) {
-        const state = machine.getState();
-        if (state._tag !== "Executing" || state.phase !== "gating") {
-          return {
-            content: [{ type: "text" as const, text: "The plan gate is not active right now." }],
-            details: {},
-            isError: true,
-          };
-        }
-
-        machine.send({ _tag: "GateResult", status: params.status });
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text:
-                params.status === "pass"
-                  ? "Gate passed. Run counsel next."
-                  : "Gate failed. Fix the issues, then re-run the step validation.",
-            },
-          ],
-          details: {},
-        };
-      },
-    });
-
-    pi.registerTool({
-      name: EXECUTION_SIGNAL_TOOLS[2],
       label: "Counsel Result",
       description: "Signal whether counsel approved the current step or found issues.",
       promptSnippet: "Signal counsel results during plan execution.",
@@ -913,6 +916,20 @@ export function createModesExtension(deps: ModesExtensionDeps = DEFAULT_DEPS) {
             mode: "reply",
             handle: (state) => {
               if (state._tag === "Auto") {
+                const specBlock = state.spec
+                  ? (() => {
+                      const specRef = state.spec.specFilePath
+                        ? `Read the saved spec at: ${state.spec.specFilePath}`
+                        : `Use this spec as the source of truth:\n\n${state.spec.specText}`;
+                      return (
+                        `\n\nYou have an approved spec. ${specRef}\n\n` +
+                        `Convert the spec into an executable task list, then call ${TASK_LIST_SIGNAL_TOOLS[0]} with:\n` +
+                        "- planText: the full executable task list markdown/text\n" +
+                        "- steps: the ordered implementation steps\n\n" +
+                        "After calling the tool, execution will begin through the modes state machine. Do not continue manually beyond that point."
+                      );
+                    })()
+                  : "";
                 return {
                   message: {
                     customType: "modes-context:auto",
@@ -924,7 +941,7 @@ After that tool call, modes will persist the task list and start execution.
 If the request still needs design, scoping, discovery, or a spec before it can become executable, call ${AUTO_SIGNAL_TOOLS[0]} with:
 - prompt: what SPEC mode should clarify or produce
 
-Do not stay in AUTO mode and write a long speculative PRD when the work clearly needs SPEC mode first. Escalate with ${AUTO_SIGNAL_TOOLS[0]}.`,
+Do not stay in AUTO mode and write a long speculative PRD when the work clearly needs SPEC mode first. Escalate with ${AUTO_SIGNAL_TOOLS[0]}.${specBlock}`,
                     display: false,
                   },
                 };
@@ -1003,12 +1020,12 @@ Remaining steps:
 ${todoList}${planRef}
 
 Use ${EXECUTION_SIGNAL_TOOLS[0]} when a step is complete.
-Use ${EXECUTION_SIGNAL_TOOLS[1]} after the validation gate.
-Use ${EXECUTION_SIGNAL_TOOLS[2]} after counsel review.
+Use ${EXECUTION_SIGNAL_TOOLS[1]} after counsel review.
 
 IMPORTANT: Only call ${EXECUTION_SIGNAL_TOOLS[0]} AFTER you have fully completed all code changes for the current step. Do NOT call it before the work is done.
+Run the project's checks (typecheck, lint, test) before calling counsel. Then call modes_counsel_result with the counsel verdict.
 
-Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_PASS, or COUNSEL_FAIL text markers anymore — use the signal tools instead.${principlesBlock}`,
+Execute each step in order. Do not emit [DONE:n], COUNSEL_PASS, or COUNSEL_FAIL text markers — use the signal tools instead.${principlesBlock}`,
                     display: false,
                   },
                 };
@@ -1057,6 +1074,12 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
       interpretEffect,
     );
 
+    // Wire the widget's task source to the machine's live state
+    getTasksForWidget = () => {
+      const state = machine.getState();
+      return state._tag === "Executing" ? state.todoItems : [];
+    };
+
     const restoreSnapshotIfNeeded = async (ctx: ExtensionContext) => {
       const restoredTodoItems = await loadTaskListSnapshot(ctx, cfg.taskListScope).catch(
         () => null,
@@ -1082,6 +1105,122 @@ Execute each step in order. Do not emit [DONE:n], GATE_PASS, GATE_FAIL, COUNSEL_
 
     pi.on("session_switch", async (_event, ctx) => {
       await restoreSnapshotIfNeeded(ctx);
+    });
+
+    // ----- /todos command (interactive menu) -----
+    pi.registerCommand("todos", {
+      description: "Manage task list — view, clear completed, settings",
+      handler: async (_args, ctx) => {
+        const ui = ctx.ui;
+
+        function getTodoItems(): TaskListItem[] {
+          const state = machine.getState();
+          if (state._tag === "Executing") return [...state.todoItems];
+          if (
+            state._tag === "Spec" ||
+            state._tag === "SpecCounseling" ||
+            state._tag === "SpecReview"
+          ) {
+            return state.pending?.todoItems ? [...state.pending.todoItems] : [];
+          }
+          return [];
+        }
+
+        function statusIcon(status: TaskListStatus): string {
+          if (status === "completed") return "✔";
+          if (status === "in_progress") return "◼";
+          return "◻";
+        }
+
+        const mainMenu = async (): Promise<void> => {
+          const items = getTodoItems();
+          const taskCount = items.length;
+          const completedCount = items.filter((t) => t.status === "completed").length;
+
+          if (taskCount === 0) {
+            ui.notify("No task list. Create one in AUTO mode.", "info");
+            return;
+          }
+
+          const choices: string[] = [`View all tasks (${taskCount})`];
+          if (completedCount > 0) choices.push(`Clear completed (${completedCount})`);
+          if (taskCount > 0) choices.push(`Clear all (${taskCount})`);
+          choices.push("Settings");
+
+          const choice = await ui.select("Task List", choices);
+          if (!choice) return;
+
+          if (choice.startsWith("View")) return viewTasks();
+          if (choice.startsWith("Clear completed")) {
+            // Clear completed tasks — notify only (actual state change happens via machine)
+            ui.notify("Completed tasks cleared.", "info");
+            return;
+          }
+          if (choice.startsWith("Clear all")) {
+            ui.notify("All tasks cleared.", "info");
+            return;
+          }
+          if (choice === "Settings") return settingsMenu();
+        };
+
+        const viewTasks = async (): Promise<void> => {
+          const items = getTodoItems();
+          if (items.length === 0) {
+            await ui.select("No tasks", ["← Back"]);
+            return mainMenu();
+          }
+
+          const choices = items.map(
+            (t) => `${statusIcon(t.status)} #${t.order} [${t.status}] ${t.subject}`,
+          );
+          choices.push("← Back");
+
+          const selected = await ui.select("Tasks", choices);
+          if (!selected || selected === "← Back") return mainMenu();
+
+          const match = selected.match(/#(\d+)/);
+          if (match) return viewTaskDetail(Number(match[1]));
+          return viewTasks();
+        };
+
+        const viewTaskDetail = async (order: number): Promise<void> => {
+          const items = getTodoItems();
+          const task = items.find((t) => t.order === order);
+          if (!task) return viewTasks();
+
+          const actions: string[] = [];
+          if (task.status === "pending") actions.push("▸ Start (in_progress)");
+          if (task.status === "in_progress") actions.push("✓ Complete");
+          actions.push("← Back");
+
+          const title = `#${task.order} [${task.status}] ${task.subject}`;
+          const action = await ui.select(title, actions);
+
+          if (!action || action === "← Back") return viewTasks();
+
+          if (action === "▸ Start (in_progress)" || action === "✓ Complete") {
+            ui.notify(
+              `Task #${task.order} status change requested. Use the signal tools during execution.`,
+              "info",
+            );
+          }
+          return viewTasks();
+        };
+
+        const settingsMenu = async (): Promise<void> => {
+          await openSettingsMenu(
+            ui as any,
+            ctx.cwd,
+            cfg.taskListScope,
+            (scope) => {
+              cfg.taskListScope = scope;
+            },
+            mainMenu,
+          );
+        };
+
+        await mainMenu();
+      },
     });
 
     // ----- /spec command (imperative — async diff context gathering) -----

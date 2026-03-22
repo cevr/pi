@@ -14,7 +14,7 @@ import {
   createWriteTool,
 } from "@mariozechner/pi-coding-agent";
 import type { Message, Model } from "@mariozechner/pi-ai";
-import type { Reducer, TransitionResult } from "@cvr/pi-state-machine";
+import type { BuiltinEffect, Reducer, TransitionResult } from "@cvr/pi-state-machine";
 import { type UsageStats, zeroUsage } from "@cvr/pi-spawn";
 import {
   appendTaskTranscriptEntries,
@@ -225,7 +225,7 @@ function cloneRecord(record: TaskRecord): TaskRecord {
 function updateUsageFromAssistantMessage(usage: UsageStats, message: Message): void {
   if (message.role !== "assistant") return;
 
-  const messageRecord = message as Record<string, unknown>;
+  const messageRecord = message as unknown as Record<string, unknown>;
   const messageUsage = messageRecord.usage as Record<string, unknown> | undefined;
   if (messageUsage) {
     usage.input += Number(messageUsage.input) || 0;
@@ -249,7 +249,7 @@ function syncRecordFromMessages(record: TaskRecord, messages: readonly Message[]
     updateUsageFromAssistantMessage(next.usage, message);
 
     if (message.role !== "assistant") continue;
-    const messageRecord = message as Record<string, unknown>;
+    const messageRecord = message as unknown as Record<string, unknown>;
     if (!next.model && typeof messageRecord.model === "string") {
       next.model = messageRecord.model;
     }
@@ -435,7 +435,7 @@ function applyObservedEvent(
     case "turn_start": {
       const phase = record.progress.activeTools.length > 0 ? "tool" : "thinking";
       return {
-        state: withProgress(record, { turnCount: event.turnIndex + 1, phase }),
+        state: withProgress(record, { turnCount: record.progress.turnCount + 1, phase }),
       };
     }
     case "tool_execution_start": {
@@ -716,7 +716,7 @@ export function createTaskRunner(
     );
   };
 
-  const runEffect = (effect: TaskRunnerMachineEffect) => {
+  const runEffect = (effect: BuiltinEffect | TaskRunnerMachineEffect) => {
     switch (effect.type) {
       case "emitUpdate":
         emitUpdate();
@@ -792,7 +792,7 @@ export function createTaskRunner(
         outputFilePath,
       });
 
-      if (state._tag === "Aborting") {
+      if ((state._tag as string) === "Aborting") {
         await dispatch({ _tag: "PromptResolved", completedAt: deps.now() });
         return getRecordSnapshot();
       }

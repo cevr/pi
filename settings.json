@@ -10,7 +10,7 @@
   "extensions": ["~/Developer/personal/pi/dist/extensions"],
   "skills": ["~/Developer/personal/dotfiles/skills"],
   "quietStartup": true,
-  "hideThinkingBlock": true,
+  "hideThinkingBlock": false,
   "enableSkillCommands": false,
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",

@@ -34,8 +34,8 @@ Sequential step execution.
 
 - run current step
 - call `modes_step_done`
-- run gate, then call `modes_gate_result`
-- run counsel, then call `modes_counsel_result`
+- run project checks (typecheck, lint, test) if applicable
+- call counsel for cross-vendor review, then call `modes_counsel_result`
 - continue until complete, then return to AUTO
 
 ## Transcript visibility
@@ -60,8 +60,6 @@ These should stay hidden because they are machine steering or context injection,
 - `modes-context:spec`
 - `modes-context:executing`
 - `modes-context:auto-task-list`
-- `modes-execution:gate`
-- `modes-execution:gate-fix`
 - `modes-execution:counsel`
 - `modes-execution:counsel-fix`
 - `modes-execution:next-step`

@@ -192,7 +192,13 @@ describe("task extension", () => {
     );
 
     const getTaskResultTool = harness.getTool("get_task_result");
-    const result = await getTaskResultTool.execute("tc-2", { task_id: "task-1" });
+    const result = await getTaskResultTool.execute(
+      "tc-2",
+      { task_id: "task-1" },
+      undefined,
+      undefined,
+      { cwd: process.cwd() } as any,
+    );
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(text).toContain("Phase: tool");
@@ -237,7 +243,7 @@ describe("task extension", () => {
         textDelta: "done",
       },
     };
-    let completionListener: ((record: typeof record) => void) | undefined;
+    let completionListener: ((rec: typeof record) => void) | undefined;
     let completionUnsubscribed = false;
     const handle = {
       id: "task-2",
@@ -255,7 +261,7 @@ describe("task extension", () => {
       onToolActivity: () => () => {},
       onTextDelta: () => () => {},
       onSessionCreated: () => () => {},
-      onCompletion: (listener: (record: typeof record) => void) => {
+      onCompletion: (listener: (rec: typeof record) => void) => {
         completionListener = listener;
         return () => {
           completionUnsubscribed = true;
@@ -343,7 +349,7 @@ describe("task extension", () => {
         textDelta: "done",
       },
     };
-    let completionListener: ((record: typeof record) => void) | undefined;
+    let completionListener: ((rec: typeof record) => void) | undefined;
     let unsubscribed = false;
     const handle = {
       id: "task-3",
@@ -363,7 +369,7 @@ describe("task extension", () => {
       onToolActivity: () => () => {},
       onTextDelta: () => () => {},
       onSessionCreated: () => () => {},
-      onCompletion: (listener: (record: typeof record) => void) => {
+      onCompletion: (listener: (rec: typeof record) => void) => {
         completionListener = listener;
         return () => {
           unsubscribed = true;
@@ -398,7 +404,7 @@ describe("task extension", () => {
       { cwd: process.cwd(), model: undefined, modelRegistry: { find: () => undefined } } as any,
     );
 
-    await harness.listeners.session_switch[0]?.();
+    await harness.listeners.session_switch?.[0]?.();
 
     expect(unsubscribed).toBe(true);
     expect(harness.emittedEvents).toEqual([]);

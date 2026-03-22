@@ -26,7 +26,7 @@ import { createInlineExecutionExecutor, isExecutionEffect } from "@cvr/pi-execut
 import { GitClient } from "@cvr/pi-git-client";
 import { GraphRuntime } from "@cvr/pi-graph-runtime";
 import { ProcessRunner } from "@cvr/pi-process-runner";
-import { PiSpawnService, zeroUsage, type PiSpawnResult } from "@cvr/pi-spawn";
+import { PiSpawnService, SpawnError, zeroUsage, type PiSpawnResult } from "@cvr/pi-spawn";
 import { renderAgentTree, type SingleResult } from "@cvr/pi-sub-agent-render";
 import { register, type MachineConfig } from "@cvr/pi-state-machine";
 import type { Command, StateObserver } from "@cvr/pi-state-machine";
@@ -236,10 +236,6 @@ const EXECUTION_EXTENSION_TOOLS = [
   "skill",
   AUDIT_SIGNAL_TOOLS.executionResult,
 ];
-const AUDIT_PHASE_RESULT_TYPE = "audit-phase-result";
-
-type AuditPhase = "detection" | "concern" | "synthesis" | "execution";
-
 export class ConcernBatchError extends Schema.TaggedErrorClass<ConcernBatchError>()(
   "ConcernBatchError",
   { message: Schema.String },
@@ -263,13 +259,6 @@ export interface SpawnPhaseResult {
   renderResult: SingleResult;
   findings?: AuditFinding[];
   outcome?: "completed" | "skip";
-}
-
-interface AuditPhaseResultMessageDetails {
-  phase: AuditPhase;
-  label: string;
-  sessionPath: string;
-  result: SingleResult;
 }
 
 const AUDIT_SESSIONS_DIR = path.join(os.homedir(), ".pi", "agent", "sessions");
@@ -322,34 +311,6 @@ function buildConcernBatchError(message: string, sessionPath: string): string {
   return `${message}\n\nConcern transcript: ${sessionPath}`;
 }
 
-function buildConcernCompletionMessage(concern: AuditConcernTask): string {
-  const sessionLine = concern.metadata.sessionPath
-    ? `\nSession: ${concern.metadata.sessionPath}`
-    : "";
-  return `Concern audit complete: ${concern.order}. ${concern.subject}${sessionLine}`;
-}
-
-function buildPhaseCompletionMessage(label: string, sessionPath: string): string {
-  return `${label}\nSession: ${sessionPath}`;
-}
-
-function sendAuditPhaseTreeMessage(
-  pi: ExtensionAPI,
-  details: AuditPhaseResultMessageDetails,
-  content: string,
-  options?: { deliverAs?: "steer" | "followUp" | "nextTurn" },
-): void {
-  pi.sendMessage(
-    {
-      customType: AUDIT_PHASE_RESULT_TYPE,
-      content,
-      display: true,
-      details,
-    },
-    options,
-  );
-}
-
 function buildDetectionSystemPrompt(): string {
   return `[AUDIT MODE - DETECTION]\n\nQuickly classify the audit request into a small set of audit concerns. Use only the provided scope and prose. Do not inspect files or do discovery. When ready, call ${AUDIT_SIGNAL_TOOLS.proposeConcerns}.`;
 }
@@ -383,18 +344,6 @@ function normalizeConcernAuditNotes(text: string): string {
   return text.trim();
 }
 
-function createFailedSingleResult(agent: string, task: string, message: string): SingleResult {
-  return {
-    agent,
-    task,
-    exitCode: 1,
-    messages: [],
-    usage: zeroUsage(),
-    stopReason: "error",
-    errorMessage: message,
-  };
-}
-
 function toSingleResult(agent: string, task: string, result: PiSpawnResult): SingleResult {
   return {
     agent,
@@ -414,7 +363,8 @@ export function runDetection(
   sessionId: string,
   sessionPath: string,
   signal?: AbortSignal,
-): Effect.Effect<DetectionResult, ConcernBatchError, PiSpawnService> {
+  onUpdate?: (partial: PiSpawnResult) => void,
+): Effect.Effect<DetectionResult, ConcernBatchError | SpawnError, PiSpawnService> {
   return Effect.gen(function* () {
     const spawn = yield* PiSpawnService;
     const task = buildDetectionPrompt(state);
@@ -428,6 +378,7 @@ export function runDetection(
       signal,
       sessionId,
       sessionPath,
+      onUpdate,
     });
     const concerns = parseProposedConcerns(result.messages);
 
@@ -469,7 +420,7 @@ export function runConcernBatch(
   signal?: AbortSignal,
 ): Effect.Effect<
   ReadonlyArray<ConcernBatchResult>,
-  ConcernBatchError,
+  ConcernBatchError | SpawnError,
   GraphRuntime | PiSpawnService
 > {
   return Effect.gen(function* () {
@@ -549,7 +500,8 @@ export function runSynthesis(
   principles: string | undefined,
   sessionPath: string,
   signal?: AbortSignal,
-): Effect.Effect<SpawnPhaseResult, ConcernBatchError, PiSpawnService> {
+  onUpdate?: (partial: PiSpawnResult) => void,
+): Effect.Effect<SpawnPhaseResult, ConcernBatchError | SpawnError, PiSpawnService> {
   return Effect.gen(function* () {
     const spawn = yield* PiSpawnService;
     const task = buildSynthesisPrompt(state);
@@ -563,6 +515,7 @@ export function runSynthesis(
       signal,
       sessionId,
       sessionPath,
+      onUpdate,
     });
 
     const findings = parseSynthesisComplete(result.messages);
@@ -602,7 +555,8 @@ export function runExecution(
   principles: string | undefined,
   sessionPath: string,
   signal?: AbortSignal,
-): Effect.Effect<SpawnPhaseResult, ConcernBatchError, PiSpawnService> {
+  onUpdate?: (partial: PiSpawnResult) => void,
+): Effect.Effect<SpawnPhaseResult, ConcernBatchError | SpawnError, PiSpawnService> {
   return Effect.gen(function* () {
     const spawn = yield* PiSpawnService;
     const task = buildExecutionPrompt(state);
@@ -616,6 +570,7 @@ export function runExecution(
       signal,
       sessionId,
       sessionPath,
+      onUpdate,
     });
 
     const outcome = parseExecutionResult(result.messages);
@@ -648,12 +603,7 @@ export function runExecution(
   });
 }
 
-const AUDIT_HIDDEN_CONTEXT_TYPES = new Set([
-  "audit-context",
-  "audit-progress",
-  "audit-error",
-  AUDIT_PHASE_RESULT_TYPE,
-]);
+const AUDIT_HIDDEN_CONTEXT_TYPES = new Set(["audit-context", "audit-progress", "audit-error"]);
 
 // ---------------------------------------------------------------------------
 // UI
@@ -696,30 +646,20 @@ export default function auditExtension(pi: ExtensionAPI): void {
     Layer.mergeAll(GraphRuntime.layer, PiSpawnService.layer),
   );
   const executor = createInlineExecutionExecutor(pi);
-  let activeDetectionAbort: AbortController | undefined;
+  let activeDetectionToolAbort: AbortController | undefined;
   let activeConcernToolAbort: AbortController | undefined;
-  let activeSynthesisAbort: AbortController | undefined;
-  let activeExecutionAbort: AbortController | undefined;
-
-  pi.registerMessageRenderer(AUDIT_PHASE_RESULT_TYPE, (message, { expanded }, theme) => {
-    const details = message.details as AuditPhaseResultMessageDetails | undefined;
-    if (!details?.result) return new Text("(missing audit phase result)", 0, 0);
-    const container = new Container();
-    renderAgentTree(details.result, container, expanded, theme, {
-      label: details.label,
-    });
-    return container;
-  });
+  let activeSynthesisToolAbort: AbortController | undefined;
+  let activeExecutionToolAbort: AbortController | undefined;
 
   pi.on("session_shutdown" as any, async () => {
-    activeDetectionAbort?.abort();
-    activeDetectionAbort = undefined;
+    activeDetectionToolAbort?.abort();
+    activeDetectionToolAbort = undefined;
     activeConcernToolAbort?.abort();
     activeConcernToolAbort = undefined;
-    activeSynthesisAbort?.abort();
-    activeSynthesisAbort = undefined;
-    activeExecutionAbort?.abort();
-    activeExecutionAbort = undefined;
+    activeSynthesisToolAbort?.abort();
+    activeSynthesisToolAbort = undefined;
+    activeExecutionToolAbort?.abort();
+    activeExecutionToolAbort = undefined;
     await Promise.all([gitRuntime.dispose(), concernRuntime.dispose()]);
   });
 
@@ -1147,6 +1087,425 @@ export default function auditExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerTool({
+    name: "audit_run_detection",
+    label: "Run Audit Detection",
+    description: "Run audit concern detection to identify areas to audit.",
+    promptSnippet: "Call this tool to run audit detection when instructed during audit mode.",
+    promptGuidelines: [
+      "Only call this when the audit is in the Detecting state and you are instructed to run detection.",
+      "Do not pass any parameters.",
+    ],
+    parameters: Type.Object({}),
+
+    async execute(_toolCallId, _params, signal, onUpdate, ctx) {
+      const state = machine.getState();
+      if (state._tag !== "Detecting") {
+        return toolError("audit is not in the Detecting state");
+      }
+
+      const abort = new AbortController();
+      activeDetectionToolAbort = abort;
+      const combinedSignal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
+
+      let sessionId = "";
+      try {
+        sessionId = ctx.sessionManager?.getSessionId?.() ?? "";
+      } catch {
+        /* graceful */
+      }
+
+      const sessionPath = generateAuditDetectionSessionPath(state.iteration);
+      const singleResult: SingleResult = {
+        agent: `audit detection ${state.iteration}/${state.maxIterations}`,
+        task: buildDetectionPrompt(state),
+        exitCode: -1,
+        messages: [],
+        usage: zeroUsage(),
+      };
+
+      const pushUpdate = () => {
+        if (!onUpdate) return;
+        onUpdate({
+          content: [{ type: "text" as const, text: "detecting concerns..." }],
+          details: singleResult,
+        } as any);
+      };
+      pushUpdate();
+
+      try {
+        const result = await concernRuntime.runPromise(
+          runDetection(state, ctx.cwd, sessionId, sessionPath, combinedSignal, (partial) => {
+            singleResult.messages = partial.messages;
+            singleResult.usage = partial.usage;
+            singleResult.model = partial.model;
+            singleResult.stopReason = partial.stopReason;
+            singleResult.errorMessage = partial.errorMessage;
+            pushUpdate();
+          }),
+        );
+
+        singleResult.exitCode = result.renderResult.exitCode;
+        singleResult.messages = result.renderResult.messages;
+        singleResult.usage = result.renderResult.usage;
+        singleResult.model = result.renderResult.model;
+        singleResult.stopReason = result.renderResult.stopReason;
+        singleResult.errorMessage = result.renderResult.errorMessage;
+
+        machine.send({ _tag: "ConcernsProposed", concerns: [...result.concerns] });
+
+        if (activeDetectionToolAbort === abort) {
+          activeDetectionToolAbort = undefined;
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Detection complete. Found ${result.concerns.length} concerns.`,
+            },
+          ],
+          details: singleResult,
+        };
+      } catch (err) {
+        const message =
+          err instanceof ConcernBatchError
+            ? err.message
+            : `audit: concern detection failed: ${String(err)}`;
+
+        singleResult.exitCode = 1;
+        singleResult.stopReason = "error";
+        singleResult.errorMessage = message;
+
+        machine.send({ _tag: "DetectionFailed" });
+
+        if (activeDetectionToolAbort === abort) {
+          activeDetectionToolAbort = undefined;
+        }
+
+        return {
+          content: [{ type: "text" as const, text: message }],
+          details: singleResult,
+          isError: true,
+        };
+      }
+    },
+
+    renderCall(_args: any, theme: any) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("audit detection ")) +
+          theme.fg("muted", "detecting concerns"),
+        0,
+        0,
+      );
+    },
+
+    renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) {
+      const sr = result.details as SingleResult | undefined;
+      if (!sr) {
+        const text = result.content?.[0];
+        return new Text(text?.type === "text" ? text.text : "(no detection results)", 0, 0);
+      }
+      const container = new Container();
+      renderAgentTree(sr, container, expanded, theme, {
+        label: sr.agent || "audit detection",
+      });
+      return container;
+    },
+  });
+
+  pi.registerTool({
+    name: "audit_run_synthesis",
+    label: "Run Audit Synthesis",
+    description: "Synthesize audit findings from completed concern audits.",
+    promptSnippet: "Call this tool to run audit synthesis when instructed during audit mode.",
+    promptGuidelines: [
+      "Only call this when the audit is in the Synthesizing state and you are instructed to run synthesis.",
+      "Do not pass any parameters.",
+    ],
+    parameters: Type.Object({}),
+
+    async execute(_toolCallId, _params, signal, onUpdate, ctx) {
+      const state = machine.getState();
+      if (state._tag !== "Synthesizing") {
+        return toolError("audit is not in the Synthesizing state");
+      }
+
+      const abort = new AbortController();
+      activeSynthesisToolAbort = abort;
+      const combinedSignal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
+
+      const principles = readPrinciples();
+      let sessionId = "";
+      try {
+        sessionId = ctx.sessionManager?.getSessionId?.() ?? "";
+      } catch {
+        /* graceful */
+      }
+
+      const sessionPath = generateAuditSynthesisSessionPath(state.iteration);
+      const singleResult: SingleResult = {
+        agent: `audit synthesis ${state.iteration}/${state.maxIterations}`,
+        task: buildSynthesisPrompt(state),
+        exitCode: -1,
+        messages: [],
+        usage: zeroUsage(),
+      };
+
+      const pushUpdate = () => {
+        if (!onUpdate) return;
+        onUpdate({
+          content: [{ type: "text" as const, text: "synthesizing findings..." }],
+          details: singleResult,
+        } as any);
+      };
+      pushUpdate();
+
+      try {
+        const result = await concernRuntime.runPromise(
+          runSynthesis(
+            state,
+            ctx.cwd,
+            sessionId,
+            principles,
+            sessionPath,
+            combinedSignal,
+            (partial) => {
+              singleResult.messages = partial.messages;
+              singleResult.usage = partial.usage;
+              singleResult.model = partial.model;
+              singleResult.stopReason = partial.stopReason;
+              singleResult.errorMessage = partial.errorMessage;
+              pushUpdate();
+            },
+          ),
+        );
+
+        singleResult.exitCode = result.renderResult.exitCode;
+        singleResult.messages = result.renderResult.messages;
+        singleResult.usage = result.renderResult.usage;
+        singleResult.model = result.renderResult.model;
+        singleResult.stopReason = result.renderResult.stopReason;
+        singleResult.errorMessage = result.renderResult.errorMessage;
+
+        machine.send({
+          _tag: "SynthesisComplete",
+          findings: result.findings ?? [],
+          sessionPath: result.sessionPath,
+        });
+
+        if (activeSynthesisToolAbort === abort) {
+          activeSynthesisToolAbort = undefined;
+        }
+
+        const findingCount = result.findings?.length ?? 0;
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Synthesis complete. ${findingCount} finding${findingCount !== 1 ? "s" : ""}.`,
+            },
+          ],
+          details: singleResult,
+        };
+      } catch (err) {
+        const message =
+          err instanceof ConcernBatchError
+            ? err.message
+            : `audit: synthesis failed: ${String(err)}`;
+
+        singleResult.exitCode = 1;
+        singleResult.stopReason = "error";
+        singleResult.errorMessage = message;
+
+        machine.send({
+          _tag: "SynthesisFailed",
+          sessionPath,
+          message,
+        });
+
+        if (activeSynthesisToolAbort === abort) {
+          activeSynthesisToolAbort = undefined;
+        }
+
+        return {
+          content: [{ type: "text" as const, text: message }],
+          details: singleResult,
+          isError: true,
+        };
+      }
+    },
+
+    renderCall(_args: any, theme: any) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("audit synthesis ")) +
+          theme.fg("muted", "synthesizing findings"),
+        0,
+        0,
+      );
+    },
+
+    renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) {
+      const sr = result.details as SingleResult | undefined;
+      if (!sr) {
+        const text = result.content?.[0];
+        return new Text(text?.type === "text" ? text.text : "(no synthesis results)", 0, 0);
+      }
+      const container = new Container();
+      renderAgentTree(sr, container, expanded, theme, {
+        label: sr.agent || "audit synthesis",
+      });
+      return container;
+    },
+  });
+
+  pi.registerTool({
+    name: "audit_run_execution",
+    label: "Run Audit Execution",
+    description: "Execute the synthesized audit plan to fix findings.",
+    promptSnippet: "Call this tool to run audit execution when instructed during audit mode.",
+    promptGuidelines: [
+      "Only call this when the audit is in the Executing state and you are instructed to run execution.",
+      "Do not pass any parameters.",
+    ],
+    parameters: Type.Object({}),
+
+    async execute(_toolCallId, _params, signal, onUpdate, ctx) {
+      const state = machine.getState();
+      if (state._tag !== "Executing") {
+        return toolError("audit is not in the Executing state");
+      }
+
+      const abort = new AbortController();
+      activeExecutionToolAbort = abort;
+      const combinedSignal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
+
+      const principles = readPrinciples();
+      let sessionId = "";
+      try {
+        sessionId = ctx.sessionManager?.getSessionId?.() ?? "";
+      } catch {
+        /* graceful */
+      }
+
+      const sessionPath = generateAuditExecutionSessionPath(state.iteration);
+      const singleResult: SingleResult = {
+        agent: `audit execution ${state.iteration}/${state.maxIterations}`,
+        task: buildExecutionPrompt(state),
+        exitCode: -1,
+        messages: [],
+        usage: zeroUsage(),
+      };
+
+      const pushUpdate = () => {
+        if (!onUpdate) return;
+        onUpdate({
+          content: [{ type: "text" as const, text: "executing audit plan..." }],
+          details: singleResult,
+        } as any);
+      };
+      pushUpdate();
+
+      try {
+        const result = await concernRuntime.runPromise(
+          runExecution(
+            state,
+            ctx.cwd,
+            sessionId,
+            principles,
+            sessionPath,
+            combinedSignal,
+            (partial) => {
+              singleResult.messages = partial.messages;
+              singleResult.usage = partial.usage;
+              singleResult.model = partial.model;
+              singleResult.stopReason = partial.stopReason;
+              singleResult.errorMessage = partial.errorMessage;
+              pushUpdate();
+            },
+          ),
+        );
+
+        singleResult.exitCode = result.renderResult.exitCode;
+        singleResult.messages = result.renderResult.messages;
+        singleResult.usage = result.renderResult.usage;
+        singleResult.model = result.renderResult.model;
+        singleResult.stopReason = result.renderResult.stopReason;
+        singleResult.errorMessage = result.renderResult.errorMessage;
+
+        machine.send(
+          result.outcome === "completed"
+            ? { _tag: "ExecutionComplete", sessionPath: result.sessionPath }
+            : {
+                _tag: "ExecutionFailed",
+                sessionPath: result.sessionPath,
+                message: "execution subagent reported nothing left to do",
+              },
+        );
+
+        if (activeExecutionToolAbort === abort) {
+          activeExecutionToolAbort = undefined;
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Execution ${result.outcome === "completed" ? "complete" : "skipped"}.`,
+            },
+          ],
+          details: singleResult,
+        };
+      } catch (err) {
+        const message =
+          err instanceof ConcernBatchError
+            ? err.message
+            : `audit: execution failed: ${String(err)}`;
+
+        singleResult.exitCode = 1;
+        singleResult.stopReason = "error";
+        singleResult.errorMessage = message;
+
+        machine.send({
+          _tag: "ExecutionFailed",
+          sessionPath,
+          message,
+        });
+
+        if (activeExecutionToolAbort === abort) {
+          activeExecutionToolAbort = undefined;
+        }
+
+        return {
+          content: [{ type: "text" as const, text: message }],
+          details: singleResult,
+          isError: true,
+        };
+      }
+    },
+
+    renderCall(_args: any, theme: any) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("audit execution ")) + theme.fg("muted", "executing plan"),
+        0,
+        0,
+      );
+    },
+
+    renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) {
+      const sr = result.details as SingleResult | undefined;
+      if (!sr) {
+        const text = result.content?.[0];
+        return new Text(text?.type === "text" ? text.text : "(no execution results)", 0, 0);
+      }
+      const container = new Container();
+      renderAgentTree(sr, container, expanded, theme, {
+        label: sr.agent || "audit execution",
+      });
+      return container;
+    },
+  });
+
   const awaitingConcernApprovalObserver: StateObserver<AuditState, AuditEvent> = {
     match: (state) => state._tag === "AwaitingConcernApproval",
     handler: async (state, sendIfCurrent, ctx) => {
@@ -1281,22 +1640,22 @@ export default function auditExtension(pi: ExtensionAPI): void {
           const scope = data?.scope === "diff" || data?.scope === "paths" ? data.scope : undefined;
           const concerns = normalizeHydratedConcernTasks(
             Array.isArray(data?.concerns)
-              ? (data.concerns as Record<string, unknown>[])
+              ? (data.concerns as unknown as Record<string, unknown>[])
               : undefined,
           );
           const proposedConcerns = normalizeHydratedProposedConcerns(
             Array.isArray(data?.proposedConcerns)
-              ? (data.proposedConcerns as Record<string, unknown>[])
+              ? (data.proposedConcerns as unknown as Record<string, unknown>[])
               : undefined,
           );
           const findings = normalizeHydratedFindings(
             Array.isArray(data?.findings)
-              ? (data.findings as Record<string, unknown>[])
+              ? (data.findings as unknown as Record<string, unknown>[])
               : undefined,
           );
           const skillCatalog = normalizeHydratedSkillCatalog(
             Array.isArray(data?.skillCatalog)
-              ? (data.skillCatalog as Record<string, unknown>[])
+              ? (data.skillCatalog as unknown as Record<string, unknown>[])
               : undefined,
           );
           const concernCursor = normalizeHydratedConcernCursor(data?.concernCursor);
@@ -1382,231 +1741,25 @@ export default function auditExtension(pi: ExtensionAPI): void {
       }
       if (effect.type === "persistState") {
         if (effect.state.mode !== "Detecting") {
-          activeDetectionAbort?.abort();
-          activeDetectionAbort = undefined;
+          activeDetectionToolAbort?.abort();
+          activeDetectionToolAbort = undefined;
         }
         if (effect.state.mode !== "Auditing") {
           activeConcernToolAbort?.abort();
           activeConcernToolAbort = undefined;
         }
         if (effect.state.mode !== "Synthesizing") {
-          activeSynthesisAbort?.abort();
-          activeSynthesisAbort = undefined;
+          activeSynthesisToolAbort?.abort();
+          activeSynthesisToolAbort = undefined;
         }
         if (effect.state.mode !== "Executing") {
-          activeExecutionAbort?.abort();
-          activeExecutionAbort = undefined;
+          activeExecutionToolAbort?.abort();
+          activeExecutionToolAbort = undefined;
         }
         pi.appendEntry("audit", effect.state);
         return;
       }
-      if (effect.type === "runDetection") {
-        activeDetectionAbort?.abort();
-        const detectionAbort = new AbortController();
-        activeDetectionAbort = detectionAbort;
-        const sessionId = ctx.sessionManager?.getSessionId?.() ?? "";
-        const sessionPath = generateAuditDetectionSessionPath(effect.state.iteration);
-        const task = buildDetectionPrompt(effect.state);
-        concernRuntime
-          .runPromise(
-            runDetection(effect.state, ctx.cwd, sessionId, sessionPath, detectionAbort.signal),
-          )
-          .then((result) => {
-            if (activeDetectionAbort !== detectionAbort || detectionAbort.signal.aborted) return;
-            machine.send({ _tag: "ConcernsProposed", concerns: [...result.concerns] });
-            sendAuditPhaseTreeMessage(
-              pi,
-              {
-                phase: "detection",
-                label: `audit detection ${effect.state.iteration}/${effect.state.maxIterations}`,
-                sessionPath: result.sessionPath,
-                result: result.renderResult,
-              },
-              buildPhaseCompletionMessage("Audit concern detection complete.", result.sessionPath),
-              { deliverAs: "nextTurn" },
-            );
-            if (activeDetectionAbort === detectionAbort) {
-              activeDetectionAbort = undefined;
-            }
-          })
-          .catch((err) => {
-            if (activeDetectionAbort !== detectionAbort || detectionAbort.signal.aborted) return;
-            const message =
-              err instanceof ConcernBatchError
-                ? err.message
-                : `audit: concern detection failed: ${String(err)}`;
-            sendAuditPhaseTreeMessage(
-              pi,
-              {
-                phase: "detection",
-                label: `audit detection ${effect.state.iteration}/${effect.state.maxIterations}`,
-                sessionPath,
-                result: createFailedSingleResult(
-                  `audit detection ${effect.state.iteration}/${effect.state.maxIterations}`,
-                  task,
-                  message,
-                ),
-              },
-              buildPhaseCompletionMessage("Audit concern detection failed.", sessionPath),
-              { deliverAs: "nextTurn" },
-            );
-            machine.send({ _tag: "DetectionFailed" });
-            if (activeDetectionAbort === detectionAbort) {
-              activeDetectionAbort = undefined;
-            }
-          });
-        return;
-      }
-      if (effect.type === "runSynthesis") {
-        activeSynthesisAbort?.abort();
-        const synthesisAbort = new AbortController();
-        activeSynthesisAbort = synthesisAbort;
-        const principles = readPrinciples();
-        const sessionId = ctx.sessionManager?.getSessionId?.() ?? "";
-        const sessionPath = generateAuditSynthesisSessionPath(effect.state.iteration);
-        const task = buildSynthesisPrompt(effect.state);
-        concernRuntime
-          .runPromise(
-            runSynthesis(
-              effect.state,
-              ctx.cwd,
-              sessionId,
-              principles,
-              sessionPath,
-              synthesisAbort.signal,
-            ),
-          )
-          .then((result) => {
-            if (activeSynthesisAbort !== synthesisAbort || synthesisAbort.signal.aborted) return;
-            machine.send({
-              _tag: "SynthesisComplete",
-              findings: result.findings ?? [],
-              sessionPath: result.sessionPath,
-            });
-            sendAuditPhaseTreeMessage(
-              pi,
-              {
-                phase: "synthesis",
-                label: `audit synthesis ${effect.state.iteration}/${effect.state.maxIterations}`,
-                sessionPath: result.sessionPath,
-                result: result.renderResult,
-              },
-              buildPhaseCompletionMessage("Audit synthesis complete.", result.sessionPath),
-              { deliverAs: "nextTurn" },
-            );
-            if (activeSynthesisAbort === synthesisAbort) {
-              activeSynthesisAbort = undefined;
-            }
-          })
-          .catch((err) => {
-            if (activeSynthesisAbort !== synthesisAbort || synthesisAbort.signal.aborted) return;
-            const message =
-              err instanceof ConcernBatchError
-                ? err.message
-                : `audit: synthesis failed: ${String(err)}`;
-            sendAuditPhaseTreeMessage(
-              pi,
-              {
-                phase: "synthesis",
-                label: `audit synthesis ${effect.state.iteration}/${effect.state.maxIterations}`,
-                sessionPath,
-                result: createFailedSingleResult(
-                  `audit synthesis ${effect.state.iteration}/${effect.state.maxIterations}`,
-                  task,
-                  message,
-                ),
-              },
-              buildPhaseCompletionMessage("Audit synthesis failed.", sessionPath),
-              { deliverAs: "nextTurn" },
-            );
-            machine.send({
-              _tag: "SynthesisFailed",
-              sessionPath,
-              message,
-            });
-            if (activeSynthesisAbort === synthesisAbort) {
-              activeSynthesisAbort = undefined;
-            }
-          });
-        return;
-      }
-      if (effect.type === "runExecution") {
-        activeExecutionAbort?.abort();
-        const executionAbort = new AbortController();
-        activeExecutionAbort = executionAbort;
-        const principles = readPrinciples();
-        const sessionId = ctx.sessionManager?.getSessionId?.() ?? "";
-        const sessionPath = generateAuditExecutionSessionPath(effect.state.iteration);
-        const task = buildExecutionPrompt(effect.state);
-        concernRuntime
-          .runPromise(
-            runExecution(
-              effect.state,
-              ctx.cwd,
-              sessionId,
-              principles,
-              sessionPath,
-              executionAbort.signal,
-            ),
-          )
-          .then((result) => {
-            if (activeExecutionAbort !== executionAbort || executionAbort.signal.aborted) return;
-            machine.send(
-              result.outcome === "completed"
-                ? { _tag: "ExecutionComplete", sessionPath: result.sessionPath }
-                : {
-                    _tag: "ExecutionFailed",
-                    sessionPath: result.sessionPath,
-                    message: "execution subagent reported nothing left to do",
-                  },
-            );
-            sendAuditPhaseTreeMessage(
-              pi,
-              {
-                phase: "execution",
-                label: `audit execution ${effect.state.iteration}/${effect.state.maxIterations}`,
-                sessionPath: result.sessionPath,
-                result: result.renderResult,
-              },
-              buildPhaseCompletionMessage("Audit execution finished.", result.sessionPath),
-              { deliverAs: "nextTurn" },
-            );
-            if (activeExecutionAbort === executionAbort) {
-              activeExecutionAbort = undefined;
-            }
-          })
-          .catch((err) => {
-            if (activeExecutionAbort !== executionAbort || executionAbort.signal.aborted) return;
-            const message =
-              err instanceof ConcernBatchError
-                ? err.message
-                : `audit: execution failed: ${String(err)}`;
-            sendAuditPhaseTreeMessage(
-              pi,
-              {
-                phase: "execution",
-                label: `audit execution ${effect.state.iteration}/${effect.state.maxIterations}`,
-                sessionPath,
-                result: createFailedSingleResult(
-                  `audit execution ${effect.state.iteration}/${effect.state.maxIterations}`,
-                  task,
-                  message,
-                ),
-              },
-              buildPhaseCompletionMessage("Audit execution failed.", sessionPath),
-              { deliverAs: "nextTurn" },
-            );
-            machine.send({
-              _tag: "ExecutionFailed",
-              sessionPath,
-              message,
-            });
-            if (activeExecutionAbort === executionAbort) {
-              activeExecutionAbort = undefined;
-            }
-          });
-        return;
-      }
+
       if (effect.type === "updateUI") {
         formatUI(machine.getState(), ctx);
       }

@@ -1,41 +1,26 @@
 import { describe, expect, it } from "bun:test";
-import {
-  enterSequentialExecutionGate,
-  resolveSequentialExecutionCounsel,
-  resolveSequentialExecutionGate,
-} from "./index";
+import { enterSequentialExecutionCounsel, resolveSequentialExecutionCounsel } from "./index";
 
-describe("enterSequentialExecutionGate", () => {
-  it("enters gating for a valid running item", () => {
+describe("enterSequentialExecutionCounsel", () => {
+  it("enters counseling for a valid running item", () => {
     expect(
-      enterSequentialExecutionGate({ phase: "running", currentIndex: null, total: 3 }, 1),
-    ).toEqual({ phase: "gating", currentIndex: 1 });
-  });
-
-  it("rejects invalid phase or index", () => {
-    expect(
-      enterSequentialExecutionGate({ phase: "gating", currentIndex: 0, total: 3 }, 1),
-    ).toBeNull();
-    expect(
-      enterSequentialExecutionGate({ phase: "running", currentIndex: null, total: 3 }, -1),
-    ).toBeNull();
-    expect(
-      enterSequentialExecutionGate({ phase: "running", currentIndex: null, total: 3 }, 3),
-    ).toBeNull();
-  });
-});
-
-describe("resolveSequentialExecutionGate", () => {
-  it("moves gating to counseling on pass", () => {
-    expect(
-      resolveSequentialExecutionGate({ phase: "gating", currentIndex: 1, total: 3 }, "pass"),
+      enterSequentialExecutionCounsel({ phase: "running", currentIndex: null, total: 3 }, 1),
     ).toEqual({ phase: "counseling", currentIndex: 1 });
   });
 
-  it("moves gating back to running on fail", () => {
+  it("rejects when not in running phase", () => {
     expect(
-      resolveSequentialExecutionGate({ phase: "gating", currentIndex: 1, total: 3 }, "fail"),
-    ).toEqual({ phase: "running", currentIndex: 1 });
+      enterSequentialExecutionCounsel({ phase: "counseling", currentIndex: 0, total: 3 }, 1),
+    ).toBeNull();
+  });
+
+  it("rejects out-of-bounds index", () => {
+    expect(
+      enterSequentialExecutionCounsel({ phase: "running", currentIndex: null, total: 3 }, -1),
+    ).toBeNull();
+    expect(
+      enterSequentialExecutionCounsel({ phase: "running", currentIndex: null, total: 3 }, 3),
+    ).toBeNull();
   });
 });
 

@@ -49,7 +49,7 @@ function specCounseling(
 
 function executing(
   items?: TaskListItem[],
-  options?: { phase?: "running" | "gating" | "counseling"; currentStep?: number | null },
+  options?: { phase?: "running" | "counseling"; currentStep?: number | null },
 ): ModesState {
   const currentStep = options?.currentStep ?? 1;
   const baseItems = items ?? tasks("First step", "Second step", "Third step");
@@ -94,7 +94,7 @@ describe("modesReducer", () => {
     expect(hasEffect(result.effects, "persistState")).toBe(true);
   });
 
-  it("toggles Spec → Auto, restores tools, and requests a task list from the spec", () => {
+  it("toggles Spec → Auto, restores tools, and carries the spec for before_agent_start", () => {
     const result = modesReducer(
       specMode(["read", "bash"], { specFilePath: "/tmp/spec.md", specText: "# Spec" }),
       {
@@ -103,13 +103,17 @@ describe("modesReducer", () => {
       },
     );
     expect(result.state._tag).toBe("Auto");
+    if (result.state._tag === "Auto") {
+      expect(result.state.spec).toEqual({ specFilePath: "/tmp/spec.md", specText: "# Spec" });
+    }
     expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
       tools: ["read", "bash", ...AUTO_SIGNAL_TOOLS, ...TASK_LIST_SIGNAL_TOOLS],
     });
     expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
       level: "medium",
     });
-    expect(hasEffect(result.effects, "executeTurn")).toBe(true);
+    // No executeTurn — spec→task-list instruction is injected via before_agent_start context
+    expect(hasEffect(result.effects, "executeTurn")).toBe(false);
   });
 
   it("enters SpecWithPrompt and sends the prompt", () => {
@@ -146,16 +150,20 @@ describe("modesReducer", () => {
     expect(hasEffect(result.effects, "sendMessage")).toBe(false);
   });
 
-  it("approves a spec and only then requests a task list in AUTO mode", () => {
+  it("approves a spec and transitions to Auto with spec for before_agent_start pickup", () => {
     const result = modesReducer(specReview(["read", "bash"]), { _tag: "ApproveSpec" });
     expect(result.state._tag).toBe("Auto");
+    if (result.state._tag === "Auto") {
+      expect(result.state.spec).toBeDefined();
+    }
     expect(getEffect<BuiltinEffect>(result.effects, "setActiveTools")).toMatchObject({
       tools: ["read", "bash", ...AUTO_SIGNAL_TOOLS, ...TASK_LIST_SIGNAL_TOOLS],
     });
     expect(getEffect<BuiltinEffect>(result.effects, "setThinkingLevel")).toMatchObject({
       level: "medium",
     });
-    expect(hasEffect(result.effects, "executeTurn")).toBe(true);
+    // No executeTurn — spec→task-list instruction is injected via before_agent_start context
+    expect(hasEffect(result.effects, "executeTurn")).toBe(false);
   });
 
   it("rejects a spec back into SPEC mode", () => {
@@ -229,11 +237,11 @@ describe("modesReducer", () => {
     expect(hasEffect(result.effects, "persistState")).toBe(true);
   });
 
-  it("StepDone enters gating and keeps the active task in progress", () => {
+  it("StepDone enters counseling directly and keeps the active task in progress", () => {
     const result = modesReducer(executing(), { _tag: "StepDone", step: 1 });
     expect(result.state._tag).toBe("Executing");
     if (result.state._tag === "Executing") {
-      expect(result.state.phase).toBe("gating");
+      expect(result.state.phase).toBe("counseling");
       expect(result.state.todoItems[0]!.status).toBe("in_progress");
     }
     expect(hasEffect(result.effects, "updatePlanFile")).toBe(true);

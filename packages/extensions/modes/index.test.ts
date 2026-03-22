@@ -150,7 +150,6 @@ describe("modes extension", () => {
       "modes_spec_ready",
       "modes_task_list_ready",
       "modes_step_done",
-      "modes_gate_result",
       "modes_counsel_result",
     ]);
   });
@@ -437,10 +436,29 @@ describe("modes extension", () => {
       "modes",
       "📋 3 tasks (1 done, 1 in progress, 1 open)",
     );
-    expect(ctx.ui.setWidget).toHaveBeenCalledWith("modes-todos", [
-      "✔ First",
-      "◼ Second",
-      "◻ Third › blocked by #2",
-    ]);
+    // The animated TaskWidget registers a factory function, not a string array
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith("modes-todos", expect.any(Function), {
+      placement: "aboveEditor",
+    });
+
+    // Invoke the factory to verify rendered output
+    const factoryCall = (ctx.ui.setWidget as any).mock.calls.find(
+      (call: any[]) => call[0] === "modes-todos" && typeof call[1] === "function",
+    );
+    expect(factoryCall).toBeDefined();
+    const factory = factoryCall![1];
+    const mockTui = { terminal: { columns: 120 }, requestRender: () => {} };
+    const mockTheme = {
+      fg: (_: string, text: string) => text,
+      strikethrough: (text: string) => `~~${text}~~`,
+    };
+    const component = factory(mockTui, mockTheme);
+    const lines = component.render(120);
+    expect(lines).toContain("  ✔ ~~First~~");
+    // Task 2 is in_progress and active — renders with spinner + activeForm/subject
+    expect(lines.some((l: string) => l.includes("Second"))).toBe(true);
+    expect(lines.some((l: string) => l.includes("Third") && l.includes("blocked by #2"))).toBe(
+      true,
+    );
   });
 });

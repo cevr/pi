@@ -42,7 +42,7 @@ export interface AuditFinding {
   severity: "critical" | "warning" | "suggestion";
 }
 
-export interface AuditConcernTaskMetadata {
+export interface AuditConcernTaskMetadata extends Record<string, unknown> {
   description: string;
   skills: string[];
   notes?: string;
@@ -165,9 +165,6 @@ export type AuditEvent =
 export type AuditEffect =
   | ExecutionEffect
   | { type: "persistState"; state: PersistPayload }
-  | { type: "runDetection"; state: Extract<AuditState, { _tag: "Detecting" }> }
-  | { type: "runSynthesis"; state: Extract<AuditState, { _tag: "Synthesizing" }> }
-  | { type: "runExecution"; state: Extract<AuditState, { _tag: "Executing" }> }
   | { type: "updateUI" };
 
 export interface PersistPayload {
@@ -377,10 +374,6 @@ type Result = TransitionResult<AuditState, AuditEffect>;
 
 const UI: AuditEffect = { type: "updateUI" };
 
-function runDetection(state: Extract<AuditState, { _tag: "Detecting" }>): AuditEffect {
-  return { type: "runDetection", state };
-}
-
 function triggerConcernTool(): AuditEffect {
   return executeTurn({
     customType: "audit-progress",
@@ -390,12 +383,31 @@ function triggerConcernTool(): AuditEffect {
   });
 }
 
-function runSynthesis(state: Extract<AuditState, { _tag: "Synthesizing" }>): AuditEffect {
-  return { type: "runSynthesis", state };
+function triggerDetectionTool(): AuditEffect {
+  return executeTurn({
+    customType: "audit-progress",
+    content: "Detection is ready. Call audit_run_detection to execute it.",
+    display: false,
+    triggerTurn: true,
+  });
 }
 
-function runExecution(state: Extract<AuditState, { _tag: "Executing" }>): AuditEffect {
-  return { type: "runExecution", state };
+function triggerSynthesisTool(): AuditEffect {
+  return executeTurn({
+    customType: "audit-progress",
+    content: "Synthesis is ready. Call audit_run_synthesis to execute it.",
+    display: false,
+    triggerTurn: true,
+  });
+}
+
+function triggerExecutionTool(): AuditEffect {
+  return executeTurn({
+    customType: "audit-progress",
+    content: "Execution is ready. Call audit_run_execution to execute it.",
+    display: false,
+    triggerTurn: true,
+  });
 }
 
 function persist(state: AuditState): AuditEffect {
@@ -637,7 +649,9 @@ function getHydratedConcernExecution(
 ): { concerns: AuditConcernTask[]; cursor: GraphExecutionCursor } | null {
   const normalizedConcerns = cloneConcernTasks(concerns).map((concern) => ({
     ...concern,
-    status: concern.status === "completed" ? "completed" : "pending",
+    status: (concern.status === "completed"
+      ? "completed"
+      : "pending") as AuditConcernTask["status"],
   }));
   const completedConcernIds = new Set(
     normalizedConcerns
@@ -838,7 +852,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         effects: [
           statusEffectForState(next),
           visibleMessage(buildAuditPhaseMessage(next)),
-          runDetection(next),
+          triggerDetectionTool(),
           UI,
           persist(next),
         ],
@@ -928,7 +942,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         effects: [
           statusEffectForState(next),
           visibleMessage("Revising audit concerns with user edits."),
-          runDetection(next),
+          triggerDetectionTool(),
           UI,
           persist(next),
         ],
@@ -1008,7 +1022,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           effects: [
             statusEffectForState(next),
             visibleMessage(buildAuditPhaseMessage(next)),
-            runSynthesis(next),
+            triggerSynthesisTool(),
             UI,
             persist(next),
           ],
@@ -1031,7 +1045,10 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
       const loop = continueAuditLoop(state, event.sessionPaths);
       return {
         state: loop.state,
-        effects: [{ type: "notify", message: event.message, level: "warning" }, ...loop.effects],
+        effects: [
+          { type: "notify", message: event.message, level: "warning" },
+          ...(loop.effects ?? []),
+        ],
       };
     }
 
@@ -1077,7 +1094,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         effects: [
           statusEffectForState(next),
           visibleMessage(buildAuditPhaseMessage(next)),
-          runExecution(next),
+          triggerExecutionTool(),
           UI,
           persist(next),
         ],
@@ -1096,7 +1113,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
               event.message ?? "audit synthesis ended before audit_synthesis_complete was called",
             level: "warning",
           },
-          ...loop.effects,
+          ...(loop.effects ?? []),
         ],
       };
     }
@@ -1108,7 +1125,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
         state: loop.state,
         effects: [
           { type: "notify", message: "audit execution complete — re-auditing", level: "info" },
-          ...loop.effects,
+          ...(loop.effects ?? []),
         ],
       };
     }
@@ -1125,7 +1142,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
               event.message ?? "audit execution ended before audit_execution_result was called",
             level: "warning",
           },
-          ...loop.effects,
+          ...(loop.effects ?? []),
         ],
       };
     }
@@ -1167,7 +1184,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           previousSynthesisSessionPaths,
           previousExecutionSessionPaths,
         };
-        return { state: next, effects: [statusEffectForState(next), runDetection(next), UI] };
+        return { state: next, effects: [statusEffectForState(next), triggerDetectionTool(), UI] };
       }
 
       if (
@@ -1236,7 +1253,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           previousSynthesisSessionPaths,
           previousExecutionSessionPaths,
         };
-        return { state: next, effects: [statusEffectForState(next), runSynthesis(next), UI] };
+        return { state: next, effects: [statusEffectForState(next), triggerSynthesisTool(), UI] };
       }
 
       if (event.mode === "Executing" && (event.findings?.length ?? 0) > 0 && event.scope) {
@@ -1254,7 +1271,7 @@ export const auditReducer: Reducer<AuditState, AuditEvent, AuditEffect> = (
           previousSynthesisSessionPaths,
           previousExecutionSessionPaths,
         };
-        return { state: next, effects: [statusEffectForState(next), runExecution(next), UI] };
+        return { state: next, effects: [statusEffectForState(next), triggerExecutionTool(), UI] };
       }
 
       const next: AuditState = { _tag: "Idle" };

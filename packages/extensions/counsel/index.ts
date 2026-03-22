@@ -19,12 +19,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 // @effect-diagnostics-next-line effect/nodeBuiltinImport:off
 import * as path from "node:path";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ToolDefinition,
-  ToolExecutionResult,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "@cvr/pi-config";
@@ -255,7 +250,7 @@ function summarizeCounselFailure(result: PiSpawnResult): string {
 function buildCounselFailureResult(
   singleResult: SingleResult,
   attempts: readonly CounselAttemptResult[],
-): ToolExecutionResult {
+): ReturnType<typeof subAgentResult> {
   const latestAttempt = attempts.at(-1);
   const latestResult = latestAttempt?.result;
   const classification = latestResult ? classifyCounselFailure(latestResult) : "other";

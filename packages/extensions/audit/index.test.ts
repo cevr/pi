@@ -149,8 +149,8 @@ function createExecutingState() {
   };
 }
 
-async function runConcernBatchWithSpawn<A>(
-  effect: Effect.Effect<A, ConcernBatchError, GraphRuntime | PiSpawnService>,
+async function runConcernBatchWithSpawn<A, E = ConcernBatchError>(
+  effect: Effect.Effect<A, E, GraphRuntime | PiSpawnService>,
   spawnImpl: (config: PiSpawnConfig) => Effect.Effect<PiSpawnResult, never>,
 ): Promise<A> {
   const runtime = ManagedRuntime.make(
@@ -169,8 +169,8 @@ async function runConcernBatchWithSpawn<A>(
   }
 }
 
-async function runSpawnWithSpawn<A>(
-  effect: Effect.Effect<A, ConcernBatchError, PiSpawnService>,
+async function runSpawnWithSpawn<A, E = ConcernBatchError>(
+  effect: Effect.Effect<A, E, PiSpawnService>,
   spawnImpl: (config: PiSpawnConfig) => Effect.Effect<PiSpawnResult, never>,
 ): Promise<A> {
   const runtime = ManagedRuntime.make(
@@ -251,8 +251,8 @@ function createMockExtensionApiHarness() {
         notify: mock(() => {}),
         setStatus: mock(() => {}),
         setWidget: mock(() => {}),
-        select: mock(async () => new Promise<undefined>(() => {})),
-        editor: mock(async () => null),
+        select: mock(async (): Promise<string | undefined> => new Promise(() => {})),
+        editor: mock(async (): Promise<string | null> => null),
         theme,
       };
       return {
@@ -609,10 +609,11 @@ describe("audit extension", () => {
       "audit_synthesis_complete",
       "audit_execution_result",
       "audit_run_concerns",
+      "audit_run_detection",
+      "audit_run_synthesis",
+      "audit_run_execution",
     ]);
-    expect(harness.messageRenderers.map((entry) => entry.customType)).toEqual([
-      "audit-phase-result",
-    ]);
+    expect(harness.messageRenderers.map((entry) => entry.customType)).toEqual([]);
     expect(harness.commands.map((command) => command.name)).toEqual([
       "audit-cancel",
       "audit-status",

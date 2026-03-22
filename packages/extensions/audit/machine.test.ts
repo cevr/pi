@@ -143,8 +143,8 @@ function synthesizing(concerns = createConcernTasks(CONCERNS, CONCERNS.length)):
 
 function fixing(findings = FINDINGS): any {
   return {
-    _tag: "Executing",
     ...auditing(),
+    _tag: "Executing",
     findings,
   };
 }
@@ -173,7 +173,7 @@ function getPersistPayload(effects: readonly Effect[] | undefined): PersistPaylo
 // ---------------------------------------------------------------------------
 
 describe("auditReducer — Start", () => {
-  it("Idle → Detecting with runDetection + status + UI", () => {
+  it("Idle → Detecting with executeTurn + status + UI", () => {
     const r = auditReducer(idle(), {
       _tag: "Start",
       scope: "diff",
@@ -190,15 +190,10 @@ describe("auditReducer — Start", () => {
       expect(r.state.userPrompt).toBe("check react");
     }
     expect(hasEffect(r.effects, "setStatus")).toBe(true);
-    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
-    expect(turns).toHaveLength(1);
-    expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
-    expect(
-      getEffect<AuditEffect & { type: "runDetection" }>(r.effects, "runDetection")?.state,
-    ).toMatchObject({
-      _tag: "Detecting",
-      userPrompt: "check react",
-    });
+    const triggerTurn = getEffects<ExecutionEffect>(r.effects, "executeTurn").find(
+      (e) => e.request.triggerTurn === true,
+    );
+    expect(triggerTurn).toBeTruthy();
     expect(hasEffect(r.effects, "updateUI")).toBe(true);
     expect(getPersistPayload(r.effects)).toMatchObject({
       mode: "Detecting",
@@ -290,7 +285,7 @@ describe("auditReducer — concern approval", () => {
     });
   });
 
-  it("AwaitingConcernApproval + ConcernsEdited → Detecting with runDetection", () => {
+  it("AwaitingConcernApproval + ConcernsEdited → Detecting with executeTurn", () => {
     const r = auditReducer(awaitingConcernApproval(), {
       _tag: "ConcernsEdited",
       feedback: "merge correctness into architecture",
@@ -299,17 +294,10 @@ describe("auditReducer — concern approval", () => {
     if (r.state._tag === "Detecting") {
       expect(r.state.detectionFeedback).toBe("merge correctness into architecture");
     }
-    expect(
-      getEffect<AuditEffect & { type: "runDetection" }>(r.effects, "runDetection")?.state,
-    ).toMatchObject({
-      _tag: "Detecting",
-      detectionFeedback: "merge correctness into architecture",
-    });
-    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
-    expect(turns.at(0)?.request).toMatchObject({
-      customType: "audit-progress",
-      triggerTurn: false,
-    });
+    const triggerTurn = getEffects<ExecutionEffect>(r.effects, "executeTurn").find(
+      (e) => e.request.triggerTurn === true,
+    );
+    expect(triggerTurn).toBeTruthy();
   });
 });
 
@@ -393,14 +381,10 @@ describe("auditReducer — ConcernAudited", () => {
       expect(r.state.concerns.every((concern) => concern.status === "completed")).toBe(true);
       expect(r.state.concerns[1]!.metadata.notes).toBe("frontend looks fine");
     }
-    const turns = getEffects<ExecutionEffect>(r.effects, "executeTurn");
-    expect(turns).toHaveLength(1);
-    expect(turns[0]?.request).toMatchObject({ customType: "audit-progress", triggerTurn: false });
-    expect(
-      getEffect<AuditEffect & { type: "runSynthesis" }>(r.effects, "runSynthesis")?.state,
-    ).toMatchObject({
-      _tag: "Synthesizing",
-    });
+    const triggerTurn = getEffects<ExecutionEffect>(r.effects, "executeTurn").find(
+      (e) => e.request.triggerTurn === true,
+    );
+    expect(triggerTurn).toBeTruthy();
   });
 
   it("non-Auditing + ConcernAudited is no-op", () => {
@@ -510,12 +494,10 @@ describe("auditReducer — Hydrate", () => {
       previousSynthesisSessionPaths: [],
       previousExecutionSessionPaths: [],
     });
-    expect(
-      getEffect<AuditEffect & { type: "runDetection" }>(result.effects, "runDetection")?.state,
-    ).toMatchObject({
-      _tag: "Detecting",
-      userPrompt: "focus on correctness",
-    });
+    const triggerTurn = getEffects<ExecutionEffect>(result.effects, "executeTurn").find(
+      (e) => e.request.triggerTurn === true,
+    );
+    expect(triggerTurn).toBeTruthy();
   });
 
   it("restores Auditing with the persisted concern cursor", () => {
@@ -571,11 +553,10 @@ describe("auditReducer — Hydrate", () => {
       iteration: 1,
       maxIterations: 5,
     });
-    expect(
-      getEffect<AuditEffect & { type: "runSynthesis" }>(result.effects, "runSynthesis")?.state,
-    ).toMatchObject({
-      _tag: "Synthesizing",
-    });
+    const triggerTurn = getEffects<ExecutionEffect>(result.effects, "executeTurn").find(
+      (e) => e.request.triggerTurn === true,
+    );
+    expect(triggerTurn).toBeTruthy();
   });
 });
 
@@ -589,7 +570,7 @@ describe("auditReducer — Reset", () => {
       detecting(),
       auditing(),
       synthesizing(),
-      { _tag: "Executing", ...auditing(), findings: FINDINGS } as any,
+      { ...auditing(), _tag: "Executing", findings: FINDINGS } as any,
     ]) {
       const r = auditReducer(state, { _tag: "Reset" });
       expect(r.state).toEqual({ _tag: "Idle" });
@@ -612,11 +593,10 @@ describe("auditReducer — self-healing loop", () => {
       sessionPath: "/tmp/audit-2.jsonl",
     });
     expect(r.state._tag).toBe("Synthesizing");
-    expect(
-      getEffect<AuditEffect & { type: "runSynthesis" }>(r.effects, "runSynthesis")?.state,
-    ).toMatchObject({
-      _tag: "Synthesizing",
-    });
+    const triggerTurn = getEffects<ExecutionEffect>(r.effects, "executeTurn").find(
+      (e) => e.request.triggerTurn === true,
+    );
+    expect(triggerTurn).toBeTruthy();
   });
 
   it("execution completion loops back into auditing with execution history", () => {
@@ -673,12 +653,10 @@ describe("auditReducer — self-healing loop", () => {
     });
 
     expect(result.state._tag).toBe("Executing");
-    expect(
-      getEffect<AuditEffect & { type: "runExecution" }>(result.effects, "runExecution")?.state,
-    ).toMatchObject({
-      _tag: "Executing",
-      iteration: 2,
-    });
+    const triggerTurn = getEffects<ExecutionEffect>(result.effects, "executeTurn").find(
+      (e) => e.request.triggerTurn === true,
+    );
+    expect(triggerTurn).toBeTruthy();
   });
 
   it("walks a full two-iteration self-healing loop", () => {

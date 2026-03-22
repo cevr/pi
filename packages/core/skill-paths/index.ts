@@ -120,8 +120,8 @@ function shouldQualifySkill(
 function buildSkillToken(
   name: string,
   location: SkillLocation,
-  duplicateCount: number,
-  hasGlobalVariant: boolean,
+  duplicateCount = 1,
+  hasGlobalVariant = false,
 ): string {
   return shouldQualifySkill(location, duplicateCount, hasGlobalVariant)
     ? `${name}:${location}`

@@ -1,4 +1,4 @@
-export type SequentialExecutionPhase = "running" | "gating" | "counseling";
+export type SequentialExecutionPhase = "running" | "counseling";
 
 export interface SequentialExecutionCursor {
   phase: SequentialExecutionPhase;
@@ -6,37 +6,18 @@ export interface SequentialExecutionCursor {
   total: number;
 }
 
-export type SequentialExecutionGateResult = {
-  phase: SequentialExecutionPhase;
-  currentIndex: number;
-};
-
 export type SequentialExecutionCounselResult =
   | { type: "retry"; phase: SequentialExecutionPhase; currentIndex: number }
   | { type: "complete" }
   | { type: "advance"; phase: SequentialExecutionPhase; currentIndex: number };
 
-export function enterSequentialExecutionGate(
+export function enterSequentialExecutionCounsel(
   cursor: SequentialExecutionCursor,
   currentIndex: number,
-): SequentialExecutionGateResult | null {
+): { phase: "counseling"; currentIndex: number } | null {
   if (cursor.phase !== "running") return null;
   if (currentIndex < 0 || currentIndex >= cursor.total) return null;
-  return {
-    phase: "gating",
-    currentIndex,
-  };
-}
-
-export function resolveSequentialExecutionGate(
-  cursor: SequentialExecutionCursor,
-  status: "pass" | "fail",
-): SequentialExecutionGateResult | null {
-  if (cursor.phase !== "gating" || cursor.currentIndex === null) return null;
-  return {
-    phase: status === "pass" ? "counseling" : "running",
-    currentIndex: cursor.currentIndex,
-  };
+  return { phase: "counseling", currentIndex };
 }
 
 export function resolveSequentialExecutionCounsel(
